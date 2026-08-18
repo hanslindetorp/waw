@@ -1,0 +1,832 @@
+import { xmlStore } from "../xml-editor/xml-store.js";
+import { getSmartRange, testPattern } from "../xml-editor/attribute-controls.js";
+
+const template = document.createElement("template");
+template.innerHTML = `
+	<style>
+		:host {
+			display: block;
+			border-top: 1px solid var(--waw-border, #2f2f2f);
+			background: #161616;
+			font: 0.82rem/1.4 system-ui, sans-serif;
+			overflow: auto;
+		}
+		.empty {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 1rem;
+			color: var(--waw-muted, #8a8a8a);
+		}
+		.header {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			padding: 0.4rem 0.75rem;
+			border-bottom: 1px solid var(--waw-border, #2f2f2f);
+			font-weight: 600;
+			font-size: 0.72rem;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			color: var(--waw-muted, #8a8a8a);
+		}
+		.body {
+			padding: 0.6rem 0.75rem;
+			display: flex;
+			flex-direction: column;
+			gap: 0.6rem;
+		}
+		label.field-label {
+			display: block;
+			font-size: 0.72rem;
+			color: var(--waw-muted, #8a8a8a);
+			margin-bottom: 0.2rem;
+		}
+		input, select {
+			font: inherit;
+			background: #101010;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			color: inherit;
+			border-radius: 4px;
+			padding: 0.3rem 0.45rem;
+		}
+		.full-input {
+			width: 100%;
+		}
+		.mono {
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+		}
+		.attr-row {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+		}
+		.attr-name {
+			flex: 0 0 auto;
+			min-width: 74px;
+			font-weight: 600;
+			color: var(--waw-syntax-attr-name, #f0b25c);
+		}
+		.attr-control {
+			flex: 1 1 auto;
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			min-width: 0;
+		}
+		.attr-control input[type="text"],
+		.attr-control input[type="number"],
+		.attr-control select {
+			flex: 1 1 auto;
+			min-width: 0;
+		}
+		.attr-control input[type="range"] {
+			flex: 1 1 auto;
+			accent-color: var(--waw-accent, #4fa3ff);
+		}
+		.num-value {
+			width: 4.5rem;
+			flex: 0 0 auto;
+			text-align: right;
+		}
+		.toggle-btn {
+			flex: 0 0 auto;
+			background: #2a2a2a;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 4px;
+			padding: 0.15rem 0.4rem;
+			font-size: 0.68rem;
+			cursor: pointer;
+		}
+		.toggle-btn.active {
+			background: var(--waw-accent, #4fa3ff);
+			color: #06131f;
+			border-color: var(--waw-accent, #4fa3ff);
+		}
+		.remove-btn {
+			flex: 0 0 auto;
+			background: none;
+			border: none;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: pointer;
+			padding: 0.1rem 0.25rem;
+		}
+		.remove-btn:hover {
+			color: var(--waw-danger, #e5484d);
+		}
+		.remove-btn:disabled {
+			opacity: 0.3;
+			cursor: default;
+		}
+		.valid-ok { color: var(--waw-success, #4caf7d); flex: 0 0 auto; }
+		.valid-bad { color: var(--waw-danger, #e5484d); flex: 0 0 auto; }
+		.pattern-ok { border-color: var(--waw-success, #4caf7d) !important; }
+		.pattern-bad { border-color: var(--waw-danger, #e5484d) !important; }
+
+		.add-attr-row {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			padding-top: 0.5rem;
+			border-top: 1px solid var(--waw-border, #2f2f2f);
+			flex-wrap: wrap;
+		}
+		.add-attr-row select,
+		.add-attr-row input[name="attr-name"] {
+			flex: 0 1 9rem;
+			font-size: 0.75rem;
+		}
+		.add-attr-row input[name="attr-value"] {
+			flex: 1 1 8rem;
+			font-size: 0.75rem;
+		}
+		.add-btn {
+			background: var(--waw-accent, #4fa3ff);
+			color: #06131f;
+			font-weight: 700;
+			border: none;
+			border-radius: 4px;
+			padding: 0.3rem 0.5rem;
+			cursor: pointer;
+		}
+		.add-btn:disabled {
+			opacity: 0.5;
+			cursor: default;
+		}
+		.cancel-btn {
+			background: none;
+			border: none;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: pointer;
+			font-size: 0.75rem;
+		}
+	</style>
+	<div class="content"></div>
+`;
+
+export class WaNodeInspector extends HTMLElement {
+	constructor() {
+		super();
+		this.attachShadow({ mode: "open" });
+		this.shadowRoot.appendChild(template.content.cloneNode(true));
+		this._content = this.shadowRoot.querySelector(".content");
+	}
+
+	connectedCallback() {
+		xmlStore.addEventListener("change", () => {
+			if (this._isLocalEdit) return;
+			this.render();
+		});
+		this.render();
+	}
+
+	render() {
+		this._content.innerHTML = "";
+		const node = xmlStore.getSelectedNode();
+
+		if (!node) {
+			const empty = document.createElement("div");
+			empty.className = "empty";
+			empty.textContent = "Select a node to inspect";
+			this._content.appendChild(empty);
+			return;
+		}
+
+		const header = document.createElement("div");
+		header.className = "header";
+		header.textContent = "Inspector";
+		this._content.appendChild(header);
+
+		const body = document.createElement("div");
+		body.className = "body";
+		body.appendChild(this._renderTagNameField(node));
+		const textField = this._renderTextContentField(node);
+		if (textField) body.appendChild(textField);
+		body.appendChild(this._renderAttributesSection(node));
+		this._content.appendChild(body);
+	}
+
+	_renderTagNameField(node) {
+		const wrap = document.createElement("div");
+		const label = document.createElement("label");
+		label.className = "field-label";
+		label.textContent = "Element";
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "full-input mono";
+		input.value = node.tagName;
+		input.addEventListener("input", () => xmlStore.updateTagName(node.id, input.value));
+		wrap.appendChild(label);
+		wrap.appendChild(input);
+		return wrap;
+	}
+
+	_renderTextContentField(node) {
+		const schema = xmlStore.schema;
+		const schemaElement = schema?.elements[node.tagName];
+		// No schema, or the element isn't in it (schemaless/manual mode for
+		// that tag) -> stay permissive. Once the schema resolves the element,
+		// follow it to the letter: hide the field entirely if it says no text.
+		const allowsText = !schema || !schemaElement || schemaElement.allowsText;
+		if (!allowsText) return null;
+
+		const wrap = document.createElement("div");
+		const label = document.createElement("label");
+		label.className = "field-label";
+		label.textContent = "Text Content";
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "full-input";
+		input.placeholder = "(empty)";
+		input.value = node.textContent;
+		input.addEventListener("input", () => {
+			// Nothing else in the inspector's DOM depends on textContent's value
+			// (only on tagName/schema), so it's safe to skip our own re-render —
+			// which matters because rebuilding this input mid-keystroke would
+			// otherwise steal focus back to nothing on every character typed.
+			this._isLocalEdit = true;
+			xmlStore.updateTextContent(node.id, input.value);
+			this._isLocalEdit = false;
+		});
+		wrap.appendChild(label);
+		wrap.appendChild(input);
+		return wrap;
+	}
+
+	_renderAttributesSection(node) {
+		const schema = xmlStore.schema;
+		const schemaElement = schema?.elements[node.tagName];
+
+		// With the element recognized by an active schema, the schema *is* the
+		// full list of legal attributes — show every one of them (even unset),
+		// so there's nothing left to pick from an "add attribute" list. Without
+		// a schema (or for a tag the schema doesn't know), fall back to the
+		// permissive present-attributes-only + free-form add row.
+		return schema && schemaElement
+			? this._renderSchemaAttributesSection(node, schemaElement)
+			: this._renderFreeformAttributesSection(node);
+	}
+
+	_renderSchemaAttributesSection(node, schemaElement) {
+		const wrap = document.createElement("div");
+		const label = document.createElement("label");
+		label.className = "field-label";
+		label.textContent = "Attributes";
+		wrap.appendChild(label);
+
+		const allowedAttributes = schemaElement.allowedAttributes;
+		const getAttrSchema = (name) => allowedAttributes.find((a) => a.name === name);
+
+		const list = document.createElement("div");
+		list.style.display = "flex";
+		list.style.flexDirection = "column";
+		list.style.gap = "0.4rem";
+
+		[...allowedAttributes]
+			.sort((a, b) => a.name.localeCompare(b.name))
+			.forEach((attrSchema) => {
+				list.appendChild(this._renderAttributeRow(node, attrSchema.name, node.attributes[attrSchema.name], attrSchema));
+			});
+
+		// Defensive: surface any attribute already on the node that the schema
+		// doesn't declare (e.g. hand-edited via the code panel) instead of
+		// silently hiding real data.
+		Object.keys(node.attributes)
+			.filter((name) => !getAttrSchema(name))
+			.sort((a, b) => a.localeCompare(b))
+			.forEach((name) => list.appendChild(this._renderAttributeRow(node, name, node.attributes[name], undefined)));
+
+		wrap.appendChild(list);
+
+		// <xs:anyAttribute> alongside the fixed attribute list means the schema
+		// itself declares the element open to arbitrary extra attributes — offer
+		// the same free-form "add attribute" row a schemaless element would get.
+		if (schemaElement.allowsAnyAttribute) {
+			wrap.appendChild(this._renderAddAttributeRow(node, [], () => undefined));
+		}
+
+		return wrap;
+	}
+
+	_renderFreeformAttributesSection(node) {
+		const wrap = document.createElement("div");
+		const label = document.createElement("label");
+		label.className = "field-label";
+		label.textContent = "Attributes";
+		wrap.appendChild(label);
+
+		const list = document.createElement("div");
+		list.style.display = "flex";
+		list.style.flexDirection = "column";
+		list.style.gap = "0.4rem";
+		Object.entries(node.attributes)
+			.sort(([a], [b]) => a.localeCompare(b))
+			.forEach(([key, value]) => {
+				list.appendChild(this._renderAttributeRow(node, key, value, undefined));
+			});
+		wrap.appendChild(list);
+
+		wrap.appendChild(this._renderAddAttributeRow(node, [], () => undefined));
+		return wrap;
+	}
+
+	_renderAttributeRow(node, attrName, value, attrSchema) {
+		const row = document.createElement("div");
+		row.className = "attr-row";
+
+		const nameSpan = document.createElement("span");
+		nameSpan.className = "attr-name mono";
+		nameSpan.textContent = attrName;
+		row.appendChild(nameSpan);
+
+		const control = document.createElement("div");
+		control.className = "attr-control";
+
+		const removeBtn = document.createElement("button");
+		removeBtn.type = "button";
+		removeBtn.className = "remove-btn";
+		removeBtn.title = "Remove attribute";
+		removeBtn.textContent = "✕";
+		removeBtn.disabled = value === undefined;
+
+		// Setting a value never adds/removes an attribute *row* (it's already
+		// shown, per the schema-driven list above) — so there's nothing else in
+		// the inspector that needs a full re-render here. Skipping it matters:
+		// xmlStore's "change" event fires on every drag tick of a range slider,
+		// and rebuilding that same slider mid-drag would kill the browser's
+		// native drag tracking (a fresh element never receives the rest of the
+		// gesture) — which is exactly the "can't drag, only click" bug. Update
+		// the one bit of UI that *does* depend on the value (the remove button)
+		// directly instead of relying on a re-render for it.
+		const onChange = (v) => {
+			this._isLocalEdit = true;
+			xmlStore.updateAttributes(node.id, { ...node.attributes, [attrName]: v });
+			this._isLocalEdit = false;
+			removeBtn.disabled = false;
+		};
+
+		if (attrSchema?.type === "boolean") {
+			control.appendChild(this._renderBooleanControl(value, onChange));
+		} else if (attrSchema?.type === "union") {
+			control.appendChild(this._renderUnionControl(attrName, value, attrSchema, onChange));
+		} else if (attrSchema?.enumValues && attrSchema.enumValues.length > 0) {
+			control.appendChild(this._renderEnumControl(attrName, value, attrSchema, onChange));
+		} else if (attrSchema?.type === "number") {
+			control.appendChild(this._renderNumberControl(attrName, value, attrSchema, onChange));
+		} else {
+			control.appendChild(this._renderStringControl(value, attrSchema, onChange));
+		}
+
+		row.appendChild(control);
+
+		// Removal, unlike a value edit, genuinely needs the normal re-render:
+		// the row itself must reset to its unset state (schema mode) or vanish
+		// entirely (freeform mode).
+		removeBtn.addEventListener("click", () => {
+			const next = { ...node.attributes };
+			delete next[attrName];
+			xmlStore.updateAttributes(node.id, next);
+		});
+		row.appendChild(removeBtn);
+
+		return row;
+	}
+
+	_renderBooleanControl(value, onChange) {
+		const wrap = document.createElement("label");
+		wrap.style.display = "flex";
+		wrap.style.alignItems = "center";
+		wrap.style.gap = "0.4rem";
+		wrap.style.cursor = "pointer";
+		const checkbox = document.createElement("input");
+		checkbox.type = "checkbox";
+		checkbox.checked = value === "true";
+		const text = document.createElement("span");
+		text.style.color = "var(--waw-muted, #8a8a8a)";
+		text.textContent = value === undefined ? "not set" : value === "true" ? "true" : "false";
+		checkbox.addEventListener("change", () => {
+			onChange(checkbox.checked ? "true" : "false");
+			text.textContent = checkbox.checked ? "true" : "false";
+		});
+		wrap.appendChild(checkbox);
+		wrap.appendChild(text);
+		return wrap;
+	}
+
+	// A union attribute can take several otherwise-unrelated value shapes
+	// (e.g. a number OR one of a fixed set of keywords OR a free-form
+	// pattern-matched string) — show one mode tab per member type and render
+	// that member's own normal control (reusing the exact same renderers a
+	// plain, non-union attribute of that type would get) underneath it.
+	_renderUnionControl(attrName, value, attrSchema, onChange) {
+		const members = attrSchema.unionMembers;
+
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.flexDirection = "column";
+		frag.style.gap = "0.35rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		const tabRow = document.createElement("div");
+		tabRow.style.display = "flex";
+		tabRow.style.gap = "0.25rem";
+		tabRow.style.flexWrap = "wrap";
+
+		const controlSlot = document.createElement("div");
+		controlSlot.style.display = "flex";
+		controlSlot.style.alignItems = "center";
+		controlSlot.style.gap = "0.4rem";
+		controlSlot.style.minWidth = "0";
+
+		const modeLabel = (member) =>
+			member.type === "number" ? "Number" : member.type === "enum" ? "List" : member.type === "boolean" ? "Boolean" : "Text";
+
+		const labelFor = (member, idx) => {
+			const sameKindBefore = members.slice(0, idx).filter((m) => m.type === member.type).length;
+			return sameKindBefore > 0 ? `${modeLabel(member)} ${sameKindBefore + 1}` : modeLabel(member);
+		};
+
+		// Only used to pick the initially-shown tab when this row is (re)built
+		// from scratch — switching tabs afterwards is a purely local UI choice
+		// and must not itself re-evaluate/jump around while the user is mid-edit.
+		let activeIndex = this._detectUnionMemberIndex(members, value);
+
+		const renderActiveControl = () => {
+			controlSlot.innerHTML = "";
+			const member = members[activeIndex];
+			// Only hand the member the real current value if it's actually the
+			// value's own detected type — otherwise this tab was picked by hand
+			// and should start empty rather than misrepresenting e.g. a number
+			// as if it were a selected list option.
+			const memberValue = this._detectUnionMemberIndex(members, value) === activeIndex ? value : undefined;
+
+			if (member.type === "boolean") {
+				controlSlot.appendChild(this._renderBooleanControl(memberValue, onChange));
+			} else if (member.type === "enum") {
+				controlSlot.appendChild(this._renderEnumControl(attrName, memberValue, member, onChange));
+			} else if (member.type === "number") {
+				controlSlot.appendChild(this._renderNumberControl(attrName, memberValue, member, onChange));
+			} else {
+				controlSlot.appendChild(this._renderStringControl(memberValue, member, onChange));
+			}
+		};
+
+		const tabs = members.map((member, idx) => {
+			const btn = document.createElement("button");
+			btn.type = "button";
+			btn.className = "toggle-btn";
+			btn.textContent = labelFor(member, idx);
+			btn.addEventListener("click", () => {
+				activeIndex = idx;
+				tabs.forEach((b, i) => b.classList.toggle("active", i === idx));
+				renderActiveControl();
+			});
+			tabRow.appendChild(btn);
+			return btn;
+		});
+		tabs.forEach((b, i) => b.classList.toggle("active", i === activeIndex));
+
+		renderActiveControl();
+
+		frag.appendChild(tabRow);
+		frag.appendChild(controlSlot);
+		return frag;
+	}
+
+	// Guesses which union member the current raw string value belongs to,
+	// most-specific match first: an exact enum value, then a value that fully
+	// parses as a number, then "true"/"false" for a boolean member, then a
+	// string member whose pattern actually matches, then any unconstrained
+	// string member — falling back to the first member for an unset value or
+	// one that doesn't cleanly match anything.
+	_detectUnionMemberIndex(members, value) {
+		if (value === undefined) return 0;
+
+		const enumIdx = members.findIndex((m) => m.type === "enum" && m.enumValues.includes(value));
+		if (enumIdx !== -1) return enumIdx;
+
+		const numberIdx = members.findIndex((m) => m.type === "number" && /^-?\d+(\.\d+)?$/.test(String(value).trim()));
+		if (numberIdx !== -1) return numberIdx;
+
+		const boolIdx = members.findIndex((m) => m.type === "boolean" && (value === "true" || value === "false"));
+		if (boolIdx !== -1) return boolIdx;
+
+		const patternIdx = members.findIndex((m) => m.type === "string" && m.pattern && testPattern(m.pattern, value) === true);
+		if (patternIdx !== -1) return patternIdx;
+
+		const plainStringIdx = members.findIndex((m) => m.type === "string" && !m.pattern);
+		if (plainStringIdx !== -1) return plainStringIdx;
+
+		return 0;
+	}
+
+	_renderEnumControl(attrName, value, attrSchema, onChange) {
+		const hasValue = value !== undefined;
+		const isNumeric = attrSchema.type === "number";
+		const sorted = isNumeric
+			? [...attrSchema.enumValues].sort((a, b) => parseFloat(a) - parseFloat(b))
+			: [...attrSchema.enumValues].sort((a, b) => a.localeCompare(b));
+
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.4rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		const select = document.createElement("select");
+		let unsetOpt = null;
+		if (!hasValue) {
+			unsetOpt = document.createElement("option");
+			unsetOpt.value = "__unset__";
+			unsetOpt.textContent = "(not set)";
+			unsetOpt.disabled = true;
+			unsetOpt.selected = true;
+			select.appendChild(unsetOpt);
+		}
+		sorted.forEach((v) => {
+			const opt = document.createElement("option");
+			opt.value = v;
+			opt.textContent = v;
+			select.appendChild(opt);
+		});
+		const otherOpt = document.createElement("option");
+		otherOpt.value = "__other__";
+		otherOpt.textContent = "Custom...";
+		select.appendChild(otherOpt);
+
+		const customInput = document.createElement("input");
+		customInput.type = isNumeric ? "number" : "text";
+		customInput.className = "mono";
+		customInput.value = value ?? "";
+
+		const validMark = document.createElement("span");
+
+		// Now that a value edit no longer forces a full re-render (see
+		// _renderAttributeRow), this control has to keep its own validity mark
+		// current itself instead of relying on the next rebuild to recompute it.
+		const updateValidity = (currentValue) => {
+			const valid = currentValue === "" ? null : testPattern(attrSchema.pattern, currentValue);
+			validMark.className = "";
+			validMark.title = "";
+			validMark.textContent = "";
+			if (valid === true) {
+				validMark.className = "valid-ok";
+				validMark.textContent = "✓";
+			} else if (valid === false) {
+				validMark.className = "valid-bad";
+				validMark.title = `Pattern: ${attrSchema.pattern}`;
+				validMark.textContent = "✗";
+			}
+		};
+
+		customInput.addEventListener("input", () => {
+			onChange(customInput.value);
+			updateValidity(customInput.value);
+		});
+
+		const isOther = hasValue && !sorted.includes(value);
+		if (hasValue) select.value = isOther ? "__other__" : value;
+		customInput.hidden = !isOther;
+
+		select.addEventListener("change", () => {
+			if (select.value === "__other__") {
+				customInput.hidden = false;
+				customInput.focus();
+				return;
+			}
+			if (unsetOpt) {
+				unsetOpt.remove();
+				unsetOpt = null;
+			}
+			customInput.hidden = true;
+			onChange(select.value);
+			updateValidity(select.value);
+		});
+
+		updateValidity(value ?? "");
+
+		frag.appendChild(select);
+		frag.appendChild(customInput);
+		frag.appendChild(validMark);
+		return frag;
+	}
+
+	_renderNumberControl(attrName, value, attrSchema, onChange) {
+		const range = getSmartRange(attrName, attrSchema.minValue, attrSchema.maxValue);
+		const hasValue = value !== undefined;
+		const numVal = hasValue && Number.isFinite(parseFloat(value)) ? parseFloat(value) : range.min;
+
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.4rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		const slider = document.createElement("input");
+		slider.type = "range";
+		slider.min = range.min;
+		slider.max = range.max;
+		slider.step = range.step;
+		slider.value = Math.min(Math.max(numVal, range.min), range.max);
+
+		const numberInput = document.createElement("input");
+		numberInput.type = "number";
+		numberInput.className = "num-value";
+		numberInput.step = range.step;
+		numberInput.value = value ?? "";
+
+		const toggleBtn = document.createElement("button");
+		toggleBtn.type = "button";
+		toggleBtn.className = "toggle-btn";
+		toggleBtn.textContent = "Custom";
+		toggleBtn.title = "Custom value (outside range)";
+
+		let showCustom = false;
+		const applyMode = () => {
+			slider.hidden = showCustom;
+			toggleBtn.textContent = showCustom ? "Slider" : "Custom";
+			toggleBtn.classList.toggle("active", showCustom);
+		};
+		applyMode();
+
+		// "input" fires continuously while the thumb is being dragged — only
+		// mirror it into the paired number field locally. Committing via
+		// onChange on every tick would still work (it no longer forces a
+		// re-render, see _renderAttributeRow), but it'd also fire xmlStore's
+		// "change" event dozens of times per drag for every *other* listener
+		// (code view, preview, ...). "change" fires once, at release — commit
+		// there instead, same as a text field committing on blur.
+		slider.addEventListener("input", () => {
+			numberInput.value = slider.value;
+		});
+		slider.addEventListener("change", () => {
+			onChange(slider.value);
+		});
+		numberInput.addEventListener("input", () => {
+			slider.value = numberInput.value;
+			onChange(numberInput.value);
+		});
+		toggleBtn.addEventListener("click", () => {
+			showCustom = !showCustom;
+			applyMode();
+		});
+
+		frag.appendChild(slider);
+		frag.appendChild(numberInput);
+		frag.appendChild(toggleBtn);
+		return frag;
+	}
+
+	_renderStringControl(value, attrSchema, onChange) {
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.3rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "mono";
+		input.style.flex = "1 1 auto";
+		input.style.minWidth = "0";
+		input.value = value ?? "";
+
+		const updateValidity = () => {
+			// An empty field means "not set yet" (or just cleared) rather than an
+			// actual invalid value — skip pattern validation so it doesn't flash
+			// a red ✗ on every still-unset schema attribute.
+			const valid = input.value === "" ? null : testPattern(attrSchema?.pattern, input.value);
+			input.classList.remove("pattern-ok", "pattern-bad");
+			mark.className = "";
+			mark.textContent = "";
+			if (valid === true) {
+				input.classList.add("pattern-ok");
+				mark.className = "valid-ok";
+				mark.textContent = "✓";
+			} else if (valid === false) {
+				input.classList.add("pattern-bad");
+				mark.className = "valid-bad";
+				mark.title = `Pattern: ${attrSchema.pattern}`;
+				mark.textContent = "✗";
+			}
+		};
+
+		const mark = document.createElement("span");
+		input.addEventListener("input", () => {
+			onChange(input.value);
+			updateValidity();
+		});
+		updateValidity();
+
+		frag.appendChild(input);
+		frag.appendChild(mark);
+		return frag;
+	}
+
+	_renderAddAttributeRow(node, unused, getAttrSchema) {
+		const row = document.createElement("div");
+		row.className = "add-attr-row";
+		const hasChoices = unused.length > 0;
+		let showCustomName = false;
+
+		const select = document.createElement("select");
+		const placeholder = document.createElement("option");
+		placeholder.value = "";
+		placeholder.textContent = "Add attribute...";
+		placeholder.disabled = true;
+		placeholder.selected = true;
+		select.appendChild(placeholder);
+		unused.forEach((name) => {
+			const opt = document.createElement("option");
+			opt.value = name;
+			opt.textContent = name;
+			select.appendChild(opt);
+		});
+		const otherOpt = document.createElement("option");
+		otherOpt.value = "__custom__";
+		otherOpt.textContent = "Other...";
+		select.appendChild(otherOpt);
+		select.hidden = !hasChoices;
+
+		const nameInput = document.createElement("input");
+		nameInput.type = "text";
+		nameInput.className = "mono";
+		nameInput.placeholder = "Attribute name";
+		nameInput.hidden = hasChoices;
+
+		const valueInput = document.createElement("input");
+		valueInput.type = "text";
+		valueInput.className = "mono";
+		valueInput.placeholder = "Value";
+
+		const addBtn = document.createElement("button");
+		addBtn.type = "button";
+		addBtn.className = "add-btn";
+		addBtn.textContent = "+";
+		addBtn.disabled = true;
+
+		const cancelBtn = document.createElement("button");
+		cancelBtn.type = "button";
+		cancelBtn.className = "cancel-btn";
+		cancelBtn.textContent = "Cancel";
+		cancelBtn.hidden = true;
+
+		const currentName = () => (showCustomName || !hasChoices ? nameInput.value : select.value);
+		const refreshAddBtn = () => {
+			addBtn.disabled = !currentName().trim();
+		};
+
+		select.addEventListener("change", () => {
+			if (select.value === "__custom__") {
+				showCustomName = true;
+				select.hidden = true;
+				nameInput.hidden = false;
+				cancelBtn.hidden = false;
+				nameInput.value = "";
+				nameInput.focus();
+				refreshAddBtn();
+				return;
+			}
+			const attrSchema = getAttrSchema(select.value);
+			if (attrSchema?.defaultValue) valueInput.value = attrSchema.defaultValue;
+			else if (attrSchema?.type === "boolean") valueInput.value = "false";
+			else if (attrSchema?.type === "number") valueInput.value = String(attrSchema.minValue ?? 0);
+			else if (attrSchema?.enumValues?.[0]) valueInput.value = attrSchema.enumValues[0];
+			refreshAddBtn();
+		});
+		nameInput.addEventListener("input", refreshAddBtn);
+
+		const submit = () => {
+			const name = currentName().trim();
+			if (!name) return;
+			xmlStore.updateAttributes(node.id, { ...node.attributes, [name]: valueInput.value });
+		};
+		addBtn.addEventListener("click", submit);
+		valueInput.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") submit();
+		});
+		cancelBtn.addEventListener("click", () => {
+			showCustomName = false;
+			select.hidden = false;
+			select.value = "";
+			nameInput.hidden = true;
+			nameInput.value = "";
+			cancelBtn.hidden = true;
+			refreshAddBtn();
+		});
+
+		row.appendChild(select);
+		row.appendChild(nameInput);
+		row.appendChild(valueInput);
+		row.appendChild(addBtn);
+		row.appendChild(cancelBtn);
+
+		return row;
+	}
+}
+
+customElements.define("wa-node-inspector", WaNodeInspector);

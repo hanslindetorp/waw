@@ -1,0 +1,83 @@
+:root {
+	--waw-bg: #121212;
+	--waw-panel-bg: #1a1a1a;
+	--waw-border: #2f2f2f;
+	--waw-fg: #e8e8e8;
+	--waw-muted: #8a8a8a;
+	--waw-accent: #4fa3ff;
+	--waw-teal: #45b58c;
+	--waw-danger: #e5484d;
+	--waw-success: #4caf7d;
+	--waw-mono-font: Menlo, Monaco, "Courier New", monospace;
+	color-scheme: dark;
+
+	/* XML tree tokens (used by wa-xml-tree) */
+	--waw-tree-node-bg: #1f1f1f;
+	--waw-tree-node-hover: #232936;
+	--waw-tree-node-selected: #234b73;
+	--waw-tree-node-border: #333333;
+	--waw-tree-connector: #3a3a3a;
+
+	/* Code editor tokens (used by wa-xml-code) */
+	--waw-editor-bg: #17191d;
+	--waw-editor-gutter: #1f232b;
+	--waw-editor-line-number: #6b7280;
+	--waw-editor-cursor: #4fa3ff;
+	--waw-editor-selection: rgba(79, 163, 255, 0.35);
+
+	/* XML syntax colors (used by wa-xml-code) */
+	--waw-syntax-tag: #63b3ed;
+	--waw-syntax-attr-name: #f0b25c;
+	--waw-syntax-attr-value: #8fd67a;
+	--waw-syntax-bracket: #8b93a1;
+	--waw-syntax-text: #cfd3da;
+	--waw-syntax-comment: #6b6f78;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html, body {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	background: var(--waw-bg);
+	color: var(--waw-fg);
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.app-header {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.6rem 1rem;
+	border-bottom: 1px solid var(--waw-border);
+}
+
+.app-header h1 {
+	margin: 0;
+	font-size: 1rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.app-header__subtitle {
+	margin-left: 0.6rem;
+	font-weight: 400;
+	color: var(--waw-muted);
+	font-size: 0.85rem;
+}
+
+.app-panels {
+	flex: 1 1 auto;
+	display: flex;
+	min-height: 0;
+	overflow: hidden;
+}
+</content>

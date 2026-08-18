@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>WAW — WAXML Workstation (Steg 0 Demo)</title>
+	<link rel="stylesheet" href="css/main.css" />
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+	<script src="waxml.js" data-source="data:text/xml,%3Caudio%20version%3D%221.0%22%3E%3C%2Faudio%3E" defer></script>
+</head>
+<body>
+	<header class="app-header">
+		<wa-file-menu></wa-file-menu>
+		<h1>WAW <span class="app-header__subtitle">WAXML Workstation — Steg 0 Demo</span></h1>
+	</header>
+
+	<main class="app-panels">
+		<wa-panel panel-title="File Manager" width="300px">
+			<wa-file-manager></wa-file-manager>
+		</wa-panel>
+
+		<wa-panel panel-title="XML Editor" width="320px">
+			<wa-xml-editor></wa-xml-editor>
+		</wa-panel>
+
+		<wa-panel panel-title="Preview" width="360px">
+			<wa-preview></wa-preview>
+		</wa-panel>
+
+		<wa-panel panel-title="XML Code" width="320px" fill>
+			<wa-xml-code></wa-xml-code>
+		</wa-panel>
+	</main>
+
+	<script type="module" src="js/app.js"></script>
+</body>
+</html>

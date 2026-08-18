@@ -1,0 +1,1598 @@
+<?xml version="1.0"?>
+<xs:schema 
+  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  targetNamespace="https://www.w3schools.com"
+  xmlns="https://www.w3schools.com"
+  elementFormDefault="qualified">
+
+  
+
+
+  <!-- Types -->
+
+  <xs:simpleType name="version">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="volume">
+    <xs:annotation>
+      <xs:documentation>Overall volume level. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="volumeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="volumeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="mathExpression">
+    <xs:annotation>
+      <xs:documentation>A mathematical expression containing at least one variable reference ($name), e.g. "$a", "$a + $b", "2 * $a - 1", "($a + $b) * 0.5". The variable does not need to be the first term - plain numbers and parentheses can appear before, after, or around it. At least one variable must be present somewhere, otherwise the value would be ambiguous with this attribute's own plain numeric range. Parentheses are accepted syntactically but their balance is not verified by this schema (regular expressions cannot express that) - full expression correctness (balanced parens, operator precedence, etc.) is validated at runtime by the WAXML expression parser, not by XSD.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="(\(*\s*(\$[a-zA-Z_][a-zA-Z0-9_]*|\d+(\.\d+)?)\s*\)*\s*[+\-*/]\s*)*\(*\s*\$[a-zA-Z_][a-zA-Z0-9_]*\s*\)*(\s*[+\-*/]\s*\(*\s*(\$[a-zA-Z_][a-zA-Z0-9_]*|\d+(\.\d+)?)\s*\)*)*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="gain">
+    <xs:annotation>
+      <xs:documentation>Gain/volume level. Three accepted forms: a unitless ratio in the range 0-1; a decibel value suffixed with "dB" (e.g. "-40dB") - this form works standalone, no variable required; or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="gainValue gainDecibel mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="gainValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="gainDecibel">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="-?\d+(\.\d+)?dB"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="convolution">
+    <xs:annotation>
+      <xs:documentation>Path or URL to an impulse response audio file used for convolution. Accepts either a relative path (letters, digits, underscore, hyphen, slash, dot) or an absolute URL (http:// or https://).</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="https?://[^\s]+|[a-zA-Z0-9_\-./]+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="convolutionGain">
+    <xs:annotation>
+      <xs:documentation>Gain applied to the convolution/impulse response signal. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="convolutionGainValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="convolutionGainValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="normalize">
+    <xs:annotation>
+      <xs:documentation>Whether to normalize the audio. Either a boolean value (true/false), or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="normalizeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="normalizeValue">
+    <xs:restriction base="xs:boolean"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="loop">
+    <xs:annotation>
+      <xs:documentation>Whether to loop playback. Either a boolean value (true/false), or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="loopValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="loopValue">
+    <xs:restriction base="xs:boolean"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="voices">
+    <xs:annotation>
+      <xs:documentation>Number of simultaneous voices. Either a numeric value in the range 1-32, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="voicesValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="voicesValue">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="32"/>
+    </xs:restriction>
+  </xs:simpleType>
+  
+  <xs:simpleType name="max">
+    <xs:annotation>
+      <xs:documentation>Free-form string value, no format constraint.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="delay">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  
+
+  <!-- // AudioNodes -->
+
+  <xs:simpleType name="frequency">
+    <xs:annotation>
+      <xs:documentation>Frequency in Hz. Either a numeric value in the range 0-22050, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="frequencyValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="frequencyValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="22050"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="detune">
+    <xs:annotation>
+      <xs:documentation>Detune amount in cents. Either a numeric value in the range -9600-9600, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="detuneValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="detuneValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="-9600"/>
+      <xs:maxInclusive value="9600"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="Q">
+    <xs:annotation>
+      <xs:documentation>Filter resonance/quality factor. Either a numeric value in the range 0-100, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="QValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="QValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="100"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="delayTime">
+    <xs:annotation>
+      <xs:documentation>Delay time in seconds. Shares the same schema-level range as maxDelayTime (0-10), since delayTime should not exceed the node's own maxDelayTime. Note: this schema cannot enforce that delayTime stays below the actual maxDelayTime value set on the same node (that would require a cross-attribute constraint XSD 1.0 doesn't support) - if a document sets maxDelayTime lower than delayTime, that inconsistency is left for the runtime parser to handle. Either a numeric value in the range 0-10, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="delayTimeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="delayTimeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="10"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="maxDelayTime">
+    <xs:annotation>
+      <xs:documentation>Maximum delay time in seconds, set at node creation. Either a numeric value in the range 0-10, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="maxDelayTimeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="maxDelayTimeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="10"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  
+
+  <!-- // compressor -->
+  <xs:simpleType name="threshold">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="knee">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  
+  <xs:simpleType name="ratio">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  
+  <xs:simpleType name="reduction">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  
+  <xs:simpleType name="attack">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  
+  <xs:simpleType name="release">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <!-- // AudioBufferSourceNode -->
+  
+  <xs:simpleType name="playbackRate">
+    <xs:annotation>
+      <xs:documentation>Playback rate multiplier (1 = normal speed, negative = reverse). Either a numeric value in the range -2-2, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="playbackRateValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="playbackRateValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="-2"/>
+      <xs:maxInclusive value="2"/>
+    </xs:restriction>
+  </xs:simpleType>
+  
+  <xs:simpleType name="loopStart">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  
+  <xs:simpleType name="loopEnd">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <!-- // waxml -->
+  
+  <xs:simpleType name="transitionTime">
+    <xs:annotation>
+      <xs:documentation>Transition time in milliseconds. Either a numeric value in the range 0-2000, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="transitionTimeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="transitionTimeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="2000"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ADSR">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <!-- // parameter mapping -->
+
+  <xs:simpleType name="level">
+    <xs:annotation>
+      <xs:documentation>Signal level. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="levelValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="levelValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="range">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="curve">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="follow">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="mapin">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="mapout">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="times">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="values">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="channel">
+    <xs:annotation>
+      <xs:documentation>Audio channel number. Either a numeric value in the range 1-16, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="channelValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="channelValue">
+    <xs:restriction base="xs:integer">
+      <xs:minInclusive value="1"/>
+      <xs:maxInclusive value="16"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="dynamictimes">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="dynamicvalues">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="targetvariables">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="convert">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="steps">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="value">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="default">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="pan">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="fadeTime">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="loopLength">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="coneInnerAngle">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="coneOuterAngle">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="coneOuterGain">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="distanceModel">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="maxDistance">
+    <xs:annotation>
+      <xs:documentation>Maximum distance for spatial audio falloff. Either a numeric value in the range 0-10, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="maxDistanceValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="maxDistanceValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="10"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="orientationX">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="orientationY">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="orientationZ">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="panningModel">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="positionX">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="positionY">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="positionZ">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="refDistance">
+    <xs:annotation>
+      <xs:documentation>Reference distance for spatial audio falloff. Either a numeric value in the range 0-10, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="refDistanceValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="refDistanceValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="10"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="rolloffFactor">
+    <xs:annotation>
+      <xs:documentation>How quickly volume falls off with distance. Either a numeric value in the range 0-10, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="rolloffFactorValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="rolloffFactorValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="10"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="timeUnit">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="crossFade">
+    <xs:annotation>
+      <xs:documentation>Crossfade amount. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="crossFadeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="crossFadeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+	<!-- // Ambient Audio / Granular -->
+  <xs:simpleType name="randomPosition">
+    <xs:annotation>
+      <xs:documentation>Amount of random variation applied to playback position. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="randomPositionValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="randomPositionValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="randomDuration">
+    <xs:annotation>
+      <xs:documentation>Amount of random variation applied to duration. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="randomDurationValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="randomDurationValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="randomDetune">
+    <xs:annotation>
+      <xs:documentation>Amount of random variation applied to detune. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="randomDetuneValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="randomDetuneValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="frameRate">
+    <xs:annotation>
+      <xs:documentation>Frame rate for GUI/animation updates. Either a numeric value in the range 4-120, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="frameRateValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="frameRateValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="4"/>
+      <xs:maxInclusive value="120"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="fallOffRatio">
+    <xs:annotation>
+      <xs:documentation>Ratio controlling falloff behaviour. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="fallOffRatioValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="fallOffRatioValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="smoothDerivative">
+    <xs:annotation>
+      <xs:documentation>Smoothing factor for the derivative/rate of change. Either a numeric value in the range 0-5, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="smoothDerivativeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="smoothDerivativeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="5"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="output">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="outputBus">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="id">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="class">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="name">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="src">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="href">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="controls">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="type">
+    <xs:annotation>
+      <xs:documentation></xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="mix">
+    <xs:annotation>
+      <xs:documentation>Dry/wet mix ratio. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="mixValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="mixValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="crossFadeRange">
+    <xs:annotation>
+      <xs:documentation>Range over which crossfading is applied. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="crossFadeRangeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="crossFadeRangeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="peak">
+    <xs:annotation>
+      <xs:documentation>Peak level. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="peakValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="peakValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="commandType">
+    <xs:annotation>
+      <xs:documentation>trig or set</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="trig|set"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="bus">
+    <xs:annotation>
+      <xs:documentation>Bus output for Send elements. Normal CSS-selector that matches the ID or ClassName of target element.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+  
+
+
+
+  <!-- ============================================================= -->
+
+  <!-- Composition (formerly iMusic) types                           -->
+
+  <!-- Renamed to avoid collisions with identically-named waxml      -->
+
+  <!-- types above. Validation rules (patterns, base types) are      -->
+
+  <!-- preserved exactly as in the source schema.                    -->
+
+  <!-- ============================================================= -->
+
+  <!-- Types -->
+
+  <xs:simpleType name="tempo">
+    <xs:annotation>
+      <xs:documentation>Beats per minute. Note: it always relates to the beat specified with timeSign. Either a numeric value (range TBD - min/max not yet specified), or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="tempoValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="tempoValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="40"/>
+      <xs:maxInclusive value="250"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="quantize">
+    <xs:annotation>
+      <xs:documentation>Musical value for synchronizing objects: 'bar', 'beat', nr of bars, 4/4, 3/4, 6/8, 5/8 etc</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="off|bar|beat|\d+|\d+(\.\d+)?\/\d+|-?\d+(\.\d+)?(ms|s)"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="length">
+    <xs:annotation>
+      <xs:documentation>Musical length: 'bar', 'beat', nr of bars, 4/4, 3/4, 6/8, 5/8 etc</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="bar|beat|-?\d+|-?\d+(\.\d+)?\/\d+|-?\d+(\.\d+)?(ms|s)"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="iMusicLoopLength">
+    <xs:annotation>
+      <xs:documentation>Loop length specified by a musical meter: 'bar', 'beat', nr of bars, 4/4, 3/4, 6/8, 5/8 etc or 'off' (for no loop)</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="off|bar|beat|\d+|\d+(\.\d+)?\/\d+|-?\d+(\.\d+)?(ms|s)"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="meter">
+    <xs:annotation>
+      <xs:documentation>Musical meter: 4/4, 3/4, 6/8, 5/8 etc</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d+(\.\d+)?\/\d+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="position">
+    <xs:annotation>
+      <xs:documentation>Position: bar, beat, bar-number, bar.beat or bar.beat.division (i.e. 4.4.75) etc</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="bar|beat|-?\d+|-?\d+[.]\d+|-?\d+[.]\d+[.]\d+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="active">
+    <xs:annotation>
+      <xs:documentation>Controls the likeliness for each segment on a layer to playback. If set to '1', they will always play. If set to '0' they will never play. If set to '0.5', there will a 50% chance of the segments to play. If there are no segments on the layer the setting will apply to the whole layer. The value can also be any variable expression like '$intensity = 1', '$intensity = 1...3, 5...6' or similar.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="-?\d+\.?\d+|$?([a-zA-Z])+|$?([a-zA-Z])+\,([ ])*([a-zA-Z])+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="filter">
+    <xs:annotation>
+      <xs:documentation>Controls the state of a track depending on one or multiple variables. 
+        Value is given as an expression like filter='intensity=1' which causes this object to 
+        play only when the variable intensity is equal to 1. It is possible to use multiple values
+        ranges of values, strings and multiple expressions separated with semi colon.
+        (i.e. filter="intensity=1,2,5; mood=happy; room=2...5")</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="loopActive">
+    <xs:annotation>
+      <xs:documentation>Controls the likeliness for the the track to playback each loop. If set to '1' it will always play. If set to '0' it will never play. If set to '0.5', there will a 50% chance that it plays. The value can also be any variable expression like '$intensity = 1', '$intensity = 1...3, 5...6' or similar.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="-?\d+\.?\d+|$?([a-zA-Z])+|$?([a-zA-Z])+\,([ ])*([a-zA-Z])+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="audioPath">
+    <xs:annotation>
+      <xs:documentation>Relative or absolute path to the audio files used in elements inside this element.</xs:documentation>
+      <xs:documentation>It makes it unnecessary to specify the path for each audio file. Default is 'audio'.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="((http|https)*://)*([a-zA-Z0-9_\-/])+"></xs:pattern>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="fileName">
+    <xs:annotation>
+      <xs:documentation>File name. The directory can be omitted if 'audioPath' set on a parent element. The file extension (mp3, wav, ogg or m4a) can be omitted if 'suffix' is set on a parent element.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="([a-zA-Z0-9_\-/])+|([a-zA-Z0-9_\-/])+\.mp3|([a-zA-Z0-9_\-/])+\.wav|([a-zA-Z0-9_\-/])+\.ogg|([a-zA-Z0-9_\-/])+\.m4a"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="suffix">
+    <xs:annotation>
+      <xs:documentation>File extension: 'mp3', 'wav', 'ogg' or 'm4a'</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="mp3|wav|ogg|m4a"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="retrig">
+    <xs:annotation>
+      <xs:documentation>Controls how the different options are selected: 'shuffle', 'next' or 'other'.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="shuffle|next|other"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="blockRetrig">
+    <xs:annotation>
+      <xs:documentation>Controls the time before the same stinger can be triggered again. Time unit is default set to 'ms'.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="shuffle|next|other"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  
+
+  <xs:simpleType name="iMusicVersion">
+    <xs:annotation>
+      <xs:documentation>Version number of iMusicXML specification.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="iMusicClass">
+    <xs:annotation>
+      <xs:documentation>CSS class name for selecting and triggering from iMusic javascript API.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="iMusicId">
+    <xs:annotation>
+      <xs:documentation>CSS ID for selecting and triggering from iMusic javascript API.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="showGUI">
+    <xs:annotation>
+      <xs:documentation>'true' or 'false' - determains if the iMusic GUI button should be visible.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:boolean"/>
+  </xs:simpleType>
+
+
+
+
+  <xs:simpleType name="iMusicFadeTime">
+    <xs:annotation>
+      <xs:documentation>The time used for crossfades when this object (often tracks) is replaced by another. Default unit is set to 'ms'.</xs:documentation>
+      <xs:documentation>If set to '0', the audio file will always play its full length and might cause layers of files playing.</xs:documentation>
+      <xs:documentation>Either a numeric value (range TBD - min/max not yet specified), or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="iMusicFadeTimeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="iMusicFadeTimeValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="500"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+
+
+  <xs:simpleType name="iMusicOutput">
+    <xs:annotation>
+      <xs:documentation>Specify a CSS selector referring to an element in a WebAudioXML configuration to apply realtime audio effects to this object..</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="voice">
+    <xs:annotation>
+      <xs:documentation>The output of this object is handled as a monophonic voice with all other objects tagged with the same instrument name. This means i.e. that triggering a stinger temporarily mutes a layer if they are set to the same voice. The feature is useful for having stingers altering the content of an instrument rather than adding a new instrument.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="iMusicTimes">
+    <xs:annotation>
+      <xs:documentation>A comma separated list of time positions. Use note values or seconds. ''now'' means it will trigger directly when the layer or the stinger is triggered</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="iMusicValues">
+    <xs:annotation>
+      <xs:documentation>A comma separated list of values used with matching time value to shape an envelope. First value is the start value.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="target">
+    <xs:annotation>
+      <xs:documentation>Target parameter in WebAudioXML</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="ENVdefault">
+    <xs:annotation>
+      <xs:documentation>Default value for an envelope</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
+
+  <xs:simpleType name="iMusicConvert">
+    <xs:annotation>
+      <xs:documentation>Formula for converting the value. Either a mathematical expression including 'x' (i.e. 'Math.pow(x, 2)' or one of the following preset methods: 'MIDI->frequency' 'dB->power'</xs:documentation>
+    </xs:annotation>
+    
+    <xs:restriction base="xs:string">
+      <xs:pattern value="MIDI->frequency|dB->power|.+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+
+
+  <xs:simpleType name="command_type">
+    <xs:annotation>
+      <xs:documentation>A command can trig and even or set a variable to a value. Select 'trig' or 'set'</xs:documentation>
+    </xs:annotation>
+    
+    <xs:restriction base="xs:string">
+      <xs:pattern value="trig|set"/>
+    </xs:restriction>
+  </xs:simpleType>
+  
+
+  <!-- Element Groups -->
+
+  <xs:group name="snapshot">
+    <xs:choice>
+      <xs:element name="Command">
+        <xs:complexType>
+          <xs:attributeGroup ref="command"/>
+        </xs:complexType>
+      </xs:element>
+    </xs:choice>
+  </xs:group>
+
+
+  <xs:group name="waxml">
+    <xs:choice>
+
+
+      <!-- Native elements -->
+      <xs:element name="AudioBufferSourceNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="AudioWorkletNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="DelayNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="MediaStreamAudioSourceNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="PannerNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="WaveShaperNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+
+      <xs:element name="OscillatorNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="GainNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+      
+      <xs:element name="BiquadFilterNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="StereoPannerNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="ConvolverNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="DynamicsCompressorNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      
+
+      <!-- Native elements with children -->
+      <xs:element name="ChannelMergerNode">
+        <xs:complexType>
+          <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="ChannelSplitterNode">
+        <xs:complexType>
+          <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+
+      <!-- WAXML elements -->
+      <!-- logic -->
+      <xs:element name="var">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="Envelope">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+      
+      <xs:element name="include">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+      
+
+
+
+
+      <!-- WAXML routing -->
+      <xs:element name="Send">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="Chain">
+        <xs:complexType>
+          <xs:group ref="waxml" minOccurs="0" maxOccurs="unbounded"/>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+      
+      <xs:element name="Mixer">
+        <xs:complexType>
+          <xs:group ref="waxml" minOccurs="0" maxOccurs="unbounded"/>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      
+      <!-- WAXML objects -->
+      <xs:element name="Synth">
+        <xs:complexType>
+          <xs:choice>
+            <xs:element name="Voice" minOccurs="1" maxOccurs="unbounded"></xs:element>
+          </xs:choice>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="ObjectBasedAudio">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="AmbientAudio">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+
+      <xs:element name="Snapshot">
+        <xs:complexType>
+          <xs:group ref="snapshot" minOccurs="1" maxOccurs="unbounded"/>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+
+      <xs:element name="Noise">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+
+      <xs:element name="wam">
+        <xs:complexType>
+          <xs:attributeGroup ref="waxml"/>
+        </xs:complexType>
+      </xs:element>
+
+      
+    </xs:choice>   
+  </xs:group>
+  
+
+
+  <!-- Attribute groups -->
+
+  <xs:attributeGroup name="command">
+    <xs:attribute name="type" type="commandType"/>
+    <xs:attribute name="variable" type="xs:string"/>
+    <xs:attribute name="value" type="xs:string"/>
+  </xs:attributeGroup>
+  
+  <xs:attributeGroup name="waxml">
+    <xs:attribute name="version" type="version"/>
+    <xs:attribute name="timeUnit" type="timeUnit"/>
+    <xs:attribute name="midi" type="xs:boolean"/>
+
+    <xs:attribute name="id" type="id"/>
+    <xs:attribute name="class" type="class"/>
+    <xs:attribute name="name" type="name"/>
+
+    <xs:attribute name="src" type="src"/>
+    <xs:attribute name="href" type="href"/>
+
+    <xs:attribute name="gain" type="gain"/>
+    <xs:attribute name="type" type="type"/>
+    <xs:attribute name="controls" type="controls"/>
+
+    <xs:attribute name="frequency" type="frequency"/>
+    <xs:attribute name="outputBus" type="outputBus"/>
+    <xs:attribute name="pan" type="pan"/>
+    
+    <xs:attribute name="volume" type="volume"/>
+    <xs:attribute name="normalize" type="normalize"/>
+    <xs:attribute name="loop" type="loop"/>
+
+
+    <xs:attribute name="detune" type="detune"/>  
+    <xs:attribute name="Q" type="Q"/>  
+    <xs:attribute name="delayTime" type="delayTime"/>  
+    <xs:attribute name="maxDelayTime" type="maxDelayTime"/> 
+
+    <!-- // compressor -->
+    <xs:attribute name="ratio" type="ratio"></xs:attribute>
+    <xs:attribute name="threshold" type="threshold"/>  
+    <xs:attribute name="knee" type="knee"/>
+    <xs:attribute name="reduction" type="reduction"/>
+    <xs:attribute name="attack" type="attack"/>
+    <xs:attribute name="release" type="release"/>  
+
+    <!-- // AudioBufferSourceNode -->
+    <xs:attribute name="playbackRate" type="playbackRate"/>
+    <xs:attribute name="loopStart" type="loopStart"/>
+    <xs:attribute name="loopEnd" type="loopEnd"/>  
+
+    <!-- // waxml -->
+    <xs:attribute name="transitionTime" type="transitionTime"/>  
+    <xs:attribute name="ADSR" type="ADSR"/>
+    <xs:attribute name="max" type="max"/>  
+    <xs:attribute name="delay" type="delay"/>
+    <xs:attribute name="voices" type="voices"/>
+    <xs:attribute name="crossFade" type="crossFade"/>
+
+    <!-- // parameter mapping -->  
+    <xs:attribute name="value" type="value"/>
+    <xs:attribute name="default" type="default"/>
+    <xs:attribute name="level" type="level"/>  
+    <xs:attribute name="range" type="range"/>  
+    <xs:attribute name="curve" type="curve"/>  
+    <xs:attribute name="follow" type="follow"/>  
+    <xs:attribute name="mapin" type="mapin"/>  
+    <xs:attribute name="mapout" type="mapout"/>  
+    <xs:attribute name="times" type="times"/>  
+    <xs:attribute name="values" type="values"/>  
+    <xs:attribute name="channel" type="channel"/>  
+    <xs:attribute name="dynamictimes" type="dynamictimes"/>  
+    <xs:attribute name="dynamicvalues" type="dynamicvalues"/>  
+    <xs:attribute name="targetvariables" type="targetvariables"/>  
+    <xs:attribute name="convert" type="convert"/>  
+    <xs:attribute name="steps" type="steps"/>  
+    <xs:attribute name="fadeTime" type="fadeTime"/>
+
+    <!-- Objective Audio -->
+    <xs:attribute name="coneInnerAngle" type="coneInnerAngle"/>
+    <xs:attribute name="coneOuterAngle" type="coneOuterAngle"/>
+    <xs:attribute name="coneOuterGain" type="coneOuterGain"/>
+    <xs:attribute name="distanceModel" type="distanceModel"/>
+    <xs:attribute name="maxDistance" type="maxDistance"/>
+    <xs:attribute name="orientationX" type="orientationX"/>
+    <xs:attribute name="orientationY" type="orientationY"/>
+    <xs:attribute name="orientationZ" type="orientationZ"/>
+    <xs:attribute name="panningModel" type="panningModel"/>
+    <xs:attribute name="positionX" type="positionX"/>
+    <xs:attribute name="positionY" type="positionY"/>
+    <xs:attribute name="positionZ" type="positionZ"/>
+    <xs:attribute name="refDistance" type="refDistance"/>
+    <xs:attribute name="rolloffFactor" type="rolloffFactor"/>
+
+    <!-- // Ambient Audio / Granular -->
+    <xs:attribute name="loopLength" type="loopLength"/>
+    <xs:attribute name="randomPosition" type="randomPosition"/>  
+    <xs:attribute name="randomDuration" type="randomDuration"/>  
+    <xs:attribute name="randomDetune" type="randomDetune"/>  
+    <xs:attribute name="frameRate" type="frameRate"/>  
+    <xs:attribute name="fallOffRatio" type="fallOffRatio"/>  
+    <xs:attribute name="smoothDerivative" type="smoothDerivative"/>  
+    <xs:attribute name="output" type="output"/>  
+    <xs:attribute name="convolution" type="convolution"/>  
+    <xs:attribute name="convolutionGain" type="convolutionGain"/>  
+
+    <!-- Send -->
+    <xs:attribute name="bus" type="bus"/> 
+
+    <!-- Mixer -->
+    <xs:attribute name="mix" type="mix"/> 
+    <xs:attribute name="crossFadeRange" type="crossFadeRange"/> 
+    <xs:attribute name="peak" type="peak"/> 
+    <xs:attribute name="selectindex" type="xs:string"/> 
+
+    <!-- Envelope -->
+    <xs:attribute name="legato" type="xs:boolean"/> 
+
+    <!-- Triggers -->
+    <xs:attribute name="start" type="xs:string"/> 
+    <xs:attribute name="trig" type="xs:string"/> 
+    <xs:attribute name="stop" type="xs:string"/> 
+
+    <xs:anyAttribute processContents="lax"/>
+  </xs:attributeGroup>
+
+
+  <!-- Elements -->
+
+
+  <!-- ============================================================= -->
+  <!-- Composition (formerly iMusic) content model                     -->
+  <!--                                                                 -->
+  <!-- All elements below are LOCAL declarations (not global), each    -->
+  <!-- using a shared named complexType. This is the only way in XSD   -->
+  <!-- 1.0 to guarantee an element can ONLY appear in specific parent  -->
+  <!-- contexts and can never be used as a document root:              -->
+  <!--                                                                 -->
+  <!--   Audio        - the only valid document root                  -->
+  <!--   Composition  - only directly inside Audio, at most once       -->
+  <!--   section      - only directly inside Composition               -->
+  <!--   layer        - only inside section                            -->
+  <!--   segment      - only inside layer                              -->
+  <!--   option       - only inside layer, segment, or stinger           -->
+  <!--   command      - only inside stinger                              -->
+  <!--   stinger      - only inside Composition or section              -->
+  <!--   envelope     - commented out for now (see bottom of section)  -->
+  <!--                                                                 -->
+  <!-- (segment was renamed from "region"; stinger unifies what were   -->
+  <!-- previously two separate elements, "motif" and "leadin" - they   -->
+  <!-- were functionally identical, just used with different default   -->
+  <!-- quantize values. leadin was also previously valid inside layer  -->
+  <!-- (then named "track"); that placement is gone now that stinger   -->
+  <!-- is restricted to Composition/section only)                      -->
+  <!-- ============================================================= -->
+
+  <xs:complexType name="commandContentType">
+    <xs:attribute name="pos" type="position"/>
+    <xs:attribute name="type" type="command_type"/>
+    <xs:attribute name="selector" type="xs:string"/>
+    <xs:attribute name="variable" type="xs:string"/>
+    <xs:attribute name="value" type="xs:string"/>
+  </xs:complexType>
+
+  <xs:complexType name="optionContentType">
+    <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
+    <xs:attribute name="src" type="fileName"/>
+    <xs:attribute name="pos" type="position"/>
+    <xs:attribute name="length" type="length"/>
+    <xs:attribute name="delay" type="length"/>
+    <xs:attribute name="upbeat" type="length"/>
+    <xs:attribute name="voice" type="voice"/>
+  </xs:complexType>
+
+  <xs:complexType name="segmentContentType">
+    <xs:sequence>
+      <xs:element name="option" type="optionContentType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="pos" type="position"/>
+    <xs:attribute name="upbeat" type="length"/>
+    <xs:attribute name="src" type="fileName"/>
+    <xs:attribute name="length" type="length"/>
+    <xs:attribute name="delay" type="length"/>
+  </xs:complexType>
+
+  <xs:complexType name="stingerContentType">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="option" type="optionContentType"/>
+      <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
+      <xs:element name="command" type="commandContentType"/>
+    </xs:choice>
+    <xs:attribute name="class" type="xs:string"/>
+    <xs:attribute name="id" type="xs:string"/>
+    <xs:attribute name="voice" type="voice"/>
+    <xs:attribute name="output" type="iMusicOutput"/>
+    <xs:attribute name="src" type="fileName"/>
+    <xs:attribute name="quantize" type="quantize"/>
+    <xs:attribute name="changeOnNext" type="length"/>
+    <xs:attribute name="upbeat" type="length"/>
+    <xs:attribute name="length" type="length"/>
+    <xs:attribute name="pos" type="position"/>
+    <xs:attribute name="delay" type="length"/>
+    <xs:attribute name="active" type="active"/>
+    <xs:attribute name="filter" type="filter"/>
+    <xs:attribute name="retrig" type="retrig"/>
+    <xs:attribute name="blockRetrig" type="blockRetrig"/>
+    <xs:attribute name="fadeTime" type="iMusicFadeTime"/>
+  </xs:complexType>
+
+  <xs:complexType name="layerContentType">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="segment" type="segmentContentType"/>
+      <xs:element name="option" type="optionContentType"/>
+    </xs:choice>
+    <xs:attribute name="class" type="iMusicClass"/>
+    <xs:attribute name="id" type="iMusicId"/>
+    <xs:attribute name="voice" type="voice"/>
+    <xs:attribute name="output" type="iMusicOutput"/>
+    <xs:attribute name="audioPath" type="audioPath"/>
+    <xs:attribute name="suffix" type="suffix"/>
+    <xs:attribute name="src" type="fileName"/>
+    <xs:attribute name="changeOnNext" type="length"/>
+    <xs:attribute name="fadeTime" type="iMusicFadeTime"/>
+    <xs:attribute name="loopLength" type="iMusicLoopLength"/>
+    <xs:attribute name="partLength" type="length"/>
+    <xs:attribute name="upbeat" type="length"/>
+    <xs:attribute name="active" type="active"/>
+    <xs:attribute name="filter" type="filter"/>
+    <xs:attribute name="loopActive" type="loopActive"/>
+  </xs:complexType>
+
+  <xs:complexType name="sectionContentType">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="layer" type="layerContentType"/>
+      <xs:element name="stinger" type="stingerContentType"/>
+    </xs:choice>
+    <xs:attribute name="class" type="iMusicClass"/>
+    <xs:attribute name="id" type="iMusicId"/>
+    <xs:attribute name="audioPath" type="audioPath"/>
+    <xs:attribute name="tempo" type="tempo"/>
+    <xs:attribute name="timeSign" type="meter"/>
+    <xs:attribute name="suffix" type="suffix"/>
+    <xs:attribute name="changeOnNext" type="length"/>
+    <xs:attribute name="fadeTime" type="iMusicFadeTime"/>
+    <xs:attribute name="loopLength" type="length"/>
+    <xs:attribute name="length" type="length"/>
+    <xs:attribute name="src" type="fileName"/>
+  </xs:complexType>
+
+  <xs:complexType name="CompositionContentType">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="section" type="sectionContentType"/>
+      <xs:element name="stinger" type="stingerContentType"/>
+    </xs:choice>
+    <xs:attribute name="version" type="iMusicVersion"/>
+    <xs:attribute name="audioPath" type="audioPath"/>
+    <xs:attribute name="tempo" type="tempo"/>
+    <xs:attribute name="timeSign" type="meter"/>
+    <xs:attribute name="suffix" type="suffix"/>
+    <xs:attribute name="showGUI" type="showGUI"/>
+    <xs:attribute name="changeOnNext" type="length"/>
+    <xs:attribute name="fadeTime" type="iMusicFadeTime"/>
+    <xs:attribute name="loopLength" type="length"/>
+  </xs:complexType>
+
+  <!--
+  Commented out for now, per request. To reinstate: uncomment this
+  complexType and add `<xs:element name="envelope" type="envelopeContentType"/>`
+  back into optionContentType and stingerContentType above.
+
+  <xs:complexType name="envelopeContentType">
+    <xs:attribute name="name" type="xs:string"/>
+    <xs:attribute name="times" type="iMusicTimes"/>
+    <xs:attribute name="values" type="iMusicValues"/>
+    <xs:attribute name="target" type="target"/>
+    <xs:attribute name="default" type="ENVdefault"/>
+    <xs:attribute name="convert" type="iMusicConvert"/>
+  </xs:complexType>
+  -->
+
+  <xs:element name="waxml">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>
+        <xs:element name="Composition" type="CompositionContentType" minOccurs="0" maxOccurs="1"/>
+      </xs:sequence>
+      <xs:attributeGroup ref="waxml"/>
+    </xs:complexType>
+  </xs:element>
+
+
+</xs:schema>
