@@ -6,7 +6,10 @@
 	<title>WAW — WAXML Workstation (Steg 0 Demo)</title>
 	<link rel="stylesheet" href="css/main.css" />
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
-	<script src="waxml.js" data-source="data:text/xml,%3Caudio%20version%3D%221.0%22%3E%3C%2Faudio%3E" defer></script>
+	<!-- data-source is a throwaway placeholder just to satisfy waxml.js's
+	     load-gated init — it's replaced immediately via updateFromString()
+	     and never reflects real project content. -->
+	<script src="waxml.js" data-source="data:text/xml,%3Cwaxml%20version%3D%221.0%22%3E%3C%2Fwaxml%3E" defer></script>
 </head>
 <body>
 	<header class="app-header">

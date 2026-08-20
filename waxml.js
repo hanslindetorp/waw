@@ -616,6 +616,7 @@ class AudioObject extends EventTarget{
         break;
 
 		  	case "audio":
+				case "waxml":
         case "gainnode":
         case "mixer":
         case "voice":
@@ -3038,6 +3039,7 @@ class Connector {
 					break;
 
 					case "audio":
+					case "waxml":
 					case "voice":
 					case "synth":
 					case "xi:include":

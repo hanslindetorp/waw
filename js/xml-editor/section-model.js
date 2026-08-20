@@ -1,7 +1,10 @@
-// Pure, read-only helpers for turning an <arrangement> XmlNode into what the
-// arrangement view needs. Attribute names match the real engine (waxml.js's
+// Pure, read-only helpers for turning a <section> XmlNode into what the
+// section view needs. Attribute names match the real engine (waxml.js's
 // Music.js/MusicParser.js + schemas/waxml.xsd) — notably `timeSign`, not the
 // `timeSignature` used in docs/WAXML-Workstation-spec.md's older example XML.
+//
+// Element names below match the current schema: section (was "arrangement"),
+// layer (was "track"), segment (was "region"). option/command are unchanged.
 //
 // IMPORTANT: pos/length/loopLength are NOT plain seconds. waxml.js's own
 // divisionToTime()/getTimeSign() (Music.js) parse them as musical notation:
@@ -15,8 +18,8 @@ const DEFAULT_TEMPO = 120;
 const DEFAULT_TIME_SIGN = "4/4";
 const MIN_TOTAL_BARS = 16;
 
-export function readArrangementInfo(arrangementNode) {
-	const attrs = arrangementNode.attributes;
+export function readSectionInfo(sectionNode) {
+	const attrs = sectionNode.attributes;
 	const tempo = parseFloat(attrs.tempo);
 	const timeSign = parseTimeSign(attrs.timeSign);
 	const beatDuration = 60 / (Number.isFinite(tempo) && tempo > 0 ? tempo : DEFAULT_TEMPO);
@@ -37,12 +40,12 @@ function parseTimeSign(value) {
 	return { numerator: parseInt(match[1], 10), denominator: parseInt(match[2], 10), label: `${match[1]}/${match[2]}` };
 }
 
-export function getTracks(arrangementNode) {
-	return arrangementNode.children.filter((c) => c.tagName === "track");
+export function getLayers(sectionNode) {
+	return sectionNode.children.filter((c) => c.tagName === "layer");
 }
 
-export function getRegions(trackNode) {
-	return trackNode.children.filter((c) => c.tagName === "region");
+export function getSegments(layerNode) {
+	return layerNode.children.filter((c) => c.tagName === "segment");
 }
 
 export function getOptions(parentNode) {
@@ -50,7 +53,7 @@ export function getOptions(parentNode) {
 }
 
 // Converts a pos/length/loopLength attribute value to seconds, mirroring
-// waxml.js's divisionToTime()/getTimeSign() against this arrangement's own
+// waxml.js's divisionToTime()/getTimeSign() against this section's own
 // tempo/timeSign. Returns 0 for missing/empty values (matching divisionToTime's
 // own `if(!div) return 0`), Infinity for "off" (its "never" sentinel, used for
 // e.g. loopLength="off" to mean "don't loop").
@@ -95,25 +98,25 @@ export function readPos(node, info) {
 }
 
 // null = no explicit length in the XML; caller falls back to decoded audio
-// duration (for a bare track src) or a placeholder width (for region/option).
+// duration (for a bare layer src) or a placeholder width (for segment/option).
 export function readLength(node, info) {
 	if (node.attributes.length === undefined) return null;
 	const seconds = parseDivision(node.attributes.length, info);
 	return Number.isFinite(seconds) ? seconds : null;
 }
 
-// Track looping (spec: <track loopLength="...">) — null means "doesn't loop"
+// Layer looping (spec: <layer loopLength="...">) — null means "doesn't loop"
 // (attribute absent, "off", zero, or unparseable).
-export function readLoopLength(trackNode, info) {
-	const raw = trackNode.attributes.loopLength;
+export function readLoopLength(layerNode, info) {
+	const raw = layerNode.attributes.loopLength;
 	if (raw === undefined) return null;
 	const seconds = parseDivision(raw, info);
 	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
-// A sensible minimum timeline width (in seconds) so an empty/sparse
-// arrangement still shows a usable ruler — MIN_TOTAL_BARS bars at this
-// arrangement's own tempo/timeSign.
+// A sensible minimum timeline width (in seconds) so an empty/sparse section
+// still shows a usable ruler — MIN_TOTAL_BARS bars at this section's own
+// tempo/timeSign.
 export function minimumTotalDuration(info) {
 	return info.barDuration * MIN_TOTAL_BARS;
 }

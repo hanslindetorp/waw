@@ -1030,7 +1030,7 @@
 
   <xs:simpleType name="active">
     <xs:annotation>
-      <xs:documentation>Controls the likeliness for each Segment on a Layer to playback. If set to '1', they will always play. If set to '0' they will never play. If set to '0.5', there will a 50% chance of the Segments to play. If there are no Segments on the Layer the setting will apply to the whole Layer. The value can also be any variable expression like '$intensity = 1', '$intensity = 1...3, 5...6' or similar.</xs:documentation>
+      <xs:documentation>Controls the likeliness for each segment on a layer to playback. If set to '1', they will always play. If set to '0' they will never play. If set to '0.5', there will a 50% chance of the segments to play. If there are no segments on the layer the setting will apply to the whole layer. The value can also be any variable expression like '$intensity = 1', '$intensity = 1...3, 5...6' or similar.</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string">
       <xs:pattern value="-?\d+\.?\d+|$?([a-zA-Z])+|$?([a-zA-Z])+\,([ ])*([a-zA-Z])+"/>
@@ -1098,7 +1098,7 @@
 
   <xs:simpleType name="blockRetrig">
     <xs:annotation>
-      <xs:documentation>Controls the time before the same Stinger can be triggered again. Time unit is default set to 'ms'.</xs:documentation>
+      <xs:documentation>Controls the time before the same stinger can be triggered again. Time unit is default set to 'ms'.</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string">
       <xs:pattern value="shuffle|next|other"/>
@@ -1154,7 +1154,7 @@
 
   <xs:simpleType name="voice">
     <xs:annotation>
-      <xs:documentation>The output of this object is handled as a monophonic voice with all other objects tagged with the same instrument name. This means i.e. that triggering a Stinger temporarily mutes a Layer if they are set to the same voice. The feature is useful for having Stingers altering the content of an instrument rather than adding a new instrument.</xs:documentation>
+      <xs:documentation>The output of this object is handled as a monophonic voice with all other objects tagged with the same instrument name. This means i.e. that triggering a stinger temporarily mutes a layer if they are set to the same voice. The feature is useful for having stingers altering the content of an instrument rather than adding a new instrument.</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
@@ -1162,7 +1162,7 @@
 
   <xs:simpleType name="iMusicTimes">
     <xs:annotation>
-      <xs:documentation>A comma separated list of time positions. Use note values or seconds. ''now'' means it will trigger directly when the Layer or the Stinger is triggered</xs:documentation>
+      <xs:documentation>A comma separated list of time positions. Use note values or seconds. ''now'' means it will trigger directly when the layer or the stinger is triggered</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
@@ -1325,7 +1325,7 @@
 
       <!-- WAXML elements -->
       <!-- logic -->
-      <xs:element name="Var">
+      <xs:element name="var">
         <xs:complexType>
           <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
@@ -1337,7 +1337,7 @@
         </xs:complexType>
       </xs:element>
       
-      <xs:element name="Include">
+      <xs:element name="include">
         <xs:complexType>
           <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
@@ -1407,7 +1407,7 @@
       </xs:element>
 
 
-      <xs:element name="Wam">
+      <xs:element name="wam">
         <xs:complexType>
           <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
@@ -1557,20 +1557,20 @@
   <!--                                                                 -->
   <!--   Audio        - the only valid document root                  -->
   <!--   Composition  - only directly inside Audio, at most once       -->
-  <!--   Section      - only directly inside Composition               -->
-  <!--   Layer        - only inside Section                            -->
-  <!--   Segment      - only inside Layer                              -->
-  <!--   Option       - only inside Layer, Segment, or Stinger           -->
-  <!--   Command      - only inside Stinger                              -->
-  <!--   Stinger      - only inside Composition or Section              -->
+  <!--   section      - only directly inside Composition               -->
+  <!--   layer        - only inside section                            -->
+  <!--   segment      - only inside layer                              -->
+  <!--   option       - only inside layer, segment, or stinger           -->
+  <!--   command      - only inside stinger                              -->
+  <!--   stinger      - only inside Composition or section              -->
   <!--   envelope     - commented out for now (see bottom of section)  -->
   <!--                                                                 -->
-  <!-- (Segment was renamed from "region"; Stinger unifies what were   -->
+  <!-- (segment was renamed from "region"; stinger unifies what were   -->
   <!-- previously two separate elements, "motif" and "leadin" - they   -->
   <!-- were functionally identical, just used with different default   -->
-  <!-- quantize values. leadin was also previously valid inside Layer  -->
-  <!-- (then named "track"); that placement is gone now that Stinger   -->
-  <!-- is restricted to Composition/Section only)                      -->
+  <!-- quantize values. leadin was also previously valid inside layer  -->
+  <!-- (then named "track"); that placement is gone now that stinger   -->
+  <!-- is restricted to Composition/section only)                      -->
   <!-- ============================================================= -->
 
   <xs:complexType name="commandContentType">
@@ -1593,7 +1593,7 @@
 
   <xs:complexType name="segmentContentType">
     <xs:sequence>
-      <xs:element name="Option" type="optionContentType" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="option" type="optionContentType" minOccurs="0" maxOccurs="unbounded"/>
     </xs:sequence>
     <xs:attribute name="pos" type="position"/>
     <xs:attribute name="upbeat" type="length"/>
@@ -1604,9 +1604,9 @@
 
   <xs:complexType name="stingerContentType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="Option" type="optionContentType"/>
+      <xs:element name="option" type="optionContentType"/>
       <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
-      <xs:element name="Command" type="commandContentType"/>
+      <xs:element name="command" type="commandContentType"/>
     </xs:choice>
     <xs:attribute name="class" type="xs:string"/>
     <xs:attribute name="id" type="xs:string"/>
@@ -1628,8 +1628,8 @@
 
   <xs:complexType name="layerContentType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="Segment" type="segmentContentType"/>
-      <xs:element name="Option" type="optionContentType"/>
+      <xs:element name="segment" type="segmentContentType"/>
+      <xs:element name="option" type="optionContentType"/>
     </xs:choice>
     <xs:attribute name="class" type="iMusicClass"/>
     <xs:attribute name="id" type="iMusicId"/>
@@ -1650,8 +1650,8 @@
 
   <xs:complexType name="sectionContentType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="Layer" type="layerContentType"/>
-      <xs:element name="Stinger" type="stingerContentType"/>
+      <xs:element name="layer" type="layerContentType"/>
+      <xs:element name="stinger" type="stingerContentType"/>
     </xs:choice>
     <xs:attribute name="class" type="iMusicClass"/>
     <xs:attribute name="id" type="iMusicId"/>
@@ -1668,8 +1668,8 @@
 
   <xs:complexType name="CompositionContentType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="Section" type="sectionContentType"/>
-      <xs:element name="Stinger" type="stingerContentType"/>
+      <xs:element name="section" type="sectionContentType"/>
+      <xs:element name="stinger" type="stingerContentType"/>
     </xs:choice>
     <xs:attribute name="version" type="iMusicVersion"/>
     <xs:attribute name="audioPath" type="audioPath"/>
@@ -1697,7 +1697,7 @@
   </xs:complexType>
   -->
 
-  <xs:element name="WAXML">
+  <xs:element name="waxml">
     <xs:complexType>
       <xs:sequence>
         <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>

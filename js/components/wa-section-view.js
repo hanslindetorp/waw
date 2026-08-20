@@ -1,12 +1,12 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
-import { readArrangementInfo, getTracks, getRegions, getOptions, readPos, readLength, readLoopLength, minimumTotalDuration } from "../xml-editor/arrangement-model.js";
+import { readSectionInfo, getLayers, getSegments, getOptions, readPos, readLength, readLoopLength, minimumTotalDuration } from "../xml-editor/section-model.js";
 import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 
-// DAW-style "arrange window" for the <arrangement> element type — a first
+// DAW-style "arrange window" for the <section> element type — a first
 // sketch (per Hans's own framing): transport bar, a bars/beats ruler derived
-// from the arrangement's own tempo/timeSign, one lane per <track>, <region>
+// from the section's own tempo/timeSign, one lane per <layer>, <segment>
 // (and nested <option>) boxes with waveforms, and a playhead.
 //
 // Known limitation, called out here rather than silently faked: waxml.js has
@@ -116,7 +116,7 @@ template.innerHTML = `
 		}
 		.corner,
 		.ruler,
-		.track-label {
+		.layer-label {
 			background: var(--waw-panel-bg, #1a1a1a);
 		}
 		.corner {
@@ -153,7 +153,7 @@ template.innerHTML = `
 			color: var(--waw-muted, #8a8a8a);
 			white-space: nowrap;
 		}
-		.track-label {
+		.layer-label {
 			position: sticky;
 			left: 0;
 			z-index: 4;
@@ -167,7 +167,7 @@ template.innerHTML = `
 			text-overflow: ellipsis;
 			white-space: nowrap;
 		}
-		.track-lane {
+		.layer-lane {
 			position: relative;
 			width: 100%;
 			border-bottom: 1px solid var(--waw-border, #2f2f2f);
@@ -242,11 +242,11 @@ template.innerHTML = `
 			<div class="corner"></div>
 			<div class="ruler"></div>
 		</div>
-		<div class="empty-hint">Select an &lt;arrangement&gt; element to see it here.</div>
+		<div class="empty-hint">Select a &lt;section&gt; element to see it here.</div>
 	</div>
 `;
 
-export class WaArrangementView extends HTMLElement {
+export class WaSectionView extends HTMLElement {
 	constructor() {
 		super();
 		this.attachShadow({ mode: "open" });
@@ -267,8 +267,8 @@ export class WaArrangementView extends HTMLElement {
 		this._playStartAudioTime = 0;
 		this._renderToken = 0;
 		this._bufferCache = new Map(); // resolvedUrl -> Promise<AudioBuffer>
-		this._lastArrangementId = null;
-		this._maxDecodedEnd = 0; // seconds; grows monotonically as bare-track srcs decode
+		this._lastSectionId = null;
+		this._maxDecodedEnd = 0; // seconds; grows monotonically as bare-layer srcs decode
 	}
 
 	connectedCallback() {
@@ -295,19 +295,19 @@ export class WaArrangementView extends HTMLElement {
 	_onStoreChange() {
 		const node = xmlStore.getSelectedNode();
 
-		if (!node || node.tagName !== "arrangement") {
-			if (this._lastArrangementId !== null) this._teardownActive();
-			this._lastArrangementId = null;
+		if (!node || node.tagName !== "section") {
+			if (this._lastSectionId !== null) this._teardownActive();
+			this._lastSectionId = null;
 			return;
 		}
 
-		if (node.id !== this._lastArrangementId) {
+		if (node.id !== this._lastSectionId) {
 			this._teardownActive();
 			this._cursorTime = 0;
 			this._maxDecodedEnd = 0;
 		}
-		this._lastArrangementId = node.id;
-		this._renderArrangement(node);
+		this._lastSectionId = node.id;
+		this._renderSection(node);
 	}
 
 	_teardownActive() {
@@ -318,7 +318,7 @@ export class WaArrangementView extends HTMLElement {
 
 	_handlePlay() {
 		const node = xmlStore.getSelectedNode();
-		if (!node || node.tagName !== "arrangement" || !xmlStore.root) return;
+		if (!node || node.tagName !== "section" || !xmlStore.root) return;
 
 		// No known seek API (see file header) — every Play starts the engine
 		// from its true beginning, so the visual cursor always resets to 0 too.
@@ -365,7 +365,7 @@ export class WaArrangementView extends HTMLElement {
 	_handleSeekRelative(direction) {
 		this._handleStop();
 		const node = xmlStore.getSelectedNode();
-		const step = node && node.tagName === "arrangement" ? readArrangementInfo(node).barDuration : 2;
+		const step = node && node.tagName === "section" ? readSectionInfo(node).barDuration : 2;
 		this._cursorTime = Math.max(0, this._cursorTime + direction * step);
 		this._updatePlayheadVisual();
 		this._updatePositionReadout();
@@ -378,7 +378,7 @@ export class WaArrangementView extends HTMLElement {
 		else if (kind === "v-out") this._rowHeight = Math.max(MIN_ROW_HEIGHT, this._rowHeight / 1.25);
 
 		const node = xmlStore.getSelectedNode();
-		if (node && node.tagName === "arrangement") this._renderArrangement(node);
+		if (node && node.tagName === "section") this._renderSection(node);
 	}
 
 	// --- playhead animation ---
@@ -388,7 +388,7 @@ export class WaArrangementView extends HTMLElement {
 		const step = () => {
 			if (!this._isPlaying) return;
 			// window.iMus.getPosition().time is already relative to this
-			// arrangement's musical start (0s) — fall back to our own wall-clock
+			// section's musical start (0s) — fall back to our own wall-clock
 			// tracking only if the engine function is ever unavailable.
 			const enginePos = this._readEnginePosition();
 			if (enginePos !== null) {
@@ -422,8 +422,8 @@ export class WaArrangementView extends HTMLElement {
 
 	_updatePositionReadout() {
 		const node = xmlStore.getSelectedNode();
-		if (!node || node.tagName !== "arrangement") return;
-		const info = readArrangementInfo(node);
+		if (!node || node.tagName !== "section") return;
+		const info = readSectionInfo(node);
 		const bar = Math.floor(this._cursorTime / info.barDuration) + 1;
 		const beatInBar = Math.floor((this._cursorTime % info.barDuration) / info.beatDuration) + 1;
 		const frac = Math.floor((this._cursorTime % info.beatDuration) / info.beatDuration * 100);
@@ -432,18 +432,18 @@ export class WaArrangementView extends HTMLElement {
 
 	// --- layout / rendering ---
 
-	_renderArrangement(node) {
+	_renderSection(node) {
 		this._renderToken += 1;
 		const token = this._renderToken;
 
 		this._emptyHint.hidden = true;
 		this._grid.hidden = false;
 
-		const info = readArrangementInfo(node);
+		const info = readSectionInfo(node);
 		this._infoEl.textContent = `${info.tempo} BPM · ${info.timeSign.label}${info.id ? " · " + info.id : ""}`;
 
-		const tracks = getTracks(node);
-		const totalDuration = Math.max(minimumTotalDuration(info), this._estimateMaxEnd(tracks, info));
+		const layers = getLayers(node);
+		const totalDuration = Math.max(minimumTotalDuration(info), this._estimateMaxEnd(layers, info));
 		const totalWidth = totalDuration * this._pxPerSecond;
 
 		this._grid.innerHTML = "";
@@ -453,14 +453,14 @@ export class WaArrangementView extends HTMLElement {
 		this._grid.appendChild(corner);
 		this._grid.appendChild(this._buildRuler(info, totalWidth, totalDuration));
 
-		tracks.forEach((track) => {
-			this._grid.appendChild(this._buildTrackLabel(track));
-			this._grid.appendChild(this._buildTrackLane(track, info, totalWidth, totalDuration, token));
+		layers.forEach((layer) => {
+			this._grid.appendChild(this._buildLayerLabel(layer));
+			this._grid.appendChild(this._buildLayerLane(layer, info, totalWidth, totalDuration, token));
 		});
 
 		const playhead = document.createElement("div");
 		playhead.className = "playhead";
-		playhead.style.height = `${RULER_HEIGHT + tracks.length * this._rowHeight}px`;
+		playhead.style.height = `${RULER_HEIGHT + layers.length * this._rowHeight}px`;
 		this._grid.appendChild(playhead);
 		this._playheadEl = playhead;
 
@@ -469,40 +469,40 @@ export class WaArrangementView extends HTMLElement {
 	}
 
 	// Provisional total length from explicit pos/length attributes, plus
-	// whatever bare-track src durations have been decoded so far
+	// whatever bare-layer src durations have been decoded so far
 	// (this._maxDecodedEnd, grown monotonically by _growTimelineTo below —
-	// region/option boxes always have an explicit or bar-fallback width up
-	// front, so only bare tracks need this deferred-width handling).
-	_estimateMaxEnd(tracks, info, end = 0) {
+	// segment/option boxes always have an explicit or bar-fallback width up
+	// front, so only bare layers need this deferred-width handling).
+	_estimateMaxEnd(layers, info, end = 0) {
 		const walk = (nodes, parentPos) => {
 			nodes.forEach((n) => {
 				const abs = parentPos + readPos(n, info);
 				const len = readLength(n, info) ?? info.barDuration * FALLBACK_BOX_BARS;
 				end = Math.max(end, abs + len);
 
-				// A looping track's own content is tiled to fill whatever
+				// A looping layer's own content is tiled to fill whatever
 				// duration everything else already establishes (see
-				// _buildTrackLane) — it must not drive the timeline outward
-				// itself, or a short loop on a long-lived arrangement would
+				// _buildLayerLane) — it must not drive the timeline outward
+				// itself, or a short loop on a long-lived section would
 				// grow forever as more copies get laid out.
-				if (n.tagName === "track" && readLoopLength(n, info) !== null) return;
+				if (n.tagName === "layer" && readLoopLength(n, info) !== null) return;
 
 				walk(getOptions(n), abs);
-				if (n.tagName === "track") walk(getRegions(n), abs);
+				if (n.tagName === "layer") walk(getSegments(n), abs);
 			});
 		};
-		walk(tracks, 0);
+		walk(layers, 0);
 		return Math.max(end, this._maxDecodedEnd);
 	}
 
-	// Called once a bare track src finishes decoding. Only triggers a re-render
+	// Called once a bare layer src finishes decoding. Only triggers a re-render
 	// when it genuinely raises the known max (monotonic), so this can never
-	// loop — each bare-track src can cause at most one re-layout.
+	// loop — each bare-layer src can cause at most one re-layout.
 	_growTimelineTo(seconds) {
 		if (seconds <= this._maxDecodedEnd) return;
 		this._maxDecodedEnd = seconds;
 		const node = xmlStore.getSelectedNode();
-		if (node && node.tagName === "arrangement") this._renderArrangement(node);
+		if (node && node.tagName === "section") this._renderSection(node);
 	}
 
 	_buildRuler(info, totalWidth, totalDuration) {
@@ -535,43 +535,43 @@ export class WaArrangementView extends HTMLElement {
 		return ruler;
 	}
 
-	_buildTrackLabel(track) {
+	_buildLayerLabel(layer) {
 		const label = document.createElement("div");
-		label.className = "track-label";
+		label.className = "layer-label";
 		label.style.height = `${this._rowHeight}px`;
-		label.textContent = track.attributes.id || track.attributes.class || "track";
+		label.textContent = layer.attributes.id || layer.attributes.class || "layer";
 		return label;
 	}
 
-	// Non-looping tracks render their content once, at offset 0, and are
+	// Non-looping layers render their content once, at offset 0, and are
 	// allowed to grow the overall timeline (a bare src's decoded duration is
-	// the only source of length info we have for it up front). A track with
+	// the only source of length info we have for it up front). A layer with
 	// a loopLength instead tiles its WHOLE content (bare src, or its
-	// region/option children) every loopLength seconds, only as many times
+	// segment/option children) every loopLength seconds, only as many times
 	// as needed to fill the timeline duration already established by
 	// everything else — never open-ended. Later copies are appended later in
-	// DOM order, so an audio tail past loopLength or a region with a
+	// DOM order, so an audio tail past loopLength or a segment with a
 	// negative pos (an upbeat) naturally paints over the previous loop's
 	// tail via normal stacking order, with no extra z-index bookkeeping.
-	_buildTrackLane(track, info, totalWidth, totalDuration, token) {
+	_buildLayerLane(layer, info, totalWidth, totalDuration, token) {
 		const lane = document.createElement("div");
-		lane.className = "track-lane";
+		lane.className = "layer-lane";
 		lane.style.height = `${this._rowHeight}px`;
 		lane.style.minWidth = `${totalWidth}px`;
 
-		const regions = getRegions(track);
-		const directOptions = getOptions(track);
-		const loopLength = readLoopLength(track, info);
+		const segments = getSegments(layer);
+		const directOptions = getOptions(layer);
+		const loopLength = readLoopLength(layer, info);
 
 		const renderContentAt = (offsetSeconds, allowGrow) => {
-			if (regions.length === 0 && directOptions.length === 0) {
-				const srcAttr = findSrcAttribute(xmlStore.schema, track);
+			if (segments.length === 0 && directOptions.length === 0) {
+				const srcAttr = findSrcAttribute(xmlStore.schema, layer);
 				if (srcAttr) {
 					this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, offsetSeconds, allowGrow);
 				}
 				return;
 			}
-			regions.forEach((region) => this._renderTimedBox(region, lane, info, this._rowHeight, token, "region", offsetSeconds));
+			segments.forEach((segment) => this._renderTimedBox(segment, lane, info, this._rowHeight, token, "segment", offsetSeconds));
 			directOptions.forEach((option) => this._renderTimedBox(option, lane, info, this._rowHeight, token, "option", offsetSeconds));
 		};
 
@@ -588,10 +588,10 @@ export class WaArrangementView extends HTMLElement {
 		return lane;
 	}
 
-	// A bare track src with no regions: one continuous waveform, as wide as
-	// the decoded file actually is (schema gives tracks no pos/length of
+	// A bare layer src with no segments: one continuous waveform, as wide as
+	// the decoded file actually is (schema gives layers no pos/length of
 	// their own). offsetSeconds shifts a looped copy into place; allowGrow is
-	// false for those copies since a looping track must fill existing bounds
+	// false for those copies since a looping layer must fill existing bounds
 	// rather than extend them (only the first/non-looping placement can grow
 	// the timeline).
 	_renderWaveformOnly(lane, rawSrc, heightPx, laneWidth, token, offsetSeconds = 0, allowGrow = true) {
@@ -617,14 +617,14 @@ export class WaArrangementView extends HTMLElement {
 		});
 	}
 
-	// Renders one <region> or <option> as a positioned box, recursing into any
-	// nested <option> children as stacked "layers" inside it (per Hans: pos is
-	// interpreted relative to the parent box's own start, so DOM nesting alone
-	// gives the right on-screen offset with no manual coordinate math).
-	// extraOffsetSeconds shifts a looped copy of the containing track into
-	// place — it must NOT be forwarded to the nested-option recursion below,
-	// since a nested option's pos is already relative to its parent box's own
-	// (already-offset) position.
+	// Renders one <segment> or <option> as a positioned box, recursing into
+	// any nested <option> children as stacked "tiers" inside it (per Hans:
+	// pos is interpreted relative to the parent box's own start, so DOM
+	// nesting alone gives the right on-screen offset with no manual
+	// coordinate math). extraOffsetSeconds shifts a looped copy of the
+	// containing layer into place — it must NOT be forwarded to the
+	// nested-option recursion below, since a nested option's pos is already
+	// relative to its parent box's own (already-offset) position.
 	_renderTimedBox(node, containerEl, info, availableHeight, token, kind, extraOffsetSeconds = 0) {
 		const pos = readPos(node, info) + extraOffsetSeconds;
 		const srcAttr = findSrcAttribute(xmlStore.schema, node);
@@ -639,7 +639,7 @@ export class WaArrangementView extends HTMLElement {
 
 		const label = document.createElement("span");
 		label.className = "box-label";
-		label.textContent = node.attributes.id || node.attributes.class || (kind === "option" ? "option" : "region");
+		label.textContent = node.attributes.id || node.attributes.class || kind;
 		box.appendChild(label);
 
 		const applyWidth = (seconds) => {
@@ -663,16 +663,16 @@ export class WaArrangementView extends HTMLElement {
 
 		const nestedOptions = getOptions(node);
 		if (nestedOptions.length > 0) {
-			const layerHeight = Math.max((availableHeight - 4) / nestedOptions.length, 12);
+			const tierHeight = Math.max((availableHeight - 4) / nestedOptions.length, 12);
 			nestedOptions.forEach((option, idx) => {
-				const layerContainer = document.createElement("div");
-				layerContainer.style.position = "absolute";
-				layerContainer.style.left = "0";
-				layerContainer.style.right = "0";
-				layerContainer.style.top = `${idx * layerHeight}px`;
-				layerContainer.style.height = `${layerHeight}px`;
-				box.appendChild(layerContainer);
-				this._renderTimedBox(option, layerContainer, info, layerHeight, token, "option");
+				const tierContainer = document.createElement("div");
+				tierContainer.style.position = "absolute";
+				tierContainer.style.left = "0";
+				tierContainer.style.right = "0";
+				tierContainer.style.top = `${idx * tierHeight}px`;
+				tierContainer.style.height = `${tierHeight}px`;
+				box.appendChild(tierContainer);
+				this._renderTimedBox(option, tierContainer, info, tierHeight, token, "option");
 			});
 		}
 	}
@@ -682,7 +682,7 @@ export class WaArrangementView extends HTMLElement {
 			this._bufferCache.set(
 				url,
 				decodeAudioBuffer(url, bridge.audioContext).catch((err) => {
-					console.warn("Arrangement view: could not decode", url, err);
+					console.warn("Section view: could not decode", url, err);
 					return null;
 				})
 			);
@@ -691,4 +691,4 @@ export class WaArrangementView extends HTMLElement {
 	}
 }
 
-customElements.define("wa-arrangement-view", WaArrangementView);
+customElements.define("wa-section-view", WaSectionView);

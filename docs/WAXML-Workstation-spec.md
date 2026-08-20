@@ -12,7 +12,7 @@ Nästa steg: implementation i Claude Code (Steg 0 / Demo).
 | **Steg 0 — Demo** (NY) | Klientbaserad prototyp av filhanterare + preview, session i RAM, för användartester med studenter | Nej |
 | **Steg 1 — MVP** | Konton, grupper, riktig filhanterare (PHP/MySQL), delning (playback/embedded/full), preview | Ja |
 | **Steg 2** | Grafisk + kodbaserad XML-editor (kopieras in från befintlig Lovable-prototyp) | Ja |
-| **Steg 3** | DAW-fönster: timeline/arrangement med tracks och segment | Ja |
+| **Steg 3** | DAW-fönster: timeline/section med layers och segments | Ja |
 
 Steg 0 är tillagt efter arkitekturdiskussionen och går före allt annat: syftet är att validera GUI/UX-flödet för filhantering och ljuduppspelning med riktiga användare (studenter) innan konton, betalning och en riktig backend byggs.
 
@@ -83,10 +83,10 @@ waxml.trig(".test");
 
 ### 2.4 Trigger-API (bekräftat)
 ```js
-waxml.trig(selector)   // t.ex. waxml.trig(".test") — triggar alla matchande noder, inkl. <arrangement>
+waxml.trig(selector)   // t.ex. waxml.trig(".test") — triggar alla matchande noder, inkl. <section>
 waxml.stop(selector)
 ```
-Fungerar över både vanliga ljudnoder (`AudioBufferSourceNode`) och `<Composition>/<arrangement>` samtidigt, via delad `class`- eller `id`-selector.
+Fungerar över både vanliga ljudnoder (`AudioBufferSourceNode`) och `<Composition>/<section>` samtidigt, via delad `class`- eller `id`-selector.
 
 ### 2.5 Sökvägsupplösning — vad som är känt att fungera
 - `Loader.getPath(url, localPath)` avgör absolut/relativ genom att kolla om strängen innehåller `"//"` — täcker `http(s)://`, och även `blob:https://...` (som alltid innehåller ett inbäddat `https://`).
@@ -114,17 +114,17 @@ Fungerar över både vanliga ljudnoder (`AudioBufferSourceNode`) och `<Compositi
 Den tidigare separata `<imusic>`-strukturen (motiv, sektioner, arrangement — laddad via ett fristående `data-music-structure`-attribut) är nu integrerad som ett barn-element till root-noden:
 
 ```xml
-<audio version="1.0">
+<waxml version="1.0">
     <AudioBufferSourceNode id="ljud1" class="test" src="Aa.mp3" />
     <Composition>
-        <arrangement class="test" tempo="144" timeSignature="4/4">
-            <track id="track1" loopLength="16" src="audio/drums.mp3"/>
-        </arrangement>
+        <section class="test" tempo="144" timeSign="4/4">
+            <layer id="layer1" loopLength="16" src="audio/drums.mp3"/>
+        </section>
     </Composition>
-</audio>
+</waxml>
 ```
 
-- Root-elementet `<audio>` kommer i en framtida version heta `<waxml>`.
+- Root-elementet heter `<waxml>` (tidigare `<audio>` — omdöpt i schemat sedan detta skrevs). `arrangement`/`track`/`region` heter numera `section`/`layer`/`segment`; `motif`/`leadin` slogs ihop till ett enda `stinger`-element.
 - Två separata parsers samexisterar i denna version (`Parser.js` för huvudgrafen, `MusicParser` för `<Composition>`) — ett medvetet mindre omfattande ingrepp, inte en fullständig sammanslagning av loading-pipelines.
 - `Parser.js` har fått en guard som hoppar över `<Composition>`-noden i den vanliga ljudnods-genomgången.
 - `updateFromString()`/`initFromString()` bygger nu om **båda** graferna (ljud + komposition) vid varje anrop.
@@ -154,7 +154,7 @@ Fyra vertikala, individuellt visa/dölja-bara paneler med justerbar bredd:
 
 4. **Preview** *(Steg 0: byggs för enskild ljudfil; Steg 3: full timeline)*
    - Ljudspelare för markerad fil
-   - Timeline med tracks/segment om vald i XML-editorn (Steg 3)
+   - Timeline med layers/segments om vald i XML-editorn (Steg 3)
    - Grafisk representation av markerad komponent (signalkedja, WAM-modul, mixer, etc.) (Steg 3)
 
 ---
@@ -164,7 +164,7 @@ Fyra vertikala, individuellt visa/dölja-bara paneler med justerbar bredd:
 - **Användare**: Admin (allt), Manager (organiserar användare/grupper), Användare (egna projekt). Lagringsgräns per användare, satt av manager (default 100 Mb).
 - **Grupper** (nästlingsbara): Admin organiserar toppnivå, Managers kan skapa undergrupper i tilldelade grupper. Lagringsgräns per grupp.
 - **Projekt**: initieras alltid med ett default `wa.xml`. Kan sparas som mallar och delas. Filhanterare knuten 1:1 till projekt.
-- **WAXML-objekt**: hanteras av WAXML.js (extern, färdig). Applikationens jobb är GUI för dessa objekt, inte logiken bakom dem. Mest avancerade objektet: `<Composition>/<arrangement>` (tidigare "timeline"), med tracks, segment, master.
+- **WAXML-objekt**: hanteras av WAXML.js (extern, färdig). Applikationens jobb är GUI för dessa objekt, inte logiken bakom dem. Mest avancerade objektet: `<Composition>/<section>` (tidigare "timeline"/"arrangement"), med layers, segments, master.
 
 Databasskiss (Steg 1, matchar VFS-metoderna från avsnitt 1.3):
 
@@ -207,8 +207,8 @@ CREATE TABLE files (
 1. Admin skapar grupp + manager, kopplar ihop dem.
 2. Manager skapar användare i gruppen.
 3. Användaren skapar projekt → default `wa.xml` initieras.
-4. Lägger till/redigerar `<Composition>/<arrangement>`, sätter id, tempo, taktart.
-5. Drar filer till filhanteraren och/eller direkt till preview/arrangemang → skapar track/segment-referenser.
+4. Lägger till/redigerar `<Composition>/<section>`, sätter id, tempo, taktart.
+5. Drar filer till filhanteraren och/eller direkt till preview/section → skapar layer/segment-referenser.
 6. Projektet autosparas kontinuerligt.
 7. Delas via länkar för respektive format, med valda rättigheter.
 

@@ -98,10 +98,10 @@ template.innerHTML = `
 			font-size: 0.68rem;
 			cursor: pointer;
 		}
-		.toggle-btn.active {
-			background: var(--waw-accent, #4fa3ff);
-			color: #06131f;
-			border-color: var(--waw-accent, #4fa3ff);
+		.pencil-btn {
+			font-size: 0.8rem;
+			line-height: 1;
+			padding: 0.2rem 0.4rem;
 		}
 		.remove-btn {
 			flex: 0 0 auto;
@@ -368,11 +368,11 @@ export class WaNodeInspector extends HTMLElement {
 		if (attrSchema?.type === "boolean") {
 			control.appendChild(this._renderBooleanControl(value, onChange));
 		} else if (attrSchema?.type === "union") {
-			control.appendChild(this._renderUnionControl(attrName, value, attrSchema, onChange));
+			control.appendChild(this._renderUnionControl(attrName, attrSchema, onChange));
 		} else if (attrSchema?.enumValues && attrSchema.enumValues.length > 0) {
 			control.appendChild(this._renderEnumControl(attrName, value, attrSchema, onChange));
 		} else if (attrSchema?.type === "number") {
-			control.appendChild(this._renderNumberControl(attrName, value, attrSchema, onChange));
+			control.appendChild(this._renderNumberWithTextToggle(attrName, attrSchema, onChange));
 		} else {
 			control.appendChild(this._renderStringControl(value, attrSchema, onChange));
 		}
@@ -415,51 +415,48 @@ export class WaNodeInspector extends HTMLElement {
 
 	// A union attribute can take several otherwise-unrelated value shapes
 	// (e.g. a number OR one of a fixed set of keywords OR a free-form
-	// pattern-matched string) — show one mode tab per member type and render
-	// that member's own normal control (reusing the exact same renderers a
-	// plain, non-union attribute of that type would get) underneath it.
-	_renderUnionControl(attrName, value, attrSchema, onChange) {
+	// pattern-matched string) — render the current member's own normal
+	// control (reusing the exact same renderers a plain, non-union attribute
+	// of that type would get), with a single pencil button that cycles to the
+	// next member type on click (rather than a row of mode buttons — the
+	// schema decides how many modes exist and what they are, so one button
+	// that steps through them scales to any number of members without adding
+	// UI clutter for the common 2-member case).
+	_renderUnionControl(attrName, attrSchema, onChange) {
 		const members = attrSchema.unionMembers;
 
 		const frag = document.createElement("div");
 		frag.style.display = "flex";
-		frag.style.flexDirection = "column";
-		frag.style.gap = "0.35rem";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.4rem";
 		frag.style.flex = "1 1 auto";
 		frag.style.minWidth = "0";
-
-		const tabRow = document.createElement("div");
-		tabRow.style.display = "flex";
-		tabRow.style.gap = "0.25rem";
-		tabRow.style.flexWrap = "wrap";
 
 		const controlSlot = document.createElement("div");
 		controlSlot.style.display = "flex";
 		controlSlot.style.alignItems = "center";
 		controlSlot.style.gap = "0.4rem";
+		controlSlot.style.flex = "1 1 auto";
 		controlSlot.style.minWidth = "0";
 
-		const modeLabel = (member) =>
-			member.type === "number" ? "Number" : member.type === "enum" ? "List" : member.type === "boolean" ? "Boolean" : "Text";
-
-		const labelFor = (member, idx) => {
-			const sameKindBefore = members.slice(0, idx).filter((m) => m.type === member.type).length;
-			return sameKindBefore > 0 ? `${modeLabel(member)} ${sameKindBefore + 1}` : modeLabel(member);
-		};
-
-		// Only used to pick the initially-shown tab when this row is (re)built
-		// from scratch — switching tabs afterwards is a purely local UI choice
-		// and must not itself re-evaluate/jump around while the user is mid-edit.
-		let activeIndex = this._detectUnionMemberIndex(members, value);
+		// Re-read the live value from the store (rather than trusting a node
+		// object captured at mount time) every time we pick/rebuild a member's
+		// control. xmlStore.updateAttributes() rebuilds the tree immutably, so
+		// a `node` reference from the last full render would keep pointing at
+		// an ever-more-stale snapshot once edits stop triggering a re-render
+		// (see _renderAttributeRow) — getSelectedNode() always resolves against
+		// the current root.
+		let activeIndex = this._detectUnionMemberIndex(members, xmlStore.getSelectedNode()?.attributes[attrName]);
 
 		const renderActiveControl = () => {
 			controlSlot.innerHTML = "";
+			const currentValue = xmlStore.getSelectedNode()?.attributes[attrName];
 			const member = members[activeIndex];
 			// Only hand the member the real current value if it's actually the
-			// value's own detected type — otherwise this tab was picked by hand
-			// and should start empty rather than misrepresenting e.g. a number
-			// as if it were a selected list option.
-			const memberValue = this._detectUnionMemberIndex(members, value) === activeIndex ? value : undefined;
+			// value's own detected type — otherwise this mode was picked by
+			// cycling and should start empty rather than misrepresenting e.g. a
+			// number as if it were a selected list option.
+			const memberValue = this._detectUnionMemberIndex(members, currentValue) === activeIndex ? currentValue : undefined;
 
 			if (member.type === "boolean") {
 				controlSlot.appendChild(this._renderBooleanControl(memberValue, onChange));
@@ -472,25 +469,73 @@ export class WaNodeInspector extends HTMLElement {
 			}
 		};
 
-		const tabs = members.map((member, idx) => {
-			const btn = document.createElement("button");
-			btn.type = "button";
-			btn.className = "toggle-btn";
-			btn.textContent = labelFor(member, idx);
-			btn.addEventListener("click", () => {
-				activeIndex = idx;
-				tabs.forEach((b, i) => b.classList.toggle("active", i === idx));
-				renderActiveControl();
-			});
-			tabRow.appendChild(btn);
-			return btn;
+		const cycleBtn = this._renderPencilButton("Switch value type (schema: " + members.length + " types)", () => {
+			activeIndex = (activeIndex + 1) % members.length;
+			renderActiveControl();
 		});
-		tabs.forEach((b, i) => b.classList.toggle("active", i === activeIndex));
 
 		renderActiveControl();
 
-		frag.appendChild(tabRow);
 		frag.appendChild(controlSlot);
+		frag.appendChild(cycleBtn);
+		return frag;
+	}
+
+	_renderPencilButton(title, onClick) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "toggle-btn pencil-btn";
+		btn.textContent = "✎";
+		btn.title = title;
+		btn.addEventListener("click", onClick);
+		return btn;
+	}
+
+	// A plain number attribute isn't a real schema union, but still benefits
+	// from the same idea: the slider is great within its min/max/step, and
+	// the pencil button swaps it for a free-form text field for anything
+	// outside that (no up/down arrows, no range/step clamping) — same
+	// mechanism as _renderUnionControl, just with an implicit 2-member cycle
+	// (number, string) instead of one declared by the schema.
+	_renderNumberWithTextToggle(attrName, attrSchema, onChange) {
+		const looksNumeric = (v) => v !== undefined && /^-?\d+(\.\d+)?$/.test(String(v).trim());
+
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.4rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		const controlSlot = document.createElement("div");
+		controlSlot.style.display = "flex";
+		controlSlot.style.alignItems = "center";
+		controlSlot.style.gap = "0.4rem";
+		controlSlot.style.flex = "1 1 auto";
+		controlSlot.style.minWidth = "0";
+
+		const initialValue = xmlStore.getSelectedNode()?.attributes[attrName];
+		let showText = !looksNumeric(initialValue) && initialValue !== undefined;
+
+		const renderSlot = () => {
+			controlSlot.innerHTML = "";
+			const currentValue = xmlStore.getSelectedNode()?.attributes[attrName];
+			controlSlot.appendChild(
+				showText
+					? this._renderStringControl(currentValue, attrSchema, onChange)
+					: this._renderNumberControl(attrName, currentValue, attrSchema, onChange)
+			);
+		};
+
+		const toggleBtn = this._renderPencilButton("Toggle slider / free text", () => {
+			showText = !showText;
+			renderSlot();
+		});
+
+		renderSlot();
+
+		frag.appendChild(controlSlot);
+		frag.appendChild(toggleBtn);
 		return frag;
 	}
 
@@ -638,20 +683,6 @@ export class WaNodeInspector extends HTMLElement {
 		numberInput.step = range.step;
 		numberInput.value = value ?? "";
 
-		const toggleBtn = document.createElement("button");
-		toggleBtn.type = "button";
-		toggleBtn.className = "toggle-btn";
-		toggleBtn.textContent = "Custom";
-		toggleBtn.title = "Custom value (outside range)";
-
-		let showCustom = false;
-		const applyMode = () => {
-			slider.hidden = showCustom;
-			toggleBtn.textContent = showCustom ? "Slider" : "Custom";
-			toggleBtn.classList.toggle("active", showCustom);
-		};
-		applyMode();
-
 		// "input" fires continuously while the thumb is being dragged — only
 		// mirror it into the paired number field locally. Committing via
 		// onChange on every tick would still work (it no longer forces a
@@ -669,14 +700,9 @@ export class WaNodeInspector extends HTMLElement {
 			slider.value = numberInput.value;
 			onChange(numberInput.value);
 		});
-		toggleBtn.addEventListener("click", () => {
-			showCustom = !showCustom;
-			applyMode();
-		});
 
 		frag.appendChild(slider);
 		frag.appendChild(numberInput);
-		frag.appendChild(toggleBtn);
 		return frag;
 	}
 

@@ -2,22 +2,22 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
-import "./wa-arrangement-view.js";
+import "./wa-section-view.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
 // (panel 2) / XML code (panel 4) — they all share xmlStore's selectedNodeId.
-// <arrangement> gets a full DAW-style arrange view; other audio-bearing
+// <section> gets a full DAW-style arrange view; other audio-bearing
 // elements get a waveform + WAXML play/stop. More element-specific views
 // (WAM modules, mixer, ...) land in later steps per
 // docs/WAXML-Workstation-spec.md avsnitt 5.4/9.
 
 const bridge = new WaxmlBridge();
 
-// Composition/arrangement-context tags aren't valid as a standalone
+// Composition/section-context tags aren't valid as a standalone
 // <audio><Tag .../></audio> wrapper (WAXML's Parser rejects them outside
-// their <Composition>/<arrangement> parent) — selecting one still shows its
+// their <Composition>/<section> parent) — selecting one still shows its
 // waveform for reference, but without the (would-be-broken) WAXML play button.
-const COMPOSITION_CONTEXT_TAGS = new Set(["track", "region", "option", "motif", "leadin", "command"]);
+const COMPOSITION_CONTEXT_TAGS = new Set(["layer", "segment", "option", "stinger", "command"]);
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -101,8 +101,8 @@ template.innerHTML = `
 		<p class="centered">Select an element in the XML editor to preview it.</p>
 	</div>
 
-	<div class="state" data-state="arrangement">
-		<wa-arrangement-view></wa-arrangement-view>
+	<div class="state" data-state="section">
+		<wa-section-view></wa-section-view>
 	</div>
 
 	<div class="state padded" data-state="audio">
@@ -160,10 +160,10 @@ export class WaPreview extends HTMLElement {
 			return;
 		}
 
-		if (node.tagName === "arrangement") {
-			// wa-arrangement-view listens to xmlStore itself and stays mounted
+		if (node.tagName === "section") {
+			// wa-section-view listens to xmlStore itself and stays mounted
 			// the whole time — we just need to make its state visible.
-			this._showState("arrangement");
+			this._showState("section");
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;
@@ -210,7 +210,7 @@ export class WaPreview extends HTMLElement {
 
 		this._status.textContent = playableStandalone
 			? "Loading waveform…"
-			: `Select the parent <arrangement> to hear this in context.`;
+			: `Select the parent <section> to hear this in context.`;
 
 		if (playableStandalone) {
 			await bridge.loadNode(node, srcAttr.attrName, resolvedUrl);
