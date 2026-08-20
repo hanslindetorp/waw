@@ -1,6 +1,11 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { getSmartRange, testPattern } from "../xml-editor/attribute-controls.js";
 
+// When present, these always lead the attribute list, in this exact order,
+// ahead of everything else (which stays alphabetical) — separated by a
+// divider so the "usual suspects" are never buried in a long schema list.
+const PRIORITY_ATTR_ORDER = ["id", "class", "label", "input", "output"];
+
 const template = document.createElement("template");
 template.innerHTML = `
 	<style>
@@ -102,6 +107,12 @@ template.innerHTML = `
 			font-size: 0.8rem;
 			line-height: 1;
 			padding: 0.2rem 0.4rem;
+		}
+		.attr-divider {
+			border: none;
+			border-top: 1px solid var(--waw-border, #2f2f2f);
+			margin: 0.4rem 0;
+			width: 100%;
 		}
 		.remove-btn {
 			flex: 0 0 auto;
@@ -282,11 +293,14 @@ export class WaNodeInspector extends HTMLElement {
 		list.style.flexDirection = "column";
 		list.style.gap = "0.4rem";
 
-		[...allowedAttributes]
-			.sort((a, b) => a.name.localeCompare(b.name))
-			.forEach((attrSchema) => {
-				list.appendChild(this._renderAttributeRow(node, attrSchema.name, node.attributes[attrSchema.name], attrSchema));
-			});
+		const { priority, rest } = this._splitByPriority(allowedAttributes, (a) => a.name);
+		priority.forEach((attrSchema) => {
+			list.appendChild(this._renderAttributeRow(node, attrSchema.name, node.attributes[attrSchema.name], attrSchema));
+		});
+		if (priority.length > 0) list.appendChild(this._renderAttrDivider());
+		rest.forEach((attrSchema) => {
+			list.appendChild(this._renderAttributeRow(node, attrSchema.name, node.attributes[attrSchema.name], attrSchema));
+		});
 
 		// Defensive: surface any attribute already on the node that the schema
 		// doesn't declare (e.g. hand-edited via the code panel) instead of
@@ -319,15 +333,34 @@ export class WaNodeInspector extends HTMLElement {
 		list.style.display = "flex";
 		list.style.flexDirection = "column";
 		list.style.gap = "0.4rem";
-		Object.entries(node.attributes)
-			.sort(([a], [b]) => a.localeCompare(b))
-			.forEach(([key, value]) => {
-				list.appendChild(this._renderAttributeRow(node, key, value, undefined));
-			});
+
+		const { priority, rest } = this._splitByPriority(Object.entries(node.attributes), ([name]) => name);
+		priority.forEach(([key, value]) => list.appendChild(this._renderAttributeRow(node, key, value, undefined)));
+		if (priority.length > 0) list.appendChild(this._renderAttrDivider());
+		rest.forEach(([key, value]) => list.appendChild(this._renderAttributeRow(node, key, value, undefined)));
+
 		wrap.appendChild(list);
 
 		wrap.appendChild(this._renderAddAttributeRow(node, [], () => undefined));
 		return wrap;
+	}
+
+	// Splits `items` into [priority-ordered subset per PRIORITY_ATTR_ORDER,
+	// everything else alphabetically] — shared by both the schema-driven and
+	// freeform attribute lists so id/class/label/input/output (whichever of
+	// them apply) always lead, in that order, ahead of the rest.
+	_splitByPriority(items, getName) {
+		const priority = PRIORITY_ATTR_ORDER.map((name) => items.find((item) => getName(item) === name)).filter(Boolean);
+		const rest = items
+			.filter((item) => !PRIORITY_ATTR_ORDER.includes(getName(item)))
+			.sort((a, b) => getName(a).localeCompare(getName(b)));
+		return { priority, rest };
+	}
+
+	_renderAttrDivider() {
+		const hr = document.createElement("hr");
+		hr.className = "attr-divider";
+		return hr;
 	}
 
 	_renderAttributeRow(node, attrName, value, attrSchema) {

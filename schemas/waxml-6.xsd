@@ -71,6 +71,20 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <xs:simpleType name="convolutionGain">
+    <xs:annotation>
+      <xs:documentation>Gain applied to the convolution/impulse response signal. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="convolutionGainValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="convolutionGainValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="normalize">
     <xs:annotation>
       <xs:documentation>Whether to normalize the audio. Either a boolean value (true/false), or a mathematical expression (see mathExpression).</xs:documentation>
@@ -691,21 +705,6 @@
     </xs:restriction>
   </xs:simpleType>
 
-  <xs:simpleType name="oversample">
-    <xs:annotation>
-      <xs:documentation>Oversampling used by a WaveShaperNode to reduce aliasing distortion, per the Web Audio API spec. Either one of these standard values, or a free-form string for forward compatibility.</xs:documentation>
-    </xs:annotation>
-    <xs:union memberTypes="oversampleEnum xs:string"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="oversampleEnum">
-    <xs:restriction base="xs:string">
-      <xs:enumeration value="none"/>
-      <xs:enumeration value="2x"/>
-      <xs:enumeration value="4x"/>
-    </xs:restriction>
-  </xs:simpleType>
-
 
   <xs:simpleType name="crossFade">
     <xs:annotation>
@@ -835,14 +834,6 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
-  <xs:simpleType name="label">
-    <xs:annotation>
-      <xs:documentation>A human-readable label for display in a graphical interface. Distinct from "id" (used for programmatic reference/selectors) and "class" (used for styling/grouping) - this is purely for showing the user a friendly name.</xs:documentation>
-      <xs:documentation>SCHEMA-WIDE CONVENTION: every element in this schema is expected to accept a "label" attribute - native Web Audio API nodes (via commonNodeAttributes), WAXML's own waxml-group elements (via the "waxml" attributeGroup), and every Composition-side element (Composition, Section, Layer, Segment, Stinger, Option, Command). Any new element added to this schema in the future should also get a "label" attribute, for consistency.</xs:documentation>
-    </xs:annotation>
-    <xs:restriction base="xs:string"/>
-  </xs:simpleType>
-
   <xs:simpleType name="name">
     <xs:annotation>
       <xs:documentation></xs:documentation>
@@ -954,15 +945,10 @@
 
   <xs:simpleType name="commandType">
     <xs:annotation>
-      <xs:documentation>A command can trig or set a variable to a value. Either one of these standard values (trig, set), or a free-form string for forward compatibility.</xs:documentation>
+      <xs:documentation>trig or set</xs:documentation>
     </xs:annotation>
-    <xs:union memberTypes="commandTypeEnum xs:string"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="commandTypeEnum">
     <xs:restriction base="xs:string">
-      <xs:enumeration value="trig"/>
-      <xs:enumeration value="set"/>
+      <xs:pattern value="trig|set"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -1094,30 +1080,32 @@
 
   <xs:simpleType name="suffix">
     <xs:annotation>
-      <xs:documentation>File extension: 'mp3', 'wav', 'ogg' or 'm4a'. Strictly enumerated (no free-form fallback) - this controls which audio file types are accepted, not just a GUI suggestion.</xs:documentation>
+      <xs:documentation>File extension: 'mp3', 'wav', 'ogg' or 'm4a'</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string">
-      <xs:enumeration value="mp3"/>
-      <xs:enumeration value="wav"/>
-      <xs:enumeration value="ogg"/>
-      <xs:enumeration value="m4a"/>
+      <xs:pattern value="mp3|wav|ogg|m4a"/>
     </xs:restriction>
   </xs:simpleType>
 
-  <xs:simpleType name="retrigMode">
+  <xs:simpleType name="retrig">
     <xs:annotation>
-      <xs:documentation>Controls how the different options are selected: 'shuffle', 'next' or 'other'. Used by both the "retrig" and "blockRetrig" attributes, which are distinct settings sharing the same set of accepted values.</xs:documentation>
+      <xs:documentation>Controls how the different options are selected: 'shuffle', 'next' or 'other'.</xs:documentation>
     </xs:annotation>
-    <xs:union memberTypes="retrigModeEnum xs:string"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="retrigModeEnum">
     <xs:restriction base="xs:string">
-      <xs:enumeration value="shuffle"/>
-      <xs:enumeration value="next"/>
-      <xs:enumeration value="other"/>
+      <xs:pattern value="shuffle|next|other"/>
     </xs:restriction>
   </xs:simpleType>
+
+  <xs:simpleType name="blockRetrig">
+    <xs:annotation>
+      <xs:documentation>Controls the time before the same Stinger can be triggered again. Time unit is default set to 'ms'.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="shuffle|next|other"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  
 
   <xs:simpleType name="iMusicVersion">
     <xs:annotation>
@@ -1203,20 +1191,26 @@
 
   <xs:simpleType name="iMusicConvert">
     <xs:annotation>
-      <xs:documentation>Formula for converting the value. Either one of the named presets (MIDI-&gt;frequency, dB-&gt;power), or a free-form mathematical expression using 'x' as the placeholder for the input value (e.g. 'Math.pow(x, 2)'). Note: this 'x'-based expression syntax is separate from mathExpression's '$variable' syntax used elsewhere in this schema - they are not interchangeable.</xs:documentation>
+      <xs:documentation>Formula for converting the value. Either a mathematical expression including 'x' (i.e. 'Math.pow(x, 2)' or one of the following preset methods: 'MIDI->frequency' 'dB->power'</xs:documentation>
     </xs:annotation>
-    <xs:union memberTypes="iMusicConvertEnum xs:string"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="iMusicConvertEnum">
+    
     <xs:restriction base="xs:string">
-      <xs:enumeration value="MIDI-&gt;frequency"/>
-      <xs:enumeration value="dB-&gt;power"/>
+      <xs:pattern value="MIDI->frequency|dB->power|.+"/>
     </xs:restriction>
   </xs:simpleType>
 
 
 
+  <xs:simpleType name="command_type">
+    <xs:annotation>
+      <xs:documentation>A command can trig and even or set a variable to a value. Select 'trig' or 'set'</xs:documentation>
+    </xs:annotation>
+    
+    <xs:restriction base="xs:string">
+      <xs:pattern value="trig|set"/>
+    </xs:restriction>
+  </xs:simpleType>
+  
 
   <!-- Element Groups -->
 
@@ -1238,116 +1232,76 @@
       <!-- Native elements -->
       <xs:element name="AudioBufferSourceNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
-          <xs:attribute name="detune" type="detune"/>
-          <xs:attribute name="loop" type="loop"/>
-          <xs:attribute name="loopEnd" type="loopEnd"/>
-          <xs:attribute name="loopStart" type="loopStart"/>
-          <xs:attribute name="playbackRate" type="playbackRate"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="AudioWorkletNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="DelayNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="delayTime" type="delayTime"/>
-          <xs:attribute name="maxDelayTime" type="maxDelayTime"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="MediaStreamAudioSourceNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="PannerNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="panningModel" type="panningModel"/>
-          <xs:attribute name="distanceModel" type="distanceModel"/>
-          <xs:attribute name="positionX" type="positionX"/>
-          <xs:attribute name="positionY" type="positionY"/>
-          <xs:attribute name="positionZ" type="positionZ"/>
-          <xs:attribute name="orientationX" type="orientationX"/>
-          <xs:attribute name="orientationY" type="orientationY"/>
-          <xs:attribute name="orientationZ" type="orientationZ"/>
-          <xs:attribute name="refDistance" type="refDistance"/>
-          <xs:attribute name="maxDistance" type="maxDistance"/>
-          <xs:attribute name="rolloffFactor" type="rolloffFactor"/>
-          <xs:attribute name="coneInnerAngle" type="coneInnerAngle"/>
-          <xs:attribute name="coneOuterAngle" type="coneOuterAngle"/>
-          <xs:attribute name="coneOuterGain" type="coneOuterGain"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="WaveShaperNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="curve" type="curve"/>
-          <xs:attribute name="oversample" type="oversample"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
 
       <xs:element name="OscillatorNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="frequency" type="frequency"/>
-          <xs:attribute name="detune" type="detune"/>
+          <xs:attributeGroup ref="waxml"/>
           <xs:attribute name="type" type="oscillatorType"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="GainNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="gain" type="gain"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
       
       <xs:element name="BiquadFilterNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="frequency" type="frequency"/>
-          <xs:attribute name="detune" type="detune"/>
-          <xs:attribute name="Q" type="Q"/>
-          <xs:attribute name="gain" type="gain"/>
+          <xs:attributeGroup ref="waxml"/>
           <xs:attribute name="type" type="biquadFilterType"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="StereoPannerNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="pan" type="pan"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="ConvolverNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
-          <xs:attribute name="normalize" type="normalize"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="DynamicsCompressorNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="threshold" type="threshold"/>
-          <xs:attribute name="knee" type="knee"/>
-          <xs:attribute name="ratio" type="ratio"/>
-          <xs:attribute name="attack" type="attack"/>
-          <xs:attribute name="release" type="release"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
@@ -1357,14 +1311,14 @@
       <xs:element name="ChannelMergerNode">
         <xs:complexType>
           <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="ChannelSplitterNode">
         <xs:complexType>
           <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
@@ -1473,23 +1427,12 @@
     <xs:attribute name="value" type="xs:string"/>
   </xs:attributeGroup>
   
-  <!-- The four attributes every native Web Audio API node gets, beyond its
-       own spec-defined properties: id/class for reference and styling,
-       label for GUI display, output for routing to another node. -->
-  <xs:attributeGroup name="commonNodeAttributes">
-    <xs:attribute name="id" type="id"/>
-    <xs:attribute name="class" type="class"/>
-    <xs:attribute name="label" type="label"/>
-    <xs:attribute name="output" type="output"/>
-  </xs:attributeGroup>
-
   <xs:attributeGroup name="waxml">
     <xs:attribute name="version" type="version"/>
     <xs:attribute name="timeUnit" type="timeUnit"/>
     <xs:attribute name="midi" type="xs:boolean"/>
 
     <xs:attribute name="id" type="id"/>
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="class" type="class"/>
     <xs:attribute name="name" type="name"/>
 
@@ -1578,6 +1521,7 @@
     <xs:attribute name="smoothDerivative" type="smoothDerivative"/>  
     <xs:attribute name="output" type="output"/>  
     <xs:attribute name="convolution" type="convolution"/>  
+    <xs:attribute name="convolutionGain" type="convolutionGain"/>  
 
     <!-- Send -->
     <xs:attribute name="bus" type="bus"/> 
@@ -1630,9 +1574,8 @@
   <!-- ============================================================= -->
 
   <xs:complexType name="commandContentType">
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="pos" type="position"/>
-    <xs:attribute name="type" type="commandType"/>
+    <xs:attribute name="type" type="command_type"/>
     <xs:attribute name="selector" type="xs:string"/>
     <xs:attribute name="variable" type="xs:string"/>
     <xs:attribute name="value" type="xs:string"/>
@@ -1640,7 +1583,6 @@
 
   <xs:complexType name="optionContentType">
     <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="pos" type="position"/>
     <xs:attribute name="length" type="length"/>
@@ -1653,7 +1595,6 @@
     <xs:sequence>
       <xs:element name="Option" type="optionContentType" minOccurs="0" maxOccurs="unbounded"/>
     </xs:sequence>
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="pos" type="position"/>
     <xs:attribute name="upbeat" type="length"/>
     <xs:attribute name="src" type="fileName"/>
@@ -1667,7 +1608,6 @@
       <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
       <xs:element name="Command" type="commandContentType"/>
     </xs:choice>
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="class" type="xs:string"/>
     <xs:attribute name="id" type="xs:string"/>
     <xs:attribute name="voice" type="voice"/>
@@ -1681,8 +1621,8 @@
     <xs:attribute name="delay" type="length"/>
     <xs:attribute name="active" type="active"/>
     <xs:attribute name="filter" type="filter"/>
-    <xs:attribute name="retrig" type="retrigMode"/>
-    <xs:attribute name="blockRetrig" type="retrigMode"/>
+    <xs:attribute name="retrig" type="retrig"/>
+    <xs:attribute name="blockRetrig" type="blockRetrig"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
   </xs:complexType>
 
@@ -1691,7 +1631,6 @@
       <xs:element name="Segment" type="segmentContentType"/>
       <xs:element name="Option" type="optionContentType"/>
     </xs:choice>
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="class" type="iMusicClass"/>
     <xs:attribute name="id" type="iMusicId"/>
     <xs:attribute name="voice" type="voice"/>
@@ -1714,7 +1653,6 @@
       <xs:element name="Layer" type="layerContentType"/>
       <xs:element name="Stinger" type="stingerContentType"/>
     </xs:choice>
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="class" type="iMusicClass"/>
     <xs:attribute name="id" type="iMusicId"/>
     <xs:attribute name="audioPath" type="audioPath"/>
@@ -1733,7 +1671,6 @@
       <xs:element name="Section" type="sectionContentType"/>
       <xs:element name="Stinger" type="stingerContentType"/>
     </xs:choice>
-    <xs:attribute name="label" type="label"/>
     <xs:attribute name="version" type="iMusicVersion"/>
     <xs:attribute name="audioPath" type="audioPath"/>
     <xs:attribute name="tempo" type="tempo"/>
