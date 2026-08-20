@@ -55,6 +55,10 @@ template.innerHTML = `
 			border-radius: 4px;
 			padding: 0.3rem 0.45rem;
 		}
+		input:disabled, select:disabled {
+			opacity: 0.5;
+			cursor: default;
+		}
 		.full-input {
 			width: 100%;
 		}
@@ -226,7 +230,52 @@ export class WaNodeInspector extends HTMLElement {
 		input.type = "text";
 		input.className = "full-input mono";
 		input.value = node.tagName;
-		input.addEventListener("input", () => xmlStore.updateTagName(node.id, input.value));
+
+		// The root element's name isn't really a free choice when the schema
+		// only declares one legal root type — renaming it would just produce
+		// a document the schema itself rejects. Read-only in that case;
+		// still editable without a schema (nothing to validate against) or
+		// when the schema allows more than one root type.
+		const isRoot = xmlStore.root && node.id === xmlStore.root.id;
+		const rootOptions = xmlStore.schema?.rootElements;
+		if (isRoot && rootOptions && rootOptions.length === 1) {
+			input.disabled = true;
+			input.title = "The schema only allows one root element type";
+			wrap.appendChild(label);
+			wrap.appendChild(input);
+			return wrap;
+		}
+
+		// Unlike a plain attribute-value edit (deliberately kept from
+		// re-rendering, see _renderAttributeRow), renaming the tag is a real
+		// structural change — a different schema element means a different
+		// attribute list, different allowsText, etc. — so it genuinely needs
+		// a full re-render. Committing on every keystroke would tear this
+		// very input down mid-typing and steal focus back to nothing, so
+		// commit only on Enter/blur instead, same as the rename pattern used
+		// elsewhere (wa-file-manager.js's rename, wa-xml-tree.js's
+		// attribute-cell edit).
+		let committed = false;
+		const commit = () => {
+			if (committed) return;
+			committed = true;
+			const newName = input.value.trim();
+			if (newName && newName !== node.tagName) xmlStore.updateTagName(node.id, newName);
+			else this.render();
+		};
+		input.addEventListener("keydown", (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commit();
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				committed = true;
+				this.render();
+			}
+		});
+		input.addEventListener("blur", commit);
+
 		wrap.appendChild(label);
 		wrap.appendChild(input);
 		return wrap;
