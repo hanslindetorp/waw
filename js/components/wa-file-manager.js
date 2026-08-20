@@ -71,6 +71,27 @@ template.innerHTML = `
 		li.file.selected > .node-row {
 			background: #234b73;
 		}
+		li.folder > .node-row.drop-target {
+			background: rgba(79, 163, 255, 0.18);
+			outline: 1px dashed var(--waw-accent, #4fa3ff);
+			outline-offset: -1px;
+		}
+		.disclosure {
+			flex: 0 0 auto;
+			width: 1rem;
+			background: none;
+			border: none;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: pointer;
+			padding: 0;
+			font-size: 0.65rem;
+			text-align: center;
+		}
+		.disclosure-spacer {
+			flex: 0 0 auto;
+			display: inline-block;
+			width: 1rem;
+		}
 		.name {
 			flex: 1 1 auto;
 			overflow: hidden;
@@ -144,6 +165,7 @@ export class WaFileManager extends HTMLElement {
 		this._tree = this.shadowRoot.querySelector(".tree");
 		this._emptyHint = this.shadowRoot.querySelector(".empty-hint");
 		this._fileInput = this.shadowRoot.querySelector(".file-input");
+		this._collapsedIds = new Set();
 		this._onDragOver = this._onDragOver.bind(this);
 		this._onDragLeave = this._onDragLeave.bind(this);
 		this._onDrop = this._onDrop.bind(this);
@@ -179,6 +201,16 @@ export class WaFileManager extends HTMLElement {
 	_onDrop(e) {
 		e.preventDefault();
 		this.classList.remove("drag-over");
+		// A folder row's own drop handler (see _wireDropTarget) stops
+		// propagation for an internal VFS-move drag, so only a drop that
+		// missed every folder row (empty space, or onto a file) reaches here
+		// — treat that as "move to the top level", same as dropping between
+		// icons in Finder's list view.
+		const draggedId = e.dataTransfer.getData(VFS_FILE_DRAG_TYPE);
+		if (draggedId) {
+			this._moveNode(draggedId, ROOT_ID);
+			return;
+		}
 		this._handleFiles(e.dataTransfer.files, ROOT_ID);
 	}
 
@@ -229,9 +261,13 @@ export class WaFileManager extends HTMLElement {
 		li.className = "folder";
 		li.dataset.id = node.id;
 
+		const hasChildren = vfs.listFolder(node.id).length > 0;
+		const isCollapsed = this._collapsedIds.has(node.id);
+
 		const row = document.createElement("div");
 		row.className = "node-row";
 		row.innerHTML = `
+			${hasChildren ? `<button class="disclosure" type="button" title="Expand/collapse">${isCollapsed ? "▸" : "▾"}</button>` : `<span class="disclosure-spacer"></span>`}
 			<span class="icon">\u{1F4C1}</span>
 			<span class="name"></span>
 			<span class="actions">
@@ -247,16 +283,27 @@ export class WaFileManager extends HTMLElement {
 		`;
 		row.querySelector(".name").textContent = node.name;
 
+		if (hasChildren) {
+			row.querySelector(".disclosure").addEventListener("click", (e) => {
+				e.stopPropagation();
+				if (isCollapsed) this._collapsedIds.delete(node.id);
+				else this._collapsedIds.add(node.id);
+				this.render();
+			});
+		}
+
 		row.querySelector(".act-add").addEventListener("click", (e) => {
 			e.stopPropagation();
 			this._promptUploadInto(node.id);
 		});
 		this._wireRename(row, node);
 		this._wireDelete(row, node);
+		this._wireDragSource(row, node);
+		this._wireDropTarget(row, node);
 
 		const childList = document.createElement("ul");
 		childList.className = "tree";
-		childList.appendChild(this._renderChildren(node.id));
+		if (!isCollapsed) childList.appendChild(this._renderChildren(node.id));
 
 		li.appendChild(row);
 		li.appendChild(childList);
@@ -271,6 +318,7 @@ export class WaFileManager extends HTMLElement {
 		const row = document.createElement("div");
 		row.className = "node-row";
 		row.innerHTML = `
+			<span class="disclosure-spacer"></span>
 			<span class="icon">\u{1F3B5}</span>
 			<span class="name"></span>
 			<span class="actions">
@@ -286,14 +334,7 @@ export class WaFileManager extends HTMLElement {
 		row.querySelector(".name").textContent = node.name;
 		row.addEventListener("click", () => selection.select(node.id));
 
-		row.draggable = true;
-		row.addEventListener("dragstart", (e) => {
-			e.dataTransfer.effectAllowed = "copy";
-			// Only the custom type — no "text/plain" — so wa-xml-tree can tell this
-			// apart from its own internal node-reorder drag (which uses text/plain).
-			e.dataTransfer.setData(VFS_FILE_DRAG_TYPE, node.id);
-		});
-
+		this._wireDragSource(row, node);
 		this._wireRename(row, node);
 		this._wireDelete(row, node);
 
@@ -362,6 +403,63 @@ export class WaFileManager extends HTMLElement {
 			if (selection.id === node.id) selection.select(null);
 			vfs.delete(node.id);
 		});
+	}
+
+	// Both files and folders can be dragged to reorganize the tree (dropped
+	// onto a folder row, or onto empty space / a file to land at the top
+	// level — see _onDrop). The same custom type already used to drag a file
+	// out onto the XML editor (wa-xml-tree.js) carries the id here too —
+	// that drop handler already ignores anything that isn't a `file` node,
+	// so reusing it for folder drags is safe.
+	_wireDragSource(row, node) {
+		row.draggable = true;
+		row.addEventListener("dragstart", (e) => {
+			e.stopPropagation();
+			// Folders can only be moved within the file manager — unlike a
+			// file, they can't be dropped onto the XML editor to set a src
+			// attribute (wa-xml-tree.js's own drop handler already ignores
+			// non-file nodes), so only offer "copy" for files. This makes the
+			// browser show an honest "not allowed" cursor over the XML editor
+			// while dragging a folder, instead of a misleading "allowed" one.
+			e.dataTransfer.effectAllowed = node.type === "file" ? "copyMove" : "move";
+			e.dataTransfer.setData(VFS_FILE_DRAG_TYPE, node.id);
+		});
+	}
+
+	// Only folder rows are drop targets (you can't drop something "into" a
+	// file). stopPropagation on both dragover and drop keeps this from also
+	// being treated as a "move to top level" drop by the host's own handler.
+	_wireDropTarget(row, node) {
+		row.addEventListener("dragover", (e) => {
+			if (!e.dataTransfer.types.includes(VFS_FILE_DRAG_TYPE)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			e.dataTransfer.dropEffect = "move";
+			row.classList.add("drop-target");
+		});
+		row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
+		row.addEventListener("drop", (e) => {
+			if (!e.dataTransfer.types.includes(VFS_FILE_DRAG_TYPE)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			row.classList.remove("drop-target");
+			this._moveNode(e.dataTransfer.getData(VFS_FILE_DRAG_TYPE), node.id);
+		});
+	}
+
+	_moveNode(draggedId, targetFolderId) {
+		if (!draggedId || draggedId === targetFolderId) return;
+		const draggedNode = vfs.getNode(draggedId);
+		if (!draggedNode || draggedNode.parentId === targetFolderId) return;
+
+		// A folder can't be dropped into itself or one of its own
+		// descendants — getPath(targetFolderId) is the target's own ancestor
+		// chain (itself included), so if the dragged node shows up in it,
+		// the target is inside (or is) the thing being dragged.
+		const targetPath = vfs.getPath(targetFolderId);
+		if (targetPath.some((n) => n.id === draggedId)) return;
+
+		vfs.moveFile(draggedId, targetFolderId);
 	}
 
 	_promptUploadInto(folderId) {

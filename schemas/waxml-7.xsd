@@ -807,23 +807,11 @@
     </xs:restriction>
   </xs:simpleType>
 
-  <xs:simpleType name="ioSelector">
+  <xs:simpleType name="output">
     <xs:annotation>
-      <xs:documentation>Used by both "input" and "output" to specify a routing target. Either a CSS selector referring to another element in this WAXML document, or a JS-style string-concatenation expression involving one or more variables (e.g. "$busId", or '"#" + $trackId + "-out"'). Note: CSS-selector-shaped values are only checked against a permissive character set here, not validated as a fully correct CSS selector - and the concatenation-expression form is checked for shape only (balanced quotes/operators are a runtime concern, same as mathExpression's parentheses).</xs:documentation>
+      <xs:documentation></xs:documentation>
     </xs:annotation>
-    <xs:union memberTypes="ioSelectorCss ioSelectorExpression"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="ioSelectorCss">
-    <xs:restriction base="xs:string">
-      <xs:pattern value="[a-zA-Z0-9_#.,:;&gt;+~*()='&quot;\-\[\] ]+"/>
-    </xs:restriction>
-  </xs:simpleType>
-
-  <xs:simpleType name="ioSelectorExpression">
-    <xs:restriction base="xs:string">
-      <xs:pattern value="((&quot;[^&quot;]*&quot;|'[^']*'|\$[a-zA-Z_][a-zA-Z0-9_]*)\s*\+\s*)*\$[a-zA-Z_][a-zA-Z0-9_]*(\s*\+\s*(&quot;[^&quot;]*&quot;|'[^']*'|\$[a-zA-Z_][a-zA-Z0-9_]*))*"/>
-    </xs:restriction>
+    <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
   <xs:simpleType name="outputBus">
@@ -1168,6 +1156,12 @@
 
 
 
+  <xs:simpleType name="iMusicOutput">
+    <xs:annotation>
+      <xs:documentation>Specify a CSS selector referring to an element in a WebAudioXML configuration to apply realtime audio effects to this object..</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
 
 
   <xs:simpleType name="voice">
@@ -1486,8 +1480,7 @@
     <xs:attribute name="id" type="id"/>
     <xs:attribute name="class" type="class"/>
     <xs:attribute name="label" type="label"/>
-    <xs:attribute name="output" type="ioSelector"/>
-    <xs:attribute name="input" type="ioSelector"/>
+    <xs:attribute name="output" type="output"/>
   </xs:attributeGroup>
 
   <xs:attributeGroup name="waxml">
@@ -1583,8 +1576,7 @@
     <xs:attribute name="frameRate" type="frameRate"/>  
     <xs:attribute name="fallOffRatio" type="fallOffRatio"/>  
     <xs:attribute name="smoothDerivative" type="smoothDerivative"/>  
-    <xs:attribute name="output" type="ioSelector"/>
-    <xs:attribute name="input" type="ioSelector"/>  
+    <xs:attribute name="output" type="output"/>  
     <xs:attribute name="convolution" type="convolution"/>  
 
     <!-- Send -->
@@ -1647,10 +1639,7 @@
   </xs:complexType>
 
   <xs:complexType name="optionContentType">
-    <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
-      <xs:element name="Command" type="commandContentType"/>
-    </xs:choice>
+    <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="pos" type="position"/>
@@ -1661,10 +1650,9 @@
   </xs:complexType>
 
   <xs:complexType name="segmentContentType">
-    <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="Option" type="optionContentType"/>
-      <xs:element name="Command" type="commandContentType"/>
-    </xs:choice>
+    <xs:sequence>
+      <xs:element name="Option" type="optionContentType" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="pos" type="position"/>
     <xs:attribute name="upbeat" type="length"/>
@@ -1683,8 +1671,7 @@
     <xs:attribute name="class" type="xs:string"/>
     <xs:attribute name="id" type="xs:string"/>
     <xs:attribute name="voice" type="voice"/>
-    <xs:attribute name="output" type="ioSelector"/>
-    <xs:attribute name="input" type="ioSelector"/>
+    <xs:attribute name="output" type="iMusicOutput"/>
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="quantize" type="quantize"/>
     <xs:attribute name="changeOnNext" type="length"/>
@@ -1703,14 +1690,12 @@
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element name="Segment" type="segmentContentType"/>
       <xs:element name="Option" type="optionContentType"/>
-      <xs:element name="Command" type="commandContentType"/>
     </xs:choice>
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="class" type="iMusicClass"/>
     <xs:attribute name="id" type="iMusicId"/>
     <xs:attribute name="voice" type="voice"/>
-    <xs:attribute name="output" type="ioSelector"/>
-    <xs:attribute name="input" type="ioSelector"/>
+    <xs:attribute name="output" type="iMusicOutput"/>
     <xs:attribute name="audioPath" type="audioPath"/>
     <xs:attribute name="suffix" type="suffix"/>
     <xs:attribute name="src" type="fileName"/>
@@ -1747,7 +1732,6 @@
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element name="Section" type="sectionContentType"/>
       <xs:element name="Stinger" type="stingerContentType"/>
-      <xs:element name="Command" type="commandContentType"/>
     </xs:choice>
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="version" type="iMusicVersion"/>
@@ -1781,16 +1765,8 @@
       <xs:sequence>
         <xs:group ref="waxml" minOccurs="1" maxOccurs="unbounded"/>
         <xs:element name="Composition" type="CompositionContentType" minOccurs="0" maxOccurs="1"/>
-        <xs:element name="Command" type="commandContentType" minOccurs="0" maxOccurs="unbounded"/>
       </xs:sequence>
-      <!-- xmlns is not declared here - it's a built-in XML namespace declaration
-           mechanism, available on every element automatically, not a regular
-           XSD attribute. -->
-      <xs:attribute name="version" type="version"/>
-      <xs:attribute name="timeUnit" type="timeUnit"/>
-      <xs:attribute name="gain" type="gain"/>
-      <xs:attribute name="controls" type="controls"/>
-      <xs:attribute name="label" type="label"/>
+      <xs:attributeGroup ref="waxml"/>
     </xs:complexType>
   </xs:element>
 
