@@ -71,20 +71,6 @@
     </xs:restriction>
   </xs:simpleType>
 
-  <xs:simpleType name="convolutionGain">
-    <xs:annotation>
-      <xs:documentation>Gain applied to the portion of the signal sent to a convolution reverb, used by AmbientAudio and ObjectBasedAudio (not by ConvolverNode itself). Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
-    </xs:annotation>
-    <xs:union memberTypes="convolutionGainValue mathExpression"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="convolutionGainValue">
-    <xs:restriction base="xs:decimal">
-      <xs:minInclusive value="0"/>
-      <xs:maxInclusive value="1"/>
-    </xs:restriction>
-  </xs:simpleType>
-
   <xs:simpleType name="normalize">
     <xs:annotation>
       <xs:documentation>Whether to normalize the audio. Either a boolean value (true/false), or a mathematical expression (see mathExpression).</xs:documentation>
@@ -935,19 +921,6 @@
   </xs:simpleType>
 
 
-  <xs:simpleType name="selectIndex">
-    <xs:annotation>
-      <xs:documentation>Zero-based index selecting one of a Mixer's inputs. Upper bound is dynamic (number of child elements minus one) and not enforced by this schema. Either a non-negative integer, or a mathematical expression (see mathExpression).</xs:documentation>
-    </xs:annotation>
-    <xs:union memberTypes="selectIndexValue mathExpression"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="selectIndexValue">
-    <xs:restriction base="xs:integer">
-      <xs:minInclusive value="0"/>
-    </xs:restriction>
-  </xs:simpleType>
-
   <xs:simpleType name="mix">
     <xs:annotation>
       <xs:documentation>Dry/wet mix ratio. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
@@ -1002,7 +975,6 @@
     <xs:restriction base="xs:string">
       <xs:enumeration value="trig"/>
       <xs:enumeration value="set"/>
-      <xs:enumeration value="stop"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -1159,6 +1131,13 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <xs:simpleType name="iMusicVersion">
+    <xs:annotation>
+      <xs:documentation>Version number of iMusicXML specification.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
   <xs:simpleType name="iMusicClass">
     <xs:annotation>
       <xs:documentation>CSS class name for selecting and triggering from iMusic javascript API.</xs:documentation>
@@ -1173,6 +1152,13 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
+
+  <xs:simpleType name="showGUI">
+    <xs:annotation>
+      <xs:documentation>'true' or 'false' - determains if the iMusic GUI button should be visible.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:boolean"/>
+  </xs:simpleType>
 
 
 
@@ -1242,7 +1228,11 @@
 
   <xs:group name="snapshot">
     <xs:choice>
-      <xs:element name="Command" type="commandContentType"/>
+      <xs:element name="Command">
+        <xs:complexType>
+          <xs:attributeGroup ref="command"/>
+        </xs:complexType>
+      </xs:element>
     </xs:choice>
   </xs:group>
 
@@ -1255,7 +1245,6 @@
       <xs:element name="AudioBufferSourceNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="src" type="src"/>
           <xs:attribute name="detune" type="detune"/>
           <xs:attribute name="loop" type="loop"/>
@@ -1275,7 +1264,6 @@
       <xs:element name="DelayNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="delayTime" type="delayTime"/>
           <xs:attribute name="maxDelayTime" type="maxDelayTime"/>
         </xs:complexType>
@@ -1290,7 +1278,6 @@
       <xs:element name="PannerNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="panningModel" type="panningModel"/>
           <xs:attribute name="distanceModel" type="distanceModel"/>
           <xs:attribute name="positionX" type="positionX"/>
@@ -1320,7 +1307,6 @@
       <xs:element name="OscillatorNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="frequency" type="frequency"/>
           <xs:attribute name="detune" type="detune"/>
           <xs:attribute name="type" type="oscillatorType"/>
@@ -1330,7 +1316,6 @@
       <xs:element name="GainNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="gain" type="gain"/>
         </xs:complexType>
       </xs:element>
@@ -1338,7 +1323,6 @@
       <xs:element name="BiquadFilterNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="frequency" type="frequency"/>
           <xs:attribute name="detune" type="detune"/>
           <xs:attribute name="Q" type="Q"/>
@@ -1350,7 +1334,6 @@
       <xs:element name="StereoPannerNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="pan" type="pan"/>
         </xs:complexType>
       </xs:element>
@@ -1366,7 +1349,6 @@
       <xs:element name="DynamicsCompressorNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="threshold" type="threshold"/>
           <xs:attribute name="knee" type="knee"/>
           <xs:attribute name="ratio" type="ratio"/>
@@ -1397,17 +1379,7 @@
       <!-- logic -->
       <xs:element name="Var">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="name" type="name"/>
-          <xs:attribute name="mapin" type="mapin"/>
-          <xs:attribute name="mapout" type="mapout"/>
-          <xs:attribute name="default" type="default"/>
-          <xs:attribute name="value" type="value"/>
-          <xs:attribute name="trig" type="xs:string"/>
-          <xs:attribute name="smoothDerivative" type="smoothDerivative"/>
-          <xs:attribute name="curve" type="curve"/>
-          <xs:attribute name="steps" type="steps"/>
-          <xs:attribute name="convert" type="convert"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
@@ -1419,8 +1391,7 @@
       
       <xs:element name="Include">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
       
@@ -1431,40 +1402,26 @@
       <!-- WAXML routing -->
       <xs:element name="Send">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="bus" type="bus"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="Chain">
         <xs:complexType>
           <xs:group ref="waxml" minOccurs="0" maxOccurs="unbounded"/>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="gain" type="gain"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
       
       <xs:element name="Mixer">
         <xs:complexType>
           <xs:group ref="waxml" minOccurs="0" maxOccurs="unbounded"/>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="gain" type="gain"/>
-          <xs:attribute name="mix" type="mix"/>
-          <xs:attribute name="selectIndex" type="selectIndex"/>
-          <xs:attribute name="crossFadeRange" type="crossFadeRange"/>
-          <xs:attribute name="transitionTime" type="transitionTime"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       
       <!-- WAXML objects -->
-
-      <!--
-      Synth and Voice are commented out for now (per request 2026 - Hans).
-      To reinstate: uncomment this element and give Voice its own local
-      element declaration (it was previously a bare, attribute-less child).
-
       <xs:element name="Synth">
         <xs:complexType>
           <xs:choice>
@@ -1473,59 +1430,16 @@
           <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
-      -->
 
       <xs:element name="ObjectBasedAudio">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
-          <xs:attribute name="detune" type="detune"/>
-          <xs:attribute name="loop" type="loop"/>
-          <xs:attribute name="loopStart" type="loopStart"/>
-          <xs:attribute name="loopEnd" type="loopEnd"/>
-          <xs:attribute name="loopLength" type="loopLength"/>
-          <xs:attribute name="playbackRate" type="playbackRate"/>
-          <xs:attribute name="fadeTime" type="fadeTime"/>
-          <xs:attribute name="gain" type="gain"/>
-          <xs:attribute name="randomPosition" type="randomPosition"/>
-          <xs:attribute name="randomDuration" type="randomDuration"/>
-          <xs:attribute name="randomDetune" type="randomDetune"/>
-          <xs:attribute name="convolution" type="convolution"/>
-          <xs:attribute name="convolutionGain" type="convolutionGain"/>
-          <xs:attribute name="panningModel" type="panningModel"/>
-          <xs:attribute name="distanceModel" type="distanceModel"/>
-          <xs:attribute name="positionX" type="positionX"/>
-          <xs:attribute name="positionY" type="positionY"/>
-          <xs:attribute name="positionZ" type="positionZ"/>
-          <xs:attribute name="orientationX" type="orientationX"/>
-          <xs:attribute name="orientationY" type="orientationY"/>
-          <xs:attribute name="orientationZ" type="orientationZ"/>
-          <xs:attribute name="refDistance" type="refDistance"/>
-          <xs:attribute name="maxDistance" type="maxDistance"/>
-          <xs:attribute name="rolloffFactor" type="rolloffFactor"/>
-          <xs:attribute name="coneInnerAngle" type="coneInnerAngle"/>
-          <xs:attribute name="coneOuterAngle" type="coneOuterAngle"/>
-          <xs:attribute name="coneOuterGain" type="coneOuterGain"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
       <xs:element name="AmbientAudio">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
-          <xs:attribute name="detune" type="detune"/>
-          <xs:attribute name="loop" type="loop"/>
-          <xs:attribute name="loopStart" type="loopStart"/>
-          <xs:attribute name="loopEnd" type="loopEnd"/>
-          <xs:attribute name="loopLength" type="loopLength"/>
-          <xs:attribute name="playbackRate" type="playbackRate"/>
-          <xs:attribute name="fadeTime" type="fadeTime"/>
-          <xs:attribute name="gain" type="gain"/>
-          <xs:attribute name="randomPosition" type="randomPosition"/>
-          <xs:attribute name="randomDuration" type="randomDuration"/>
-          <xs:attribute name="randomDetune" type="randomDetune"/>
-          <xs:attribute name="convolution" type="convolution"/>
-          <xs:attribute name="convolutionGain" type="convolutionGain"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
@@ -1533,25 +1447,21 @@
       <xs:element name="Snapshot">
         <xs:complexType>
           <xs:group ref="snapshot" minOccurs="1" maxOccurs="unbounded"/>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
 
       <xs:element name="Noise">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
 
       <xs:element name="Wam">
         <xs:complexType>
-          <xs:choice minOccurs="0" maxOccurs="unbounded">
-            <xs:element name="Property" type="propertyContentType"/>
-          </xs:choice>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
-          <xs:attribute name="src" type="src"/>
+          <xs:attributeGroup ref="waxml"/>
         </xs:complexType>
       </xs:element>
 
@@ -1563,6 +1473,12 @@
 
   <!-- Attribute groups -->
 
+  <xs:attributeGroup name="command">
+    <xs:attribute name="type" type="commandType"/>
+    <xs:attribute name="variable" type="xs:string"/>
+    <xs:attribute name="value" type="xs:string"/>
+  </xs:attributeGroup>
+  
   <!-- The four attributes every native Web Audio API node gets, beyond its
        own spec-defined properties: id/class for reference and styling,
        label for GUI display, output for routing to another node. -->
@@ -1678,7 +1594,7 @@
     <xs:attribute name="mix" type="mix"/> 
     <xs:attribute name="crossFadeRange" type="crossFadeRange"/> 
     <xs:attribute name="peak" type="peak"/> 
-    <xs:attribute name="selectIndex" type="selectIndex"/> 
+    <xs:attribute name="selectindex" type="xs:string"/> 
 
     <!-- Envelope -->
     <xs:attribute name="legato" type="xs:boolean"/> 
@@ -1720,12 +1636,6 @@
   <!-- (then named "track"); that placement is gone now that Stinger   -->
   <!-- is restricted to Composition/Section only)                      -->
   <!-- ============================================================= -->
-
-  <xs:complexType name="propertyContentType">
-    <xs:attribute name="label" type="label"/>
-    <xs:attribute name="name" type="name"/>
-    <xs:attribute name="value" type="value"/>
-  </xs:complexType>
 
   <xs:complexType name="commandContentType">
     <xs:attribute name="label" type="label"/>
@@ -1800,6 +1710,7 @@
     <xs:attribute name="id" type="iMusicId"/>
     <xs:attribute name="voice" type="voice"/>
     <xs:attribute name="output" type="ioSelector"/>
+    <xs:attribute name="input" type="ioSelector"/>
     <xs:attribute name="audioPath" type="audioPath"/>
     <xs:attribute name="suffix" type="suffix"/>
     <xs:attribute name="src" type="fileName"/>
@@ -1839,10 +1750,12 @@
       <xs:element name="Command" type="commandContentType"/>
     </xs:choice>
     <xs:attribute name="label" type="label"/>
-    <xs:attribute name="id" type="iMusicId"/>
-    <xs:attribute name="class" type="iMusicClass"/>
+    <xs:attribute name="version" type="iMusicVersion"/>
+    <xs:attribute name="audioPath" type="audioPath"/>
     <xs:attribute name="tempo" type="tempo"/>
     <xs:attribute name="timeSign" type="meter"/>
+    <xs:attribute name="suffix" type="suffix"/>
+    <xs:attribute name="showGUI" type="showGUI"/>
     <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
     <xs:attribute name="loopLength" type="length"/>
@@ -1878,8 +1791,6 @@
       <xs:attribute name="gain" type="gain"/>
       <xs:attribute name="controls" type="controls"/>
       <xs:attribute name="label" type="label"/>
-      <xs:attribute name="tempo" type="tempo"/>
-      <xs:attribute name="timeSign" type="meter"/>
     </xs:complexType>
   </xs:element>
 

@@ -1159,6 +1159,13 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <xs:simpleType name="iMusicVersion">
+    <xs:annotation>
+      <xs:documentation>Version number of iMusicXML specification.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
   <xs:simpleType name="iMusicClass">
     <xs:annotation>
       <xs:documentation>CSS class name for selecting and triggering from iMusic javascript API.</xs:documentation>
@@ -1173,6 +1180,13 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
+
+  <xs:simpleType name="showGUI">
+    <xs:annotation>
+      <xs:documentation>'true' or 'false' - determains if the iMusic GUI button should be visible.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:boolean"/>
+  </xs:simpleType>
 
 
 
@@ -1800,6 +1814,7 @@
     <xs:attribute name="id" type="iMusicId"/>
     <xs:attribute name="voice" type="voice"/>
     <xs:attribute name="output" type="ioSelector"/>
+    <xs:attribute name="input" type="ioSelector"/>
     <xs:attribute name="audioPath" type="audioPath"/>
     <xs:attribute name="suffix" type="suffix"/>
     <xs:attribute name="src" type="fileName"/>
@@ -1839,10 +1854,12 @@
       <xs:element name="Command" type="commandContentType"/>
     </xs:choice>
     <xs:attribute name="label" type="label"/>
-    <xs:attribute name="id" type="iMusicId"/>
-    <xs:attribute name="class" type="iMusicClass"/>
+    <xs:attribute name="version" type="iMusicVersion"/>
+    <xs:attribute name="audioPath" type="audioPath"/>
     <xs:attribute name="tempo" type="tempo"/>
     <xs:attribute name="timeSign" type="meter"/>
+    <xs:attribute name="suffix" type="suffix"/>
+    <xs:attribute name="showGUI" type="showGUI"/>
     <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
     <xs:attribute name="loopLength" type="length"/>
@@ -1878,8 +1895,6 @@
       <xs:attribute name="gain" type="gain"/>
       <xs:attribute name="controls" type="controls"/>
       <xs:attribute name="label" type="label"/>
-      <xs:attribute name="tempo" type="tempo"/>
-      <xs:attribute name="timeSign" type="meter"/>
     </xs:complexType>
   </xs:element>
 

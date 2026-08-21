@@ -112,6 +112,11 @@ template.innerHTML = `
 			line-height: 1;
 			padding: 0.2rem 0.4rem;
 		}
+		.pencil-btn.active {
+			background: var(--waw-accent, #4fa3ff);
+			color: #06131f;
+			border-color: var(--waw-accent, #4fa3ff);
+		}
 		.attr-divider {
 			border: none;
 			border-top: 1px solid var(--waw-border, #2f2f2f);
@@ -533,12 +538,20 @@ export class WaNodeInspector extends HTMLElement {
 		const renderActiveControl = () => {
 			controlSlot.innerHTML = "";
 			const currentValue = xmlStore.getSelectedNode()?.attributes[attrName];
+			const detectedIndex = this._detectUnionMemberIndex(members, currentValue);
 			const member = members[activeIndex];
 			// Only hand the member the real current value if it's actually the
 			// value's own detected type — otherwise this mode was picked by
 			// cycling and should start empty rather than misrepresenting e.g. a
 			// number as if it were a selected list option.
-			const memberValue = this._detectUnionMemberIndex(members, currentValue) === activeIndex ? currentValue : undefined;
+			const memberValue = detectedIndex === activeIndex ? currentValue : undefined;
+
+			// The pencil marks itself only while showing a mode that *isn't*
+			// what the stored value actually is — i.e. the user cycled away
+			// from the real representation into an empty alternate one. Back
+			// on the type the value naturally belongs to, it's just a normal
+			// button again.
+			cycleBtn.classList.toggle("active", activeIndex !== detectedIndex);
 
 			if (member.type === "boolean") {
 				controlSlot.appendChild(this._renderBooleanControl(memberValue, onChange));
@@ -602,6 +615,13 @@ export class WaNodeInspector extends HTMLElement {
 		const renderSlot = () => {
 			controlSlot.innerHTML = "";
 			const currentValue = xmlStore.getSelectedNode()?.attributes[attrName];
+			// Slider is the natural mode for a numeric-looking (or unset) value;
+			// text is natural for anything that doesn't parse as a number. The
+			// pencil only marks itself when showing the *other* one — a
+			// deliberate override — not while sitting on whichever mode the
+			// value already belongs to.
+			const textIsNatural = !looksNumeric(currentValue) && currentValue !== undefined;
+			toggleBtn.classList.toggle("active", showText !== textIsNatural);
 			controlSlot.appendChild(
 				showText
 					? this._renderStringControl(currentValue, attrSchema, onChange)

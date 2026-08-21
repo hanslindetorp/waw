@@ -22,12 +22,12 @@ export function createDefaultProject() {
 
 // The root tag name comes from the active schema (its own root element
 // declaration), not a hardcoded string — so renaming the schema's root
-// element (as happened going from "Audio" to "waxml") doesn't leave the
-// default project generating a document the schema itself would reject.
-// "Audio" only survives as a last-resort fallback for the (should-never-
-// happen) case where the default schema failed to load.
+// element (Audio -> waxml -> WAXML, so far) doesn't leave the default
+// project generating a document the schema itself would reject. "WAXML"
+// only survives as a last-resort fallback for the (should-never-happen)
+// case where the default schema failed to load.
 function createDefaultAudioRoot() {
-	const rootTagName = xmlStore.schema?.rootElements?.[0] || "Audio";
+	const rootTagName = xmlStore.schema?.rootElements?.[0] || "WAXML";
 	const node = createXmlNode(rootTagName, null);
 	node.attributes = {
 		version: "1.0",

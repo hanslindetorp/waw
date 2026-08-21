@@ -1009,7 +1009,7 @@ class AudioObject extends EventTarget{
 
       // NOTE!
       // This assumes there is only one controlling variable
-			let parameter = this.parameters[parameterName];
+			let parameter = this.parameters[parameterName.toLowerCase()];
       if(parameter){
         return parameter.variableNames[0];
       }
@@ -7658,7 +7658,7 @@ class Mapper{
 
 		// like a gain control for the variable
 		// do I still need it?
-		this.level = params.level;
+		// this.level = params.level;
 
 		if(params.range){
 			this.range = new Range(params.range);
@@ -21579,7 +21579,7 @@ MusicParser.parseMotif = function(iMusObj, motif, section){
 
     let url = motif.getAttribute("src");
     if(url){urls.push(url)}
-    let sources = motif.querySelectorAll("source, option");
+    let sources = motif.querySelectorAll("source, Option");
 
 
     sources.forEach(source => {
@@ -21735,7 +21735,7 @@ MusicParser.parseXML = function(iMusObj, root){
 
 				if(!url){
 					url = [];
-					var sources = region.querySelectorAll("source, option");
+					var sources = region.querySelectorAll("source, Option");
 					sources.forEach((source) => {
 						var src = source.getAttribute("src");
 						if(src){url.push(src)}

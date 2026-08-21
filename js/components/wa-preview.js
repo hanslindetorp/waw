@@ -6,7 +6,7 @@ import "./wa-section-view.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
 // (panel 2) / XML code (panel 4) — they all share xmlStore's selectedNodeId.
-// <section> gets a full DAW-style arrange view; other audio-bearing
+// <Section> gets a full DAW-style arrange view; other audio-bearing
 // elements get a waveform + WAXML play/stop. More element-specific views
 // (WAM modules, mixer, ...) land in later steps per
 // docs/WAXML-Workstation-spec.md avsnitt 5.4/9.
@@ -15,9 +15,9 @@ const bridge = new WaxmlBridge();
 
 // Composition/section-context tags aren't valid as a standalone
 // <audio><Tag .../></audio> wrapper (WAXML's Parser rejects them outside
-// their <Composition>/<section> parent) — selecting one still shows its
+// their <Composition>/<Section> parent) — selecting one still shows its
 // waveform for reference, but without the (would-be-broken) WAXML play button.
-const COMPOSITION_CONTEXT_TAGS = new Set(["layer", "segment", "option", "stinger", "command"]);
+const COMPOSITION_CONTEXT_TAGS = new Set(["Layer", "Segment", "Option", "Stinger", "Command"]);
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -160,10 +160,21 @@ export class WaPreview extends HTMLElement {
 			return;
 		}
 
-		if (node.tagName === "section") {
+		if (node.tagName === "Section") {
 			// wa-section-view listens to xmlStore itself and stays mounted
 			// the whole time — we just need to make its state visible.
 			this._showState("section");
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
+		// Selecting one of a Section's own parts (e.g. clicking a Layer/Segment/
+		// Option box inside the arrange view itself, to select it for the
+		// Inspector or for multi-delete) shouldn't yank the whole panel away
+		// to a bare waveform view out from under the user — wa-section-view
+		// tracks its own active Section independently and keeps rendering it.
+		if (COMPOSITION_CONTEXT_TAGS.has(node.tagName) && this._activeState === "section") {
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;
@@ -210,7 +221,7 @@ export class WaPreview extends HTMLElement {
 
 		this._status.textContent = playableStandalone
 			? "Loading waveform…"
-			: `Select the parent <section> to hear this in context.`;
+			: `Select the parent <Section> to hear this in context.`;
 
 		if (playableStandalone) {
 			await bridge.loadNode(node, srcAttr.attrName, resolvedUrl);
@@ -247,6 +258,7 @@ export class WaPreview extends HTMLElement {
 
 	_showState(name) {
 		this._states.forEach((el, key) => el.classList.toggle("active", key === name));
+		this._activeState = name;
 	}
 }
 

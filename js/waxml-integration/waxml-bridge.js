@@ -84,7 +84,7 @@ function buildNodePreviewXml(node, srcAttrName, resolvedSrc) {
 		.map(([k, v]) => ` ${k}="${escapeXmlAttr(v)}"`)
 		.join("");
 
-	return `<audio version="1.0">\n\t<${node.tagName}${attrString} />\n</audio>`;
+	return `<WAXML version="1.0">\n\t<${node.tagName}${attrString} />\n</WAXML>`;
 }
 
 function escapeXmlAttr(value) {

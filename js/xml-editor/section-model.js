@@ -1,18 +1,25 @@
-// Pure, read-only helpers for turning a <section> XmlNode into what the
+// Pure, read-only helpers for turning a <Section> XmlNode into what the
 // section view needs. Attribute names match the real engine (waxml.js's
 // Music.js/MusicParser.js + schemas/waxml.xsd) — notably `timeSign`, not the
 // `timeSignature` used in docs/WAXML-Workstation-spec.md's older example XML.
 //
-// Element names below match the current schema: section (was "arrangement"),
-// layer (was "track"), segment (was "region"). option/command are unchanged.
+// Element names match the current schema exactly, including case: Section
+// (was "arrangement", then lowercase "section"), Layer (was "track", then
+// "layer"), Segment (was "region", then "segment"). Option/Command are
+// unchanged apart from the same lowercase->PascalCase schema-wide rename.
 //
-// IMPORTANT: pos/length/loopLength are NOT plain seconds. waxml.js's own
-// divisionToTime()/getTimeSign() (Music.js) parse them as musical notation:
-// a bare number is a bar COUNT (e.g. length="2" = 2 bars), "X/Y" is a
-// fraction of a whole note (e.g. "3/8" = three eighth notes), "bar"/"beat"
-// are literally one bar/beat, and an explicit real-time value can be given
-// as "Xs" or "Xms". parseDivision() below mirrors that conversion so the
-// graphics line up with what the engine will actually schedule.
+// IMPORTANT: pos/length/loopLength are NOT plain seconds, and — easy to miss
+// — pos uses a DIFFERENT notation than length/loopLength do:
+// - length/loopLength/upbeat/delay/changeOnNext/partLength/quantize go
+//   through parseDivision() below, mirroring waxml.js's divisionToTime()/
+//   getTimeSign(): a bare number is a bar COUNT (length="2" = 2 bars), "X/Y"
+//   is a fraction of a whole note ("3/8" = three eighth notes), "bar"/"beat"
+//   are literally one bar/beat, and an explicit real-time value can be given
+//   as "Xs" or "Xms".
+// - pos (on Segment/Option/Command) goes through parsePosition() below
+//   instead, mirroring waxml.js's own separate musicalPositionToTime(): a
+//   1-indexed "bar.beat.offbeat" notation (e.g. "4.4.75" = bar 4, beat 4,
+//   75% through that beat), NOT a bar-count/fraction/unit value.
 
 const DEFAULT_TEMPO = 120;
 const DEFAULT_TIME_SIGN = "4/4";
@@ -41,15 +48,15 @@ function parseTimeSign(value) {
 }
 
 export function getLayers(sectionNode) {
-	return sectionNode.children.filter((c) => c.tagName === "layer");
+	return sectionNode.children.filter((c) => c.tagName === "Layer");
 }
 
 export function getSegments(layerNode) {
-	return layerNode.children.filter((c) => c.tagName === "segment");
+	return layerNode.children.filter((c) => c.tagName === "Segment");
 }
 
 export function getOptions(parentNode) {
-	return parentNode.children.filter((c) => c.tagName === "option");
+	return parentNode.children.filter((c) => c.tagName === "Option");
 }
 
 // Converts a pos/length/loopLength attribute value to seconds, mirroring
@@ -93,8 +100,49 @@ function resolveDivisionFraction(str, timeSign) {
 	return { numerator: bars * timeSign.numerator, denominator: timeSign.denominator };
 }
 
+// `pos` on Segment/Option/Command is NOT a length/loopLength-style value —
+// waxml.js parses it with its own separate musicalPositionToTime()/
+// posStringToObject() (Music.js, confirmed via Part construction at
+// `curPos = this.musicalPositionToTime(o.pos)`), a 1-indexed
+// "bar.beat.offbeat" notation (e.g. "4.4.75" = bar 4, beat 4, 75% through
+// that beat) — completely different from length's bar-count/fraction/
+// explicit-unit grammar. A bare bar number defaults beat=1, offbeat=0, so
+// "4" alone means "the very start of bar 4". Reimplemented here rather than
+// calling into waxml.js's own posStringToObject() because that function
+// uses eval() on each segment.
+export function parsePosition(value, info) {
+	if (value === undefined || value === null || value === "") return 0;
+	if (typeof value === "number") return value;
+
+	const str = String(value).trim();
+	if (str === "off") return Infinity;
+
+	const delimiter = str.includes(",") ? "," : ".";
+	const parts = str.split(delimiter);
+	const bar = parts[0] !== undefined && parts[0] !== "" ? parseFloat(parts[0]) : 1;
+	const beat = parts[1] !== undefined && parts[1] !== "" ? parseFloat(parts[1]) : 1;
+	const offBeat = parts[2] !== undefined && parts[2] !== "" ? parseFloat(`0.${parts[2]}`) : 0;
+	if (!Number.isFinite(bar)) return 0;
+
+	return info.barDuration * (bar - 1) + info.beatDuration * ((Number.isFinite(beat) ? beat : 1) - 1) + info.beatDuration * (Number.isFinite(offBeat) ? offBeat : 0);
+}
+
 export function readPos(node, info) {
-	return parseDivision(node.attributes.pos, info);
+	return parsePosition(node.attributes.pos, info);
+}
+
+// Inverse of parsePosition/readPos — used when a drag-and-drop interaction
+// needs to write a *new* pos value from a pixel/time position. Quantizes to
+// the nearest `gridBeats`-beat grid first (default 1 beat, i.e. a quarter
+// note the way this engine defines a beat — see readSectionInfo/tempo:
+// beatDuration is always 60/tempo regardless of the meter's denominator),
+// then formats as the same 1-indexed "bar.beat.00" string musicalPositionToTime
+// reads back correctly.
+export function secondsToPosString(seconds, info, gridBeats = 1) {
+	const beatIndex = Math.round(seconds / info.beatDuration / gridBeats) * gridBeats;
+	const barIndex0 = Math.floor(beatIndex / info.timeSign.numerator);
+	const beatInBar0 = beatIndex - barIndex0 * info.timeSign.numerator;
+	return `${barIndex0 + 1}.${beatInBar0 + 1}.00`;
 }
 
 // null = no explicit length in the XML; caller falls back to decoded audio
@@ -105,7 +153,7 @@ export function readLength(node, info) {
 	return Number.isFinite(seconds) ? seconds : null;
 }
 
-// Layer looping (spec: <layer loopLength="...">) — null means "doesn't loop"
+// Layer looping (spec: <Layer loopLength="...">) — null means "doesn't loop"
 // (attribute absent, "off", zero, or unparseable).
 export function readLoopLength(layerNode, info) {
 	const raw = layerNode.attributes.loopLength;
