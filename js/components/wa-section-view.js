@@ -43,6 +43,19 @@ import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 
 const bridge = new WaxmlBridge();
 
+// The browser's own default HTML5 drag image is a rendered snapshot of the
+// dragged element — which gets visibly corrupted (pulling in unrelated
+// interface, per Hans, up to and including part of the XML editor) when
+// that element is partway scrolled out of view inside a clipping ancestor
+// (.layer-scroll's overflow:hidden), since the snapshot doesn't respect the
+// clip the way normal painting does. We already show our own drag preview
+// (.segment-ghost) during dragover, so the native one is both redundant and
+// occasionally broken — suppressed everywhere via this shared 1x1
+// transparent image instead of trying to work around the browser's own
+// snapshot bug.
+const TRANSPARENT_DRAG_IMAGE = new Image();
+TRANSPARENT_DRAG_IMAGE.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
 // Internal-only drag types for moving an <Option> or <Segment> box around
 // within the Preview (reorder/move Options, reposition/move Segments) —
 // distinct from VFS_FILE_DRAG_TYPE (a file dragged in from the File Manager)
@@ -421,11 +434,13 @@ template.innerHTML = `
 		}
 		.nested-option {
 			position: absolute;
-			top: 1px;
-			bottom: 1px;
+			border-top: 1px solid rgba(69, 181, 140, 0.6);
 			border-left: 1px solid rgba(69, 181, 140, 0.6);
 			overflow: hidden;
 			pointer-events: none;
+		}
+		.nested-option:first-child {
+			border-top: none;
 		}
 		.nested-option canvas {
 			position: absolute;
@@ -496,6 +511,7 @@ export class WaSectionView extends HTMLElement {
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 
 		this._scrollArea = this.shadowRoot.querySelector(".scroll-area");
+		this._layerScroll = this.shadowRoot.querySelector(".layer-scroll");
 		this._grid = this.shadowRoot.querySelector(".layer-scroll .grid");
 		this._ruler = this.shadowRoot.querySelector(".ruler");
 		this._stingerDivider = this.shadowRoot.querySelector(".stinger-divider");
@@ -702,10 +718,15 @@ export class WaSectionView extends HTMLElement {
 		if (this._playheadEl) {
 			this._playheadEl.style.left = `${LABEL_WIDTH + cursorPx}px`;
 		}
-		if (this._isPlaying && this._scrollArea) {
-			const targetLeft = cursorPx - this._scrollArea.clientWidth * 0.3;
-			if (Math.abs(this._scrollArea.scrollLeft - targetLeft) > this._scrollArea.clientWidth * 0.6) {
-				this._scrollArea.scrollLeft = Math.max(0, targetLeft);
+		// .scroll-area only scrolls vertically now (Stinger rows get their
+		// own independent horizontal scroll below it, see .layer-scroll/
+		// .stinger-scroll in the template) — the Layer area's own horizontal
+		// scroll, which the playhead should follow during playback, lives on
+		// .layer-scroll instead.
+		if (this._isPlaying && this._layerScroll) {
+			const targetLeft = cursorPx - this._layerScroll.clientWidth * 0.3;
+			if (Math.abs(this._layerScroll.scrollLeft - targetLeft) > this._layerScroll.clientWidth * 0.6) {
+				this._layerScroll.scrollLeft = Math.max(0, targetLeft);
 			}
 		}
 	}
@@ -874,32 +895,57 @@ export class WaSectionView extends HTMLElement {
 		const basePos = quantizePos + stingerOffset;
 		const options = getOptions(stinger);
 
-		const anchor = this._buildStingerAnchor(this._rowHeight);
-		anchor.style.left = `${this._timeToPx(quantizePos, info)}px`;
-		anchor.title = "Drag to change this Stinger's quantize";
-		this._wireStingerDrag(anchor, info, quantizePos, (newQuantizePos) => {
-			const stingerNow = ops.findNodeById(xmlStore.root, stinger.id);
-			if (!stingerNow) return;
-			xmlStore.updateAttributes(stinger.id, {
-				...stingerNow.attributes,
-				quantize: secondsToQuantizeString(newQuantizePos, info, GRID_BEATS)
-			});
-		});
-		lane.appendChild(anchor);
-
+		// Content is built first so it can ride along (as a drag "follower")
+		// with the anchor when *that's* what gets dragged — see
+		// _wireStingerDrag's followerEls.
+		let content = null;
 		if (options.length === 0) {
 			// Shown exactly like a bare Layer src: just the waveform, no
 			// separate selectable box on top of it — clicking this Stinger's
 			// label (left column) is how you select it, same as a Layer.
 			const srcAttr = findSrcAttribute(xmlStore.schema, stinger);
 			if (srcAttr) {
-				const canvas = this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, info, basePos, false);
-				if (canvas) this._wireStingerContentDrag(canvas, stinger, info, quantizePos, basePos);
+				content = this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, info, basePos, false);
+			}
+		} else {
+			content = this._renderTimedBox(stinger, info, token, "Stinger", basePos, { top: 2, height: this._rowHeight - 4 }, true);
+			lane.appendChild(content);
+		}
+
+		const anchor = this._buildStingerAnchor(this._rowHeight);
+		anchor.style.left = `${this._timeToPx(quantizePos, info)}px`;
+		anchor.title = "Drag to change this Stinger's quantize";
+		this._wireStingerDrag(
+			anchor,
+			info,
+			quantizePos,
+			(newQuantizePos) => {
+				const stingerNow = ops.findNodeById(xmlStore.root, stinger.id);
+				if (!stingerNow) return;
+				xmlStore.updateAttributes(stinger.id, {
+					...stingerNow.attributes,
+					quantize: secondsToQuantizeString(newQuantizePos, info, GRID_BEATS)
+				});
+			},
+			content ? [content] : []
+		);
+		lane.appendChild(anchor);
+
+		this._wireStingerLaneDropTarget(lane, stinger, info);
+
+		if (options.length === 0) {
+			if (content) {
+				this._wireStingerContentDrag(content, stinger, info, quantizePos, basePos);
+				// _renderTimedBox wires this internally for the with-Options
+				// case (kind="Stinger" box below); a bare src's canvas needs
+				// it added explicitly since _renderWaveformOnly is generic
+				// (also used for a plain Layer, which doesn't want this).
+				this._wireBoxDropTarget(content, stinger, "Stinger", info);
 			}
 			return lane;
 		}
 
-		const box = this._renderTimedBox(stinger, info, token, "Stinger", basePos, { top: 2, height: this._rowHeight - 4 }, true);
+		const box = content;
 		this._wireStingerContentDrag(box, stinger, info, quantizePos, basePos);
 
 		// Each Option's own pos=0 sits at the *Stinger's* resolved position
@@ -913,13 +959,67 @@ export class WaSectionView extends HTMLElement {
 		optionsAnchor.title = "Each Option's own pos is relative to this point";
 		box.appendChild(optionsAnchor);
 
-		options.forEach((option) => {
+		const optionRowHeight = (this._rowHeight - 4) / options.length;
+		options.forEach((option, idx) => {
 			const optionOffset = readStingerOffset(option, info);
-			const nested = this._renderNestedOption(box, option, info, token, optionOffset);
+			const nested = this._renderNestedOption(
+				box,
+				option,
+				info,
+				token,
+				optionOffset,
+				{ top: idx * optionRowHeight, height: optionRowHeight },
+				true
+			);
 			if (nested) this._wireStingerContentDrag(nested, option, info, basePos, basePos + optionOffset);
 		});
 		lane.appendChild(box);
 		return lane;
+	}
+
+	// A Stinger's lane background (not its own bare-src canvas or with-
+	// Options box, both handled separately): a dropped file adds a new
+	// <Option src="..."/> as a direct child — no <Segment> wrapper, since a
+	// Stinger's schema doesn't have one — landing at pos=0 (right at the
+	// Stinger's own resolved position); a dragged Option gets reparented in
+	// the same way, losing its own old pos for the same reason a drop into a
+	// brand-new Segment does elsewhere. Unlike a Layer's lane drop, this
+	// doesn't need a ghost preview or a computed drop position — a Stinger's
+	// timeline is governed by quantize/anchor, not by where you drop.
+	_wireStingerLaneDropTarget(lane, stinger, info) {
+		const isAcceptable = (types) => this._isFileDrag(types) || types.includes(OPTION_DRAG_TYPE);
+
+		lane.addEventListener("dragover", (e) => {
+			const types = e.dataTransfer.types;
+			if (!isAcceptable(types)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = this._isFileDrag(types) ? "copy" : "move";
+			lane.classList.add("drop-active");
+		});
+		lane.addEventListener("dragleave", (e) => {
+			if (e.target !== lane) return;
+			lane.classList.remove("drop-active");
+		});
+		lane.addEventListener("drop", async (e) => {
+			const types = e.dataTransfer.types;
+			if (!isAcceptable(types)) return;
+			e.preventDefault();
+			lane.classList.remove("drop-active");
+
+			if (this._isFileDrag(types)) {
+				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
+				if (!fileId) return;
+				const fileNode = vfs.getNode(fileId);
+				if (!fileNode || fileNode.type !== "file") return;
+				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id) });
+				return;
+			}
+
+			const draggedOptionId = e.dataTransfer.getData(OPTION_DRAG_TYPE);
+			if (!draggedOptionId || draggedOptionId === stinger.id) return;
+			xmlStore.reparentNode(draggedOptionId, stinger.id);
+			this._stripPos(draggedOptionId);
+		});
 	}
 
 	_buildStingerAnchor(heightPx) {
@@ -940,7 +1040,15 @@ export class WaSectionView extends HTMLElement {
 	// click still reaches the ordinary click-to-select handler on the same
 	// element untouched, since nothing here calls preventDefault() until a
 	// drag is confirmed.
-	_wireStingerDrag(el, info, startAbsSeconds, onCommit) {
+	//
+	// followerEls (optional): other elements that should visually shift by
+	// the exact same live delta as `el`, without driving the commit
+	// themselves — used so dragging a Stinger's anchor visibly carries its
+	// content along in real time too (the actual data doesn't need to
+	// change, since the content's offset from the anchor stays fixed, but
+	// the *display* needs to move together or a drag looks like nothing is
+	// happening until you let go).
+	_wireStingerDrag(el, info, startAbsSeconds, onCommit, followerEls = []) {
 		el.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			// A nested Option's own drag target sits inside the Stinger's own
@@ -950,6 +1058,7 @@ export class WaSectionView extends HTMLElement {
 			e.stopPropagation();
 			const startX = e.clientX;
 			const startLeftPx = parseFloat(el.style.left) || 0;
+			const followerStartLeftPx = followerEls.map((f) => parseFloat(f.style.left) || 0);
 			let dragging = false;
 			let committedSeconds = startAbsSeconds;
 
@@ -969,7 +1078,11 @@ export class WaSectionView extends HTMLElement {
 				const rawSeconds = startAbsSeconds + deltaPx / this._pxPerSecond;
 				const beatCount = Math.round(rawSeconds / info.beatDuration / GRID_BEATS) * GRID_BEATS;
 				committedSeconds = beatCount * info.beatDuration;
-				el.style.left = `${startLeftPx + (committedSeconds - startAbsSeconds) * this._pxPerSecond}px`;
+				const visualDeltaPx = (committedSeconds - startAbsSeconds) * this._pxPerSecond;
+				el.style.left = `${startLeftPx + visualDeltaPx}px`;
+				followerEls.forEach((f, i) => {
+					f.style.left = `${followerStartLeftPx[i] + visualDeltaPx}px`;
+				});
 			};
 			const onUp = () => {
 				el.removeEventListener("pointermove", onMove);
@@ -1308,7 +1421,10 @@ export class WaSectionView extends HTMLElement {
 						box.style.width = `${optionsEndSeconds * this._pxPerSecond}px`;
 					}
 				}
-				options.forEach((option) => this._renderNestedOption(box, option, info, token));
+				const rowHeight = (laneHeight - 4) / options.length;
+				options.forEach((option, idx) => {
+					this._renderNestedOption(box, option, info, token, 0, { top: idx * rowHeight, height: rowHeight });
+				});
 				box.appendChild(this._buildDisclosureButton(segment.id, true));
 			}
 
@@ -1352,7 +1468,14 @@ export class WaSectionView extends HTMLElement {
 	// earlier than its Stinger's base position), rendering left of the
 	// parent box's own edge, which is fine now that .timed-box no longer
 	// clips overflow (see the audio-tail fix).
-	_renderNestedOption(segmentBox, option, info, token, offsetSeconds = 0) {
+	// layout ({top, height}) splits the parent box's vertical space between
+	// however many Options it has — each gets an equal share (per Hans),
+	// unlike an *open* Segment's rows, which are always the full row height
+	// (that's a different, already-existing view — see _renderSegmentBox's
+	// isOpen branch). interactive (Stinger only, per Hans — a Segment's
+	// Options here stay a read-only preview) overrides the CSS default of
+	// pointer-events:none so a drag on this element is actually reachable.
+	_renderNestedOption(segmentBox, option, info, token, offsetSeconds, layout, interactive = false) {
 		const explicitLength = readLength(option, info);
 		const srcAttr = findSrcAttribute(xmlStore.schema, option);
 		const resolvedUrl = srcAttr ? resolvePlayableUrl(srcAttr.value) : null;
@@ -1360,6 +1483,9 @@ export class WaSectionView extends HTMLElement {
 		const nested = document.createElement("div");
 		nested.className = "nested-option";
 		nested.style.left = `${offsetSeconds * this._pxPerSecond}px`;
+		nested.style.top = `${layout.top}px`;
+		nested.style.height = `${layout.height}px`;
+		if (interactive) nested.style.pointerEvents = "auto";
 
 		const applyWidth = (seconds) => {
 			nested.style.width = `${Math.max(seconds * this._pxPerSecond, 4)}px`;
@@ -1402,6 +1528,7 @@ export class WaSectionView extends HTMLElement {
 			e.stopPropagation();
 			e.dataTransfer.effectAllowed = "move";
 			e.dataTransfer.setData(SEGMENT_DRAG_TYPE, segment.id);
+			e.dataTransfer.setDragImage(TRANSPARENT_DRAG_IMAGE, 0, 0);
 			const handleRect = handle.getBoundingClientRect();
 			this._dragState = { kind: "Segment", nodeId: segment.id, grabOffsetSeconds: (e.clientX - handleRect.left) / this._pxPerSecond };
 		});
@@ -1491,6 +1618,7 @@ export class WaSectionView extends HTMLElement {
 				e.stopPropagation();
 				e.dataTransfer.effectAllowed = "move";
 				e.dataTransfer.setData(dragType, node.id);
+				e.dataTransfer.setDragImage(TRANSPARENT_DRAG_IMAGE, 0, 0);
 				const boxRect = box.getBoundingClientRect();
 				this._dragState = { kind, nodeId: node.id, grabOffsetSeconds: (e.clientX - boxRect.left) / this._pxPerSecond };
 			});

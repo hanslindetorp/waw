@@ -164,11 +164,21 @@ export function findNodeById(root, id) {
 	return null;
 }
 
+// The XML `id` *attribute* (not to be confused with the internal tree id
+// above) is stripped from the clone and every descendant, rather than
+// copied verbatim — otherwise a duplicated node would carry the same id as
+// its original, breaking the uniqueness backfillElementIds (xmlStore's
+// _syncCode) otherwise guarantees. Stripping it here just leaves it
+// missing, which that same backfill pass picks up on the very next sync and
+// assigns a fresh one to, same as any other id-less element.
 export function cloneNode(node, newParentId) {
 	const newId = generateNodeId();
+	const attributes = { ...node.attributes };
+	delete attributes.id;
 	return {
 		...node,
 		id: newId,
+		attributes,
 		parent: newParentId,
 		children: node.children.map((c) => cloneNode(c, newId))
 	};
