@@ -234,13 +234,14 @@ export function minimumTotalDuration(info) {
 // says how far a trigger has to wait for the next musically-sound moment to
 // actually start. For a static preview (per Hans), that's shown as "if
 // triggered right at bar 1, where does it land": one quantize-unit's
-// duration after bar 1 — quantize="bar" -> bar 2's start, quantize="beat" ->
-// beat 2 of bar 1, quantize="1/8" -> the second eighth-note of bar 1, etc.
-// Reusing parseDivision as-is already gives exactly that (one unit's own
-// duration); an absent quantize is treated as "right at bar 1" (0), matching
-// how every other missing division value in this app already defaults.
+// duration after bar 1, minus one whole bar (Hans, having seen it rendered —
+// quantize="bar" now lands on bar 1 itself rather than bar 2; quantize="beat"
+// -> beat 2 of bar 1 minus a bar, i.e. into the pre-roll, etc., the same flat
+// shift applied uniformly regardless of the quantize unit). An absent
+// quantize is 0 (matching every other missing division value in this app)
+// before that same -1 bar shift.
 export function readStingerQuantizePosition(stingerNode, info) {
-	return parseDivision(stingerNode.attributes.quantize, info);
+	return parseDivision(stingerNode.attributes.quantize, info) - info.barDuration;
 }
 
 // upbeat and pos both nudge a Stinger/Option away from its quantize point —
