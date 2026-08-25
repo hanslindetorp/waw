@@ -19,6 +19,15 @@ class XmlStore extends EventTarget {
 		this.selectedNodeId = null;
 		this.codeValue = EMPTY_XML;
 		this.lineMap = new Map();
+		this._idCounters = new Map(); // tagName -> highest "TagName-N" used so far this project (see ops.backfillElementIds)
+	}
+
+	// Call when genuinely starting a different project (a new default
+	// project, or opening a different file) — not on every edit to the one
+	// already open, or auto-assigned ids would restart at 1 and could
+	// collide with ones already used earlier in the same document/session.
+	resetIdCounters() {
+		this._idCounters = new Map();
 	}
 
 	// --- schema ---
@@ -156,7 +165,12 @@ copyNode(nodeId) {
 		this.codeValue = code;
 		const parsed = ops.parseXmlString(code);
 		if (parsed) {
-			this.root = parsed;
+			// Backfilled into the tree only — codeValue stays exactly as typed
+			// (below) so a freshly-typed <Stinger/> with no id yet doesn't get
+			// its formatting/cursor position fought on every keystroke; the id
+			// becomes visible in the text on the next tree-driven edit
+			// (_syncCode), same as canonical formatting already does.
+			this.root = ops.backfillElementIds(parsed, this._idCounters);
 			if (this.selectedNodeId && !ops.findNodeById(this.root, this.selectedNodeId)) {
 				this.selectedNodeId = null;
 			}
@@ -164,7 +178,7 @@ copyNode(nodeId) {
 			// tree in our own canonical layout, so they only match the literal
 			// text 1:1 while the user's formatting happens to agree with it.
 			// They re-sync exactly on the next tree-driven edit (_syncCode).
-			this.lineMap = ops.generateFullXmlWithLineMap(parsed).lineMap;
+			this.lineMap = ops.generateFullXmlWithLineMap(this.root).lineMap;
 		}
 		// Invalid XML is left as-is in codeValue so the user can keep typing,
 		// but root/selection don't change — matches the DEMO's behaviour.
@@ -173,6 +187,7 @@ copyNode(nodeId) {
 
 	_syncCode() {
 		if (this.root) {
+			this.root = ops.backfillElementIds(this.root, this._idCounters);
 			const { xml, lineMap } = ops.generateFullXmlWithLineMap(this.root);
 			this.codeValue = xml;
 			this.lineMap = lineMap;

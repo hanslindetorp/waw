@@ -13,6 +13,7 @@ const PROJECT_FILE_NAME = "wa.xml";
 
 export function createDefaultProject() {
 	vfs.clear();
+	xmlStore.resetIdCounters();
 	xmlStore.setRoot(createDefaultAudioRoot());
 	vfs.createFolder(ROOT_ID, "audio");
 	const fileNode = vfs.uploadFile(ROOT_ID, new File([xmlStore.codeValue], PROJECT_FILE_NAME, { type: "application/xml" }));
@@ -42,6 +43,7 @@ function createDefaultAudioRoot() {
 // entry point) or a single .xml/.waxml file.
 export async function openProjectFromFile(file) {
 	vfs.clear();
+	xmlStore.resetIdCounters();
 	const lower = file.name.toLowerCase();
 
 	if (lower.endsWith(".zip")) {

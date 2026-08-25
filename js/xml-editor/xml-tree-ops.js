@@ -219,6 +219,49 @@ export function renameSrcReferences(root, schema, oldPath, newPath) {
 	};
 }
 
+// Auto-assigns "<TagName>-<N>" to any element missing an id (undefined or
+// empty) — so every element ends up addressable as a trig()/selector target
+// (e.g. "Stinger-1") without the user having to name it by hand, per Hans;
+// still freely editable afterward like any other attribute. The document's
+// own root element is exempt (per Hans) — it never gets an auto id, though
+// one it already has (hand-set, or from before this exemption existed)
+// isn't stripped.
+//
+// counters (Map<tagName, highestUsedN>) is deliberately mutable/shared
+// across calls, unlike the rest of this file's pure tree functions — "never
+// reuse a number even after that element is deleted" needs history beyond
+// what the current tree alone can tell you, the same reason generateNodeId
+// above keeps its own persistent counter rather than deriving one fresh
+// from the tree each time.
+//
+// Two passes: first ratchet counters up from any ids *already* in the tree
+// that happen to match the "TagName-N" pattern for their own tag (hand-set
+// or pasted from elsewhere) so a freshly-assigned id can't collide with one
+// of those; then assign fresh ids to whatever's still missing one.
+export function backfillElementIds(root, counters) {
+	const ratchet = (node) => {
+		const match = /^(.+)-(\d+)$/.exec(node.attributes.id || "");
+		if (match && match[1] === node.tagName) {
+			const n = parseInt(match[2], 10);
+			if (Number.isFinite(n) && n > (counters.get(node.tagName) || 0)) counters.set(node.tagName, n);
+		}
+		node.children.forEach(ratchet);
+	};
+	ratchet(root);
+
+	const assign = (node, isRoot) => {
+		const hasId = node.attributes.id !== undefined && node.attributes.id !== "";
+		let attributes = node.attributes;
+		if (!hasId && !isRoot) {
+			const n = (counters.get(node.tagName) || 0) + 1;
+			counters.set(node.tagName, n);
+			attributes = { ...node.attributes, id: `${node.tagName}-${n}` };
+		}
+		return { ...node, attributes, children: node.children.map((c) => assign(c, false)) };
+	};
+	return assign(root, true);
+}
+
 export function updateNodeTagName(root, nodeId, tagName) {
 	if (root.id === nodeId) return { ...root, tagName };
 	return { ...root, children: root.children.map((c) => updateNodeTagName(c, nodeId, tagName)) };
