@@ -59,6 +59,10 @@ export function getOptions(parentNode) {
 	return parentNode.children.filter((c) => c.tagName === "Option");
 }
 
+export function getStingers(sectionNode) {
+	return sectionNode.children.filter((c) => c.tagName === "Stinger");
+}
+
 // Converts a pos/length/loopLength attribute value to seconds, mirroring
 // waxml.js's divisionToTime()/getTimeSign() against this section's own
 // tempo/timeSign. Returns 0 for missing/empty values (matching divisionToTime's
@@ -222,4 +226,31 @@ export function readEffectiveLoopLength(layerNode, sectionNode, compositionNode,
 // tempo/timeSign.
 export function minimumTotalDuration(info) {
 	return info.barDuration * MIN_TOTAL_BARS;
+}
+
+// A <Stinger> isn't placed on the Section's own timeline — it can trigger at
+// any moment during live playback — but its `quantize` attribute (same
+// grammar as length/loopLength: "bar", "beat", a bar count, or a fraction)
+// says how far a trigger has to wait for the next musically-sound moment to
+// actually start. For a static preview (per Hans), that's shown as "if
+// triggered right at bar 1, where does it land": one quantize-unit's
+// duration after bar 1 — quantize="bar" -> bar 2's start, quantize="beat" ->
+// beat 2 of bar 1, quantize="1/8" -> the second eighth-note of bar 1, etc.
+// Reusing parseDivision as-is already gives exactly that (one unit's own
+// duration); an absent quantize is treated as "right at bar 1" (0), matching
+// how every other missing division value in this app already defaults.
+export function readStingerQuantizePosition(stingerNode, info) {
+	return parseDivision(stingerNode.attributes.quantize, info);
+}
+
+// upbeat and pos both nudge a Stinger/Option away from its quantize point —
+// upbeat always shifts earlier (negated, same convention waxml.js's own
+// Part constructor uses: this.offset = delay || -upbeat || 0), pos shifts
+// either way (parsePosition's own bar.beat.offbeat grammar, added as a
+// delta here rather than used as an absolute position) — both apply
+// together when both are set. Missing attributes contribute 0 from
+// parseDivision/parsePosition's own existing defaults, so this needs no
+// extra fallback handling of its own.
+export function readStingerOffset(node, info) {
+	return parsePosition(node.attributes.pos, info) - parseDivision(node.attributes.upbeat, info);
 }

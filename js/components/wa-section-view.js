@@ -8,9 +8,12 @@ import {
 	getLayers,
 	getSegments,
 	getOptions,
+	getStingers,
 	readPos,
 	readLength,
 	readEffectiveLoopLength,
+	readStingerQuantizePosition,
+	readStingerOffset,
 	minimumTotalDuration,
 	parsePosition,
 	secondsToPosString,
@@ -144,8 +147,29 @@ template.innerHTML = `
 
 		.scroll-area {
 			flex: 1 1 auto;
-			overflow: auto;
+			overflow-y: auto;
+			overflow-x: hidden;
 			position: relative;
+		}
+		/* Layers and Stingers each get their own independent horizontal
+		   scroll (nested inside .scroll-area's single shared vertical one) —
+		   a Stinger isn't on the Section's own timeline (it can trigger at
+		   any moment), so its row shouldn't be dragged sideways by the
+		   Layer area's playhead-follow auto-scroll during playback. */
+		.layer-scroll,
+		.stinger-scroll {
+			overflow-x: auto;
+			overflow-y: hidden;
+		}
+		.stinger-divider {
+			padding: 0.35rem 0.5rem;
+			font: 600 0.68rem/1.2 system-ui, sans-serif;
+			text-transform: uppercase;
+			letter-spacing: 0.06em;
+			color: var(--waw-muted, #8a8a8a);
+			border-top: 2px solid var(--waw-border, #2f2f2f);
+			border-bottom: 1px solid var(--waw-border, #2f2f2f);
+			background: var(--waw-panel-bg, #1a1a1a);
 		}
 		.empty-hint {
 			color: var(--waw-muted, #8a8a8a);
@@ -429,9 +453,15 @@ template.innerHTML = `
 		</div>
 	</div>
 	<div class="scroll-area">
-		<div class="grid" hidden>
-			<div class="corner"></div>
-			<div class="ruler"></div>
+		<div class="layer-scroll">
+			<div class="grid" hidden>
+				<div class="corner"></div>
+				<div class="ruler"></div>
+			</div>
+		</div>
+		<div class="stinger-divider" hidden>Stingers</div>
+		<div class="stinger-scroll" hidden>
+			<div class="grid stinger-grid"></div>
 		</div>
 		<div class="empty-hint">Select a &lt;Section&gt; element to see it here.</div>
 	</div>
@@ -444,8 +474,11 @@ export class WaSectionView extends HTMLElement {
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 
 		this._scrollArea = this.shadowRoot.querySelector(".scroll-area");
-		this._grid = this.shadowRoot.querySelector(".grid");
+		this._grid = this.shadowRoot.querySelector(".layer-scroll .grid");
 		this._ruler = this.shadowRoot.querySelector(".ruler");
+		this._stingerDivider = this.shadowRoot.querySelector(".stinger-divider");
+		this._stingerScroll = this.shadowRoot.querySelector(".stinger-scroll");
+		this._stingerGrid = this.shadowRoot.querySelector(".stinger-grid");
 		this._emptyHint = this.shadowRoot.querySelector(".empty-hint");
 		this._positionEl = this.shadowRoot.querySelector(".tp-position");
 		this._infoEl = this.shadowRoot.querySelector(".tp-info");
@@ -519,6 +552,8 @@ export class WaSectionView extends HTMLElement {
 			this._teardownActive();
 			this._lastSectionId = null;
 			this._grid.hidden = true;
+			this._stingerDivider.hidden = true;
+			this._stingerScroll.hidden = true;
 			this._emptyHint.hidden = false;
 			return;
 		}
@@ -677,7 +712,7 @@ export class WaSectionView extends HTMLElement {
 	}
 
 	_updateSelectionHighlight() {
-		this._grid.querySelectorAll("[data-node-id]").forEach((el) => {
+		this.shadowRoot.querySelectorAll("[data-node-id]").forEach((el) => {
 			el.classList.toggle("selected", this._selectedIds.has(el.dataset.nodeId));
 		});
 	}
@@ -752,9 +787,80 @@ export class WaSectionView extends HTMLElement {
 		this._grid.appendChild(playhead);
 		this._playheadEl = playhead;
 
+		this._renderStingers(node, info, totalWidth, totalDuration, token);
+
 		this._updatePlayheadVisual();
 		this._updatePositionReadout();
 		this._updateSelectionHighlight();
+	}
+
+	// The Stinger area below the Layers: same bar/beat ruler (so the two
+	// line up when scrolled to the same place) but its own independent
+	// horizontal scroll (.stinger-scroll, see the CSS comment on it) — a
+	// Stinger isn't part of the Section's own linear timeline the way a
+	// Layer's content is; it can trigger at any moment, so its row has no
+	// business being dragged sideways by the Layer area's playhead-follow
+	// auto-scroll during playback.
+	_renderStingers(sectionNode, info, totalWidth, totalDuration, token) {
+		const stingers = getStingers(sectionNode);
+		this._stingerDivider.hidden = stingers.length === 0;
+		this._stingerScroll.hidden = stingers.length === 0;
+		if (stingers.length === 0) return;
+
+		this._stingerGrid.innerHTML = "";
+		const corner = document.createElement("div");
+		corner.className = "corner";
+		corner.style.height = `${RULER_HEIGHT}px`;
+		this._stingerGrid.appendChild(corner);
+		this._stingerGrid.appendChild(this._buildRuler(info, totalWidth, totalDuration));
+
+		stingers.forEach((stinger) => {
+			const label = document.createElement("div");
+			label.className = "layer-label";
+			label.dataset.nodeId = stinger.id;
+			label.style.height = `${this._rowHeight}px`;
+			label.textContent = this._displayLabel(stinger, "Stinger");
+			label.addEventListener("click", (e) => {
+				e.stopPropagation();
+				this._handleItemClick(stinger.id, e);
+			});
+			this._stingerGrid.appendChild(label);
+			this._stingerGrid.appendChild(this._buildStingerLane(stinger, info, totalWidth, token));
+		});
+	}
+
+	// A Stinger lane: a bare src renders like a bare Layer src (one
+	// continuous waveform); Options render nested inside one box, same
+	// visual treatment as a closed Segment (open/close not offered here —
+	// Stingers aren't draggable/reorderable in this pass, only their
+	// content is shown).
+	_buildStingerLane(stinger, info, totalWidth, token) {
+		const lane = document.createElement("div");
+		lane.className = "layer-lane";
+		lane.style.height = `${this._rowHeight}px`;
+		lane.style.minWidth = `${totalWidth}px`;
+
+		const basePos = readStingerQuantizePosition(stinger, info) + readStingerOffset(stinger, info);
+		const options = getOptions(stinger);
+
+		if (options.length === 0) {
+			// Shown exactly like a bare Layer src: just the waveform, no
+			// separate selectable box on top of it — clicking this Stinger's
+			// label (left column) is how you select it, same as a Layer.
+			const srcAttr = findSrcAttribute(xmlStore.schema, stinger);
+			if (srcAttr) {
+				this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, info, basePos, false);
+			}
+			return lane;
+		}
+
+		const box = this._renderTimedBox(stinger, info, token, "Stinger", basePos, { top: 2, height: this._rowHeight - 4 }, true);
+		options.forEach((option) => {
+			const optionOffset = readStingerOffset(option, info);
+			this._renderNestedOption(box, option, info, token, optionOffset);
+		});
+		lane.appendChild(box);
+		return lane;
 	}
 
 	// A layer normally occupies one row. If one or more of its segments are
@@ -1099,21 +1205,26 @@ export class WaSectionView extends HTMLElement {
 	}
 
 	// A read-only visual sub-box for one Option nested inside its Segment's
-	// own (closed) box — always at the Segment box's own left edge (an
-	// Option has no `pos` of its own within a Segment, see _renderSegmentBox)
-	// and sized/positioned relative to it (the Segment box, itself
-	// position:absolute, is the positioning context for its children) rather
-	// than the lane's absolute timeline. pointer-events:none so clicks/drags
-	// still land on the Segment box itself, keeping "closed Segment = one
-	// draggable/selectable unit" true.
-	_renderNestedOption(segmentBox, option, info, token) {
+	// or Stinger's own (closed) box, sized/positioned relative to it (the
+	// parent box, itself position:absolute, is the positioning context for
+	// its children) rather than the lane's absolute timeline. pointer-
+	// events:none so clicks/drags still land on the parent box itself,
+	// keeping "closed Segment/Stinger = one draggable/selectable unit" true.
+	// offsetSeconds is 0 for a Segment's Options (no pos of their own there,
+	// see _renderSegmentBox) but real for a Stinger's (readStingerOffset —
+	// upbeat/pos do apply per-Option there, additively with the Stinger's
+	// own) — can legitimately go negative (an Option's own upbeat pulling it
+	// earlier than its Stinger's base position), rendering left of the
+	// parent box's own edge, which is fine now that .timed-box no longer
+	// clips overflow (see the audio-tail fix).
+	_renderNestedOption(segmentBox, option, info, token, offsetSeconds = 0) {
 		const explicitLength = readLength(option, info);
 		const srcAttr = findSrcAttribute(xmlStore.schema, option);
 		const resolvedUrl = srcAttr ? resolvePlayableUrl(srcAttr.value) : null;
 
 		const nested = document.createElement("div");
 		nested.className = "nested-option";
-		nested.style.left = "0px";
+		nested.style.left = `${offsetSeconds * this._pxPerSecond}px`;
 
 		const applyWidth = (seconds) => {
 			nested.style.width = `${Math.max(seconds * this._pxPerSecond, 4)}px`;

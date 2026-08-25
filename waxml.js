@@ -21406,8 +21406,13 @@ class Music extends EventTarget {
 				if(musicStructure instanceof Node){
 					// clean up old structure
 					myInstance.sections.forEach(section => section.remove());
-					myInstance.motifs.forEach(motif => motif.remove());
-					
+					// Motif.prototype has no remove() at all (unlike Section's), so
+					// any document containing a <Stinger>/motif/leadin crashed here
+					// on every reparse — guarded rather than implemented, since a
+					// real remove() would need to know how to tear down a Motif's
+					// own audio graph, which is Hans's call, not a guess to make here.
+					myInstance.motifs.forEach(motif => { if(typeof motif.remove === "function"){motif.remove()} });
+
 					myInstance.sections = [];
 					myInstance.motifs = [];
 
