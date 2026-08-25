@@ -80,3 +80,13 @@ vfs.addEventListener("change", () => {
 		lastSyncedValue = null;
 	}
 });
+
+// A File Manager move or rename changes a file's export path (VFS.getExportPath
+// is derived from its current name + folder ancestry) — keep every <Tag
+// src="..."> (or source="...") in the open document pointing at the right
+// file when that happens, rather than silently going stale.
+vfs.addEventListener("path-change", (e) => {
+	e.detail.changes.forEach(({ oldPath, newPath }) => {
+		xmlStore.renameSrcReferences(oldPath, newPath);
+	});
+});

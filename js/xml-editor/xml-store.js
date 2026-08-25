@@ -132,6 +132,12 @@ copyNode(nodeId) {
 		this._syncCode();
 	}
 
+	renameSrcReferences(oldPath, newPath) {
+		if (!this.root) return;
+		this.root = ops.renameSrcReferences(this.root, this.schema, oldPath, newPath);
+		this._syncCode();
+	}
+
 	updateTagName(nodeId, tagName) {
 		if (!this.root) return;
 		this.root = ops.updateNodeTagName(this.root, nodeId, tagName);

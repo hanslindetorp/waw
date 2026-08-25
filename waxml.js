@@ -20492,7 +20492,16 @@ class Music extends EventTarget {
 	
 		iMus.set = function(param, val){
 			var sectionID = defaultInstance.sections.length - 1;
-			var obj = defaultInstance.sections[sectionID].set(param, val);
+			// The iMusic plugin's update() wipes defaultInstance.sections to []
+			// right before re-parsing a new <Composition> (see its "update"
+			// callback), and parseXML() calls setParams()/set() for the
+			// Composition's own attributes (tempo, timeSign, ...) before its
+			// arrangements.forEach() loop has added any section back — so
+			// sections[-1] here was throwing on every single reload. Falling
+			// back to {param, val} as-is matches what section.set() itself
+			// returns in the normal case, so the rest of this function (which
+			// just stores obj.param/obj.val) doesn't need to change.
+			var obj = sectionID >= 0 ? defaultInstance.sections[sectionID].set(param, val) : { param: param, val: val };
 			defaultInstance.parameters[obj.param] = obj.val;
 			defaultParams[obj.param] = obj.val;
 	

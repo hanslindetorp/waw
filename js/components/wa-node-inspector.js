@@ -4,7 +4,7 @@ import { getSmartRange, testPattern } from "../xml-editor/attribute-controls.js"
 // When present, these always lead the attribute list, in this exact order,
 // ahead of everything else (which stays alphabetical) — separated by a
 // divider so the "usual suspects" are never buried in a long schema list.
-const PRIORITY_ATTR_ORDER = ["id", "class", "label", "input", "output"];
+const PRIORITY_ATTR_ORDER = ["label", "id", "class", "input", "output"];
 
 const template = document.createElement("template");
 template.innerHTML = `

@@ -1,7 +1,7 @@
 import { vfs, ROOT_ID } from "../vfs/VFS.js";
 import { importZip } from "../vfs/zip-import.js";
 import { selection } from "../state/selection.js";
-import { VFS_FILE_DRAG_TYPE } from "../vfs/drag-types.js";
+import { VFS_FILE_DRAG_TYPE, vfsDragState } from "../vfs/drag-types.js";
 
 const ACCEPTED = ".mp3,.wav,.ogg,.m4a,.xml,.zip";
 
@@ -423,6 +423,10 @@ export class WaFileManager extends HTMLElement {
 			// while dragging a folder, instead of a misleading "allowed" one.
 			e.dataTransfer.effectAllowed = node.type === "file" ? "copyMove" : "move";
 			e.dataTransfer.setData(VFS_FILE_DRAG_TYPE, node.id);
+			vfsDragState.fileId = node.type === "file" ? node.id : null;
+		});
+		row.addEventListener("dragend", () => {
+			vfsDragState.fileId = null;
 		});
 	}
 

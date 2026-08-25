@@ -4,6 +4,8 @@
 //
 // XmlNode = { id, tagName, attributes: {name: value}, children: XmlNode[], textContent, parent: id|null }
 
+import { findSrcAttribute } from "./src-attribute.js";
+
 let nodeIdCounter = 0;
 
 export function generateNodeId() {
@@ -199,6 +201,22 @@ export function insertChild(root, parentId, child, index) {
 export function updateNodeAttributes(root, nodeId, attributes) {
 	if (root.id === nodeId) return { ...root, attributes };
 	return { ...root, children: root.children.map((c) => updateNodeAttributes(c, nodeId, attributes)) };
+}
+
+// Rewrites every node's src/source attribute (schema-aware, via the same
+// findSrcAttribute used everywhere else this matters) whose value exactly
+// equals oldPath to newPath instead — used to keep XML src references
+// pointing at the right file after a File Manager move/rename changes that
+// file's export path (see VFS's "path-change" event, wired up in
+// document-sync.js).
+export function renameSrcReferences(root, schema, oldPath, newPath) {
+	const match = findSrcAttribute(schema, root);
+	const attributes = match && match.value === oldPath ? { ...root.attributes, [match.attrName]: newPath } : root.attributes;
+	return {
+		...root,
+		attributes,
+		children: root.children.map((c) => renameSrcReferences(c, schema, oldPath, newPath))
+	};
 }
 
 export function updateNodeTagName(root, nodeId, tagName) {

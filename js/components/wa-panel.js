@@ -1,6 +1,15 @@
 // Generic show/hide + resizable panel wrapper used by all four vertical
 // panels from docs/WAXML-Workstation-spec.md avsnitt 5. Panel content is
 // slotted in, e.g. <wa-panel panel-title="Preview"><wa-preview></wa-preview></wa-panel>.
+//
+// Collapsing a panel shrinks it to a minimal icon rail (icon-title-...icon="🎚️"
+// + the collapse button, no body) rather than just hiding its content at
+// full width, and hands the freed horizontal space to its nearest expanded
+// *left* neighbor — not just to whichever panel happens to be marked "fill"
+// — so collapsing e.g. Preview visibly widens XML Editor right next to it,
+// not XML Code three panels away.
+
+const COLLAPSED_FLEX = "0 0 2.4rem";
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -18,10 +27,6 @@ template.innerHTML = `
 		:host([hidden]) {
 			display: none;
 		}
-		:host(.collapsed) {
-			flex-basis: auto !important;
-			width: auto;
-		}
 		.panel-header {
 			display: flex;
 			align-items: center;
@@ -34,6 +39,26 @@ template.innerHTML = `
 			border-bottom: 1px solid var(--waw-border, #2f2f2f);
 			flex: 0 0 auto;
 			white-space: nowrap;
+		}
+		:host(.collapsed) .panel-header {
+			flex-direction: column;
+			padding: 0.5rem 0.25rem;
+			gap: 0.5rem;
+		}
+		.panel-title {
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		:host(.collapsed) .panel-title {
+			display: none;
+		}
+		.panel-icon {
+			display: none;
+			font-size: 1rem;
+			line-height: 1;
+		}
+		:host(.collapsed) .panel-icon {
+			display: block;
 		}
 		.panel-body {
 			flex: 1 1 auto;
@@ -66,6 +91,7 @@ template.innerHTML = `
 		}
 	</style>
 	<div class="panel-header">
+		<span class="panel-icon"></span>
 		<span class="panel-title"></span>
 		<button class="collapse-btn" type="button" title="Show/hide panel">-</button>
 	</div>
@@ -75,7 +101,7 @@ template.innerHTML = `
 
 export class WaPanel extends HTMLElement {
 	static get observedAttributes() {
-		return ["panel-title"];
+		return ["panel-title", "icon"];
 	}
 
 	constructor() {
@@ -83,20 +109,25 @@ export class WaPanel extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 		this._titleEl = this.shadowRoot.querySelector(".panel-title");
+		this._iconEl = this.shadowRoot.querySelector(".panel-icon");
+		this._header = this.shadowRoot.querySelector(".panel-header");
 		this._collapseBtn = this.shadowRoot.querySelector(".collapse-btn");
 		this._resizeHandle = this.shadowRoot.querySelector(".resize-handle");
 		this._collapsed = false;
+		this._absorbing = false;
 		this._onResizeMove = this._onResizeMove.bind(this);
 		this._onResizeEnd = this._onResizeEnd.bind(this);
 	}
 
 	connectedCallback() {
 		this._titleEl.textContent = this.getAttribute("panel-title") || "";
+		this._iconEl.textContent = this.getAttribute("icon") || "";
 		// Every panel defaults to a fixed width (resizable via the handle
 		// below), which on a wide window leaves empty space past the last one.
 		// The one panel marked "fill" (normally the trailing one) grows to
 		// soak up whatever's left instead of leaving a gap.
-		this.style.flex = this.hasAttribute("fill") ? "1 1 auto" : `0 0 ${this.getAttribute("width") || "300px"}`;
+		this._baseFlex = this.hasAttribute("fill") ? "1 1 auto" : `0 0 ${this.getAttribute("width") || "300px"}`;
+		this._applyFlex();
 		this._collapseBtn.addEventListener("click", () => this.toggleCollapse());
 		this._resizeHandle.addEventListener("pointerdown", (e) => this._onResizeStart(e));
 	}
@@ -105,12 +136,51 @@ export class WaPanel extends HTMLElement {
 		if (name === "panel-title" && this._titleEl) {
 			this._titleEl.textContent = newVal || "";
 		}
+		if (name === "icon" && this._iconEl) {
+			this._iconEl.textContent = newVal || "";
+		}
 	}
 
 	toggleCollapse(force) {
-		this._collapsed = typeof force === "boolean" ? force : !this._collapsed;
+		const next = typeof force === "boolean" ? force : !this._collapsed;
+		if (next === this._collapsed) return;
+		this._collapsed = next;
 		this.classList.toggle("collapsed", this._collapsed);
 		this._collapseBtn.textContent = this._collapsed ? "+" : "-";
+		this._header.title = this._collapsed ? this.getAttribute("panel-title") || "" : "";
+		this._applyFlex();
+
+		// Hand this panel's freed (or reclaimed) width to the nearest
+		// expanded panel to its left, skipping past any that are themselves
+		// collapsed — not the default "fill" panel, which might be several
+		// panels further over.
+		const neighbor = this._findAbsorbingNeighbor();
+		if (neighbor) neighbor.setAbsorbing(this._collapsed);
+	}
+
+	// Called by a collapsing/expanding right neighbor (see toggleCollapse) —
+	// not meant to be called directly for any other reason.
+	setAbsorbing(active) {
+		this._absorbing = active;
+		this._applyFlex();
+	}
+
+	_findAbsorbingNeighbor() {
+		let el = this.previousElementSibling;
+		while (el instanceof WaPanel && el.classList.contains("collapsed")) {
+			el = el.previousElementSibling;
+		}
+		return el instanceof WaPanel ? el : null;
+	}
+
+	_applyFlex() {
+		if (this._collapsed) {
+			this.style.flex = COLLAPSED_FLEX;
+		} else if (this._absorbing) {
+			this.style.flex = "1 1 auto";
+		} else {
+			this.style.flex = this._baseFlex;
+		}
 	}
 
 	_onResizeStart(e) {
@@ -123,7 +193,8 @@ export class WaPanel extends HTMLElement {
 
 	_onResizeMove(e) {
 		const newWidth = Math.max(160, this._resizeStartWidth + (e.clientX - this._resizeStartX));
-		this.style.flex = `0 0 ${newWidth}px`;
+		this._baseFlex = `0 0 ${newWidth}px`;
+		this._applyFlex();
 	}
 
 	_onResizeEnd() {

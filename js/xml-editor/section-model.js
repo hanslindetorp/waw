@@ -145,6 +145,34 @@ export function secondsToPosString(seconds, info, gridBeats = 1) {
 	return `${barIndex0 + 1}.${beatInBar0 + 1}.00`;
 }
 
+// A freshly-dropped audio file's new Segment gets a musically-rounded length
+// rather than either a fixed 1 bar (too short/wrong for anything longer) or
+// the file's raw decoded duration (essentially never bar-aligned):
+// - A short "one-shot" sample (shorter than a full bar — a snare hit, a UI
+//   blip) rounds to the nearest beat instead, with a one-beat minimum, so it
+//   doesn't get force-stretched out to an almost-empty bar.
+// - Anything a full bar or longer rounds DOWN to the bar at or before its
+//   real end (never up) — the Segment's own `length` reflects only that
+//   quantized amount, and audio past that point is left to render as a
+//   visible tail past the Segment's own box (see wa-section-view.js) rather
+//   than being folded into its length — with a one-bar minimum.
+export function quantizeDroppedFileLength(durationSeconds, info) {
+	if (durationSeconds < info.barDuration) {
+		const beats = Math.max(1, Math.round(durationSeconds / info.beatDuration));
+		return beats * info.beatDuration;
+	}
+	const bars = Math.max(1, Math.floor(durationSeconds / info.barDuration));
+	return bars * info.barDuration;
+}
+
+// Inverse of parseDivision, for writing a computed duration (e.g. from
+// quantizeDroppedFileLength) back into a `length` attribute — plain seconds
+// is unambiguous and round-trips exactly via parseDivision's own "Xs" branch,
+// without needing to reduce it to a bar-count/fraction.
+export function secondsToLengthString(seconds) {
+	return `${Math.round(seconds * 1000) / 1000}s`;
+}
+
 // null = no explicit length in the XML; caller falls back to decoded audio
 // duration (for a bare layer src) or a placeholder width (for segment/option).
 export function readLength(node, info) {
@@ -154,12 +182,39 @@ export function readLength(node, info) {
 }
 
 // Layer looping (spec: <Layer loopLength="...">) — null means "doesn't loop"
-// (attribute absent, "off", zero, or unparseable).
+// (attribute absent, "off", zero, or unparseable). This only reads the
+// Layer's OWN attribute; see readEffectiveLoopLength below for the real,
+// inheritance-aware value the schema actually intends.
 export function readLoopLength(layerNode, info) {
 	const raw = layerNode.attributes.loopLength;
 	if (raw === undefined) return null;
 	const seconds = parseDivision(raw, info);
 	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+// undefined = this element doesn't specify loopLength at all (keep looking
+// up the chain); null = it specifies "off" (or something unparseable) —
+// looping stops here, full stop, regardless of what any ancestor says.
+function ownLoopLengthSeconds(node, info) {
+	if (!node || node.attributes.loopLength === undefined) return undefined;
+	const seconds = parseDivision(node.attributes.loopLength, info);
+	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+// loopLength inherits Composition -> Section -> Layer: "om t.ex.
+// <Composition> har loopLength='4' får alla <Layer> utan eget
+// loopLength-värde loopen inställd till fyra takter" — each level's own
+// explicit value (including "off") wins outright over any ancestor's;
+// only an actually-*missing* attribute falls through to the next one up.
+// null = no loop is in effect anywhere in the chain.
+export function readEffectiveLoopLength(layerNode, sectionNode, compositionNode, info) {
+	const ownValue = ownLoopLengthSeconds(layerNode, info);
+	if (ownValue !== undefined) return ownValue;
+	const sectionValue = ownLoopLengthSeconds(sectionNode, info);
+	if (sectionValue !== undefined) return sectionValue;
+	const compositionValue = ownLoopLengthSeconds(compositionNode, info);
+	if (compositionValue !== undefined) return compositionValue;
+	return null;
 }
 
 // A sensible minimum timeline width (in seconds) so an empty/sparse section

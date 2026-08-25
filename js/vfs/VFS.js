@@ -65,7 +65,10 @@ export class VFS extends EventTarget {
 
 	rename(id, newName) {
 		const node = this._requireNode(id);
+		const fileIds = this._collectFileIds(id);
+		const oldPaths = new Map(fileIds.map((fid) => [fid, this.getExportPath(fid)]));
 		node.name = newName;
+		this._emitPathChanges(fileIds, oldPaths);
 		this._emitChange();
 		return node;
 	}
@@ -91,12 +94,16 @@ export class VFS extends EventTarget {
 		const node = this._requireNode(id);
 		const newParent = this._requireType(newParentId, "folder");
 		const oldParent = this._nodes.get(node.parentId);
+		const fileIds = this._collectFileIds(id);
+		const oldPaths = new Map(fileIds.map((fid) => [fid, this.getExportPath(fid)]));
 
 		if (oldParent) {
 			oldParent.children = oldParent.children.filter((childId) => childId !== id);
 		}
 		newParent.children.push(id);
 		node.parentId = newParentId;
+
+		this._emitPathChanges(fileIds, oldPaths);
 		this._emitChange();
 		return node;
 	}
@@ -139,6 +146,33 @@ export class VFS extends EventTarget {
 			}
 		}
 		return null;
+	}
+
+	// Every file under `id` (id itself, if it's already a file) — a move or
+	// rename on a folder shifts the export path of every file inside it too,
+	// not just the folder's own name/position.
+	_collectFileIds(id, out = []) {
+		const node = this._nodes.get(id);
+		if (!node) return out;
+		if (node.type === "file") {
+			out.push(id);
+		} else {
+			node.children.forEach((childId) => this._collectFileIds(childId, out));
+		}
+		return out;
+	}
+
+	// Fires once, after a move/rename, with every file whose export path
+	// actually changed as a result — a rename/move of a folder can affect
+	// many files at once, and some might coincidentally keep the same path
+	// (e.g. renaming a folder to its own current name).
+	_emitPathChanges(fileIds, oldPaths) {
+		const changes = fileIds
+			.map((fid) => ({ oldPath: oldPaths.get(fid), newPath: this.getExportPath(fid) }))
+			.filter((c) => c.oldPath !== c.newPath);
+		if (changes.length > 0) {
+			this.dispatchEvent(new CustomEvent("path-change", { detail: { changes } }));
+		}
 	}
 
 	_requireType(id, type) {
