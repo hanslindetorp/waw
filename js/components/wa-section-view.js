@@ -14,6 +14,8 @@ import {
 	readEffectiveLoopLength,
 	readStingerQuantizePosition,
 	readStingerOffset,
+	readUpbeatSeconds,
+	secondsToQuantizeString,
 	minimumTotalDuration,
 	parsePosition,
 	secondsToPosString,
@@ -355,6 +357,26 @@ template.innerHTML = `
 		}
 		.loop-marker-dot:last-child {
 			top: calc(50% + 4px);
+		}
+		.stinger-anchor {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			width: 9px;
+			margin-left: -4px;
+			cursor: ew-resize;
+			z-index: 6;
+			touch-action: none;
+		}
+		.stinger-anchor::before {
+			content: "";
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 50%;
+			width: 2px;
+			background: var(--waw-danger, #e5484d);
+			transform: translateX(-50%);
 		}
 		.timed-box {
 			position: absolute;
@@ -831,17 +853,39 @@ export class WaSectionView extends HTMLElement {
 
 	// A Stinger lane: a bare src renders like a bare Layer src (one
 	// continuous waveform); Options render nested inside one box, same
-	// visual treatment as a closed Segment (open/close not offered here —
-	// Stingers aren't draggable/reorderable in this pass, only their
-	// content is shown).
+	// visual treatment as a closed Segment.
+	//
+	// Every Stinger (and each of its Options) has an "anchor" — the point
+	// its `quantize` locks to — shown as a draggable red line (see
+	// _buildStingerAnchor). Grabbing the anchor line itself moves it and
+	// rewrites `quantize`; the whole group (content + Options, since their
+	// own offsets are relative to it) moves along with it automatically.
+	// Grabbing the content elsewhere instead shifts it relative to the
+	// (unmoved) anchor, rewriting `pos` (upbeat stays fixed) — pos=0 sits
+	// exactly at the anchor, negative before it, positive after, per Hans.
 	_buildStingerLane(stinger, info, totalWidth, token) {
 		const lane = document.createElement("div");
 		lane.className = "layer-lane";
 		lane.style.height = `${this._rowHeight}px`;
 		lane.style.minWidth = `${totalWidth}px`;
 
-		const basePos = readStingerQuantizePosition(stinger, info) + readStingerOffset(stinger, info);
+		const quantizePos = readStingerQuantizePosition(stinger, info);
+		const stingerOffset = readStingerOffset(stinger, info);
+		const basePos = quantizePos + stingerOffset;
 		const options = getOptions(stinger);
+
+		const anchor = this._buildStingerAnchor(this._rowHeight);
+		anchor.style.left = `${this._timeToPx(quantizePos, info)}px`;
+		anchor.title = "Drag to change this Stinger's quantize";
+		this._wireStingerDrag(anchor, info, quantizePos, (newQuantizePos) => {
+			const stingerNow = ops.findNodeById(xmlStore.root, stinger.id);
+			if (!stingerNow) return;
+			xmlStore.updateAttributes(stinger.id, {
+				...stingerNow.attributes,
+				quantize: secondsToQuantizeString(newQuantizePos, info, GRID_BEATS)
+			});
+		});
+		lane.appendChild(anchor);
 
 		if (options.length === 0) {
 			// Shown exactly like a bare Layer src: just the waveform, no
@@ -849,18 +893,106 @@ export class WaSectionView extends HTMLElement {
 			// label (left column) is how you select it, same as a Layer.
 			const srcAttr = findSrcAttribute(xmlStore.schema, stinger);
 			if (srcAttr) {
-				this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, info, basePos, false);
+				const canvas = this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, info, basePos, false);
+				if (canvas) this._wireStingerContentDrag(canvas, stinger, info, quantizePos, basePos);
 			}
 			return lane;
 		}
 
 		const box = this._renderTimedBox(stinger, info, token, "Stinger", basePos, { top: 2, height: this._rowHeight - 4 }, true);
+		this._wireStingerContentDrag(box, stinger, info, quantizePos, basePos);
+
+		// Each Option's own pos=0 sits at the *Stinger's* resolved position
+		// (basePos), not the raw quantize point — its offset stacks on top
+		// of the Stinger's own, confirmed with Hans — so this second anchor
+		// line (always at the box's own local left edge, since that's
+		// exactly where the box itself renders) is what an Option's own
+		// drag is relative to.
+		const optionsAnchor = this._buildStingerAnchor(this._rowHeight - 4);
+		optionsAnchor.style.left = "0px";
+		optionsAnchor.title = "Each Option's own pos is relative to this point";
+		box.appendChild(optionsAnchor);
+
 		options.forEach((option) => {
 			const optionOffset = readStingerOffset(option, info);
-			this._renderNestedOption(box, option, info, token, optionOffset);
+			const nested = this._renderNestedOption(box, option, info, token, optionOffset);
+			if (nested) this._wireStingerContentDrag(nested, option, info, basePos, basePos + optionOffset);
 		});
 		lane.appendChild(box);
 		return lane;
+	}
+
+	_buildStingerAnchor(heightPx) {
+		const anchor = document.createElement("div");
+		anchor.className = "stinger-anchor";
+		anchor.style.height = `${heightPx}px`;
+		return anchor;
+	}
+
+	// Shared pointer-drag-to-reposition: tracks a raw pixel delta from
+	// pointerdown (coordinate-system-agnostic — el.style.left might be lane-
+	// absolute, like a Stinger's own anchor/content, or relative to a parent
+	// box, like a nested Option; a pixel delta works either way without
+	// needing to know which). The *target* absolute position
+	// (startAbsSeconds + delta) is snapped to the nearest beat live during
+	// the drag, so what's shown matches what releasing right now would
+	// actually write. Only commits if the pointer genuinely moved — a plain
+	// click still reaches the ordinary click-to-select handler on the same
+	// element untouched, since nothing here calls preventDefault() until a
+	// drag is confirmed.
+	_wireStingerDrag(el, info, startAbsSeconds, onCommit) {
+		el.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0) return;
+			// A nested Option's own drag target sits inside the Stinger's own
+			// box, which is *also* wired for dragging (its own pointerdown
+			// listener) — without this, the event bubbling up from the
+			// Option would also fire the box's handler, moving both at once.
+			e.stopPropagation();
+			const startX = e.clientX;
+			const startLeftPx = parseFloat(el.style.left) || 0;
+			let dragging = false;
+			let committedSeconds = startAbsSeconds;
+
+			const onMove = (moveEvt) => {
+				const deltaPx = moveEvt.clientX - startX;
+				if (!dragging) {
+					if (Math.abs(deltaPx) < 3) return;
+					dragging = true;
+					// A failure here (e.g. the pointer was already released)
+					// shouldn't abort the position update below — capture is
+					// just a nicety (keeps tracking the pointer if it strays
+					// outside the element), not required for the drag itself.
+					try {
+						el.setPointerCapture(e.pointerId);
+					} catch {}
+				}
+				const rawSeconds = startAbsSeconds + deltaPx / this._pxPerSecond;
+				const beatCount = Math.round(rawSeconds / info.beatDuration / GRID_BEATS) * GRID_BEATS;
+				committedSeconds = beatCount * info.beatDuration;
+				el.style.left = `${startLeftPx + (committedSeconds - startAbsSeconds) * this._pxPerSecond}px`;
+			};
+			const onUp = () => {
+				el.removeEventListener("pointermove", onMove);
+				el.removeEventListener("pointerup", onUp);
+				if (dragging) onCommit(committedSeconds);
+			};
+			el.addEventListener("pointermove", onMove);
+			el.addEventListener("pointerup", onUp);
+		});
+	}
+
+	// Commits a content drag to the dragged node's own `pos` (upbeat stays
+	// fixed — "pos changes, not upbeat", per Hans). anchorSeconds is this
+	// element's own zero point: the Stinger's raw quantize position for the
+	// Stinger's own content, or the Stinger's *resolved* position for one of
+	// its Options (see _buildStingerLane).
+	_wireStingerContentDrag(el, node, info, anchorSeconds, startAbsSeconds) {
+		this._wireStingerDrag(el, info, startAbsSeconds, (newAbsSeconds) => {
+			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+			if (!nodeNow) return;
+			const newPosSeconds = newAbsSeconds - anchorSeconds + readUpbeatSeconds(nodeNow, info);
+			xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, pos: secondsToPosString(newPosSeconds, info, GRID_BEATS) });
+		});
 	}
 
 	// A layer normally occupies one row. If one or more of its segments are
@@ -1082,7 +1214,9 @@ export class WaSectionView extends HTMLElement {
 		marker.addEventListener("pointerdown", (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			marker.setPointerCapture(e.pointerId);
+			try {
+				marker.setPointerCapture(e.pointerId);
+			} catch {}
 			let pendingSeconds = loopLengthSeconds;
 
 			const onMove = (moveEvt) => {
@@ -1116,7 +1250,7 @@ export class WaSectionView extends HTMLElement {
 	// the timeline).
 	_renderWaveformOnly(lane, rawSrc, heightPx, laneWidth, token, info, offsetSeconds = 0, allowGrow = true, isRepeat = false) {
 		const resolvedUrl = resolvePlayableUrl(rawSrc);
-		if (!resolvedUrl) return;
+		if (!resolvedUrl) return null;
 
 		const offsetPx = this._timeToPx(offsetSeconds, info);
 		const canvas = document.createElement("canvas");
@@ -1136,6 +1270,7 @@ export class WaSectionView extends HTMLElement {
 			drawWaveform(canvas, buffer, WAVEFORM_COLOR);
 			if (allowGrow) this._growTimelineTo(offsetSeconds + buffer.duration);
 		});
+		return canvas;
 	}
 
 	// A <Segment> is either a single compact box (closed, or nothing to open)
@@ -1232,7 +1367,7 @@ export class WaSectionView extends HTMLElement {
 		applyWidth(explicitLength ?? info.barDuration * FALLBACK_BOX_BARS);
 		segmentBox.appendChild(nested);
 
-		if (!resolvedUrl) return;
+		if (!resolvedUrl) return nested;
 		const canvas = document.createElement("canvas");
 		nested.appendChild(canvas);
 		this._decode(resolvedUrl).then((buffer) => {
@@ -1245,6 +1380,7 @@ export class WaSectionView extends HTMLElement {
 			canvas.height = Math.max(nested.offsetHeight, 1);
 			drawWaveform(canvas, buffer, "#45b58c");
 		});
+		return nested;
 	}
 
 	// A thin grip at an open Segment's left edge, spanning all of its Option

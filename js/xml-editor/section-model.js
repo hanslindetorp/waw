@@ -244,6 +244,21 @@ export function readStingerQuantizePosition(stingerNode, info) {
 	return parseDivision(stingerNode.attributes.quantize, info) - info.barDuration;
 }
 
+// Inverse of readStingerQuantizePosition — for writing a new `quantize` from
+// a dragged anchor position (see wa-section-view.js). Quantizes to the
+// nearest gridBeats-beat grid first, then expresses that as a bar count when
+// it lands on a whole number of bars (matching Hans's own "bar"/"1"
+// vocabulary), otherwise as an "N/denominator" fraction — the same fraction
+// grammar that makes quantize="1/4" equivalent to quantize="beat" in a
+// quarter-note meter, generalized to any beat count.
+export function secondsToQuantizeString(anchorPositionSeconds, info, gridBeats = 1) {
+	const quantizeDurationSeconds = anchorPositionSeconds + info.barDuration;
+	const beatCount = Math.max(0, Math.round(quantizeDurationSeconds / info.beatDuration / gridBeats) * gridBeats);
+	if (beatCount === 0) return "0";
+	if (beatCount % info.timeSign.numerator === 0) return String(beatCount / info.timeSign.numerator);
+	return `${beatCount}/${info.timeSign.denominator}`;
+}
+
 // upbeat and pos both nudge a Stinger/Option away from its quantize point —
 // upbeat always shifts earlier (negated, same convention waxml.js's own
 // Part constructor uses: this.offset = delay || -upbeat || 0), pos shifts
@@ -253,5 +268,12 @@ export function readStingerQuantizePosition(stingerNode, info) {
 // parseDivision/parsePosition's own existing defaults, so this needs no
 // extra fallback handling of its own.
 export function readStingerOffset(node, info) {
-	return parsePosition(node.attributes.pos, info) - parseDivision(node.attributes.upbeat, info);
+	return parsePosition(node.attributes.pos, info) - readUpbeatSeconds(node, info);
+}
+
+// Split out of readStingerOffset so a drag-to-reposition interaction can
+// hold upbeat fixed and solve for the new `pos` alone (see
+// wa-section-view.js) — "pos changes, not upbeat", per Hans.
+export function readUpbeatSeconds(node, info) {
+	return parseDivision(node.attributes.upbeat, info);
 }
