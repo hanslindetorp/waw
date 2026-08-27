@@ -63,6 +63,18 @@ export class WaxmlBridge {
 	stop() {
 		this.waxml.stop(`.${PREVIEW_CLASS}`);
 	}
+
+	// Triggers one specific node (by its auto-assigned `id` attribute)
+	// within the document already loaded for preview — used to trigger an
+	// individual <Stinger> live during Section Preview playback, distinct
+	// from play()'s whole-preview-target trig(). An explicit [id='...']
+	// attribute selector is used rather than "#id" shorthand: a plain XML
+	// document has no DTD, so the browser doesn't know which attribute is of
+	// type ID for "#" to match against, but a plain attribute selector works
+	// regardless.
+	trigNode(nodeId) {
+		this.waxml.trig(`[id='${nodeId}']`);
+	}
 }
 
 function resolveSrcAttributesInPlace(node) {

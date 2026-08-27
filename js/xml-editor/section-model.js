@@ -140,13 +140,27 @@ export function readPos(node, info) {
 // the nearest `gridBeats`-beat grid first (default 1 beat, i.e. a quarter
 // note the way this engine defines a beat — see readSectionInfo/tempo:
 // beatDuration is always 60/tempo regardless of the meter's denominator),
-// then formats as the same 1-indexed "bar.beat.00" string musicalPositionToTime
-// reads back correctly.
+// then formats as the same 1-indexed "bar.beat.offbeat" string
+// musicalPositionToTime reads back correctly. gridBeats can be a fraction
+// (e.g. 0.25 for a sixteenth-note grid) — the leftover fraction-of-a-beat
+// becomes the offbeat digits, same as any other in-between position.
+// gridBeats=null/0 (the grid-resolution menu's "off") skips rounding
+// entirely and formats the exact position instead.
 export function secondsToPosString(seconds, info, gridBeats = 1) {
-	const beatIndex = Math.round(seconds / info.beatDuration / gridBeats) * gridBeats;
+	const rawBeats = seconds / info.beatDuration;
+	const beatIndex = gridBeats ? Math.round(rawBeats / gridBeats) * gridBeats : rawBeats;
 	const barIndex0 = Math.floor(beatIndex / info.timeSign.numerator);
 	const beatInBar0 = beatIndex - barIndex0 * info.timeSign.numerator;
-	return `${barIndex0 + 1}.${beatInBar0 + 1}.00`;
+	let beatWhole = Math.floor(beatInBar0);
+	let offbeatCents = Math.round((beatInBar0 - beatWhole) * 100);
+	if (offbeatCents >= 100) {
+		// A fractional part that rounds up to a whole beat (e.g. 0.997) would
+		// otherwise print an invalid 3-digit offbeat — carry it into the beat
+		// instead, same as normal rounding carry-over.
+		offbeatCents = 0;
+		beatWhole += 1;
+	}
+	return `${barIndex0 + 1}.${beatWhole + 1}.${String(offbeatCents).padStart(2, "0")}`;
 }
 
 // A freshly-dropped audio file's new Segment gets a musically-rounded length
@@ -253,6 +267,14 @@ export function readStingerQuantizePosition(stingerNode, info) {
 // quarter-note meter, generalized to any beat count.
 export function secondsToQuantizeString(anchorPositionSeconds, info, gridBeats = 1) {
 	const quantizeDurationSeconds = anchorPositionSeconds + info.barDuration;
+	if (!gridBeats) {
+		// The grid-resolution menu's "off" — no snapping at all, so this can't
+		// be expressed as a clean bar-count/fraction the way every other
+		// branch here is; a plain seconds value (parseDivision's own "Xs"
+		// branch) round-trips exactly instead, at whatever precision the drag
+		// actually landed on.
+		return `${Math.max(0, Math.round(quantizeDurationSeconds * 1000) / 1000)}s`;
+	}
 	const beatCount = Math.max(0, Math.round(quantizeDurationSeconds / info.beatDuration / gridBeats) * gridBeats);
 	if (beatCount === 0) return "0";
 	if (beatCount % info.timeSign.numerator === 0) return String(beatCount / info.timeSign.numerator);

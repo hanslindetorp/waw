@@ -20,7 +20,8 @@ import {
 	parsePosition,
 	secondsToPosString,
 	quantizeDroppedFileLength,
-	secondsToLengthString
+	secondsToLengthString,
+	parseDivision
 } from "../xml-editor/section-model.js";
 import { findSrcAttribute, getSchemaSrcAttributeName, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
@@ -78,11 +79,24 @@ const RULER_HEIGHT = 32;
 const FALLBACK_BOX_BARS = 1;
 const WAVEFORM_COLOR = "#4fa3ff";
 const DROPZONE_HEIGHT = 10;
-// "Quantized to the nearest grid point (e.g. 1/4)" — this engine always
-// defines one beat as 60/tempo regardless of the meter's denominator (see
-// readSectionInfo), so a beat *is* a quarter note here; 1-beat granularity
-// matches that literally.
-const GRID_BEATS = 1;
+// Selectable grid resolutions (the little menu next to the zoom buttons) —
+// straight subdivisions (1/4, 1/8, 1/16, 1/32) plus the two common triplet
+// ones (1/12, 1/24), each expressed in *beats* since this engine always
+// defines one beat as a quarter note (60/tempo) regardless of the meter's
+// denominator (see readSectionInfo). "off" means no grid at all: beats still
+// show on the ruler, but nothing snaps to anything (see _effectiveGridBeats).
+const GRID_RESOLUTIONS = [
+	{ label: "1/4", beats: 1 },
+	{ label: "1/8", beats: 0.5 },
+	{ label: "1/12", beats: 1 / 3 },
+	{ label: "1/16", beats: 0.25 },
+	{ label: "1/24", beats: 1 / 6 },
+	{ label: "1/32", beats: 0.125 }
+];
+// Ticks/snap points closer together than this (in px) start reading as a
+// solid smear rather than individual gridlines — the floor the zoom-adaptive
+// resolution in _effectiveGridBeats won't go finer than.
+const MIN_TICK_SPACING_PX = 6;
 // A <Segment> can legitimately start before bar 1 (an upbeat/anacrusis for
 // the whole Layer) — pos values like "0.4.1" or a negative bar number are
 // valid per the position type. The timeline reserves a fixed pre-roll of
@@ -146,6 +160,15 @@ template.innerHTML = `
 			gap: 0.25rem;
 			color: var(--waw-muted, #8a8a8a);
 		}
+		.grid-select {
+			background: #24272c;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			color: inherit;
+			border-radius: 4px;
+			font-size: 0.75rem;
+			padding: 0.15rem 0.3rem;
+			cursor: pointer;
+		}
 		.zoom-btn {
 			background: #24272c;
 			border: 1px solid var(--waw-border, #2f2f2f);
@@ -176,7 +199,7 @@ template.innerHTML = `
 			overflow-x: auto;
 			overflow-y: hidden;
 		}
-		.stinger-divider {
+		.section-divider {
 			padding: 0.35rem 0.5rem;
 			font: 600 0.68rem/1.2 system-ui, sans-serif;
 			text-transform: uppercase;
@@ -228,6 +251,15 @@ template.innerHTML = `
 		}
 		.ruler-tick.bar {
 			border-left-color: var(--waw-muted, #8a8a8a);
+		}
+		.ruler-tick.sub {
+			opacity: 0.5;
+		}
+		.ruler-tick.sub.tier-2 {
+			opacity: 0.32;
+		}
+		.ruler-tick.sub.tier-3 {
+			opacity: 0.18;
 		}
 		.ruler-tick .tick-label {
 			position: absolute;
@@ -377,9 +409,21 @@ template.innerHTML = `
 			bottom: 0;
 			width: 9px;
 			margin-left: -4px;
-			cursor: ew-resize;
+			cursor: grab;
 			z-index: 6;
 			touch-action: none;
+		}
+		.stinger-anchor:active {
+			cursor: grabbing;
+		}
+		/* The second, un-draggable anchor line shown inside a with-Options
+		   Stinger's box (each Option's own pos is relative to it, but it
+		   can't itself be dragged — see _buildStingerLane) — no grab cursor,
+		   and pointer-events:none so it doesn't sit in the way of dragging
+		   the nested Options underneath it. */
+		.stinger-anchor.static {
+			cursor: default;
+			pointer-events: none;
 		}
 		.stinger-anchor::before {
 			content: "";
@@ -390,6 +434,59 @@ template.innerHTML = `
 			width: 2px;
 			background: var(--waw-danger, #e5484d);
 			transform: translateX(-50%);
+		}
+		/* Live preview guides shown across a Stinger's lane while its anchor
+		   is being dragged — see _updateStingerQuantizeGuides. */
+		.stinger-quantize-guide {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			width: 1px;
+			background: rgba(229, 72, 77, 0.35);
+			pointer-events: none;
+			z-index: 2;
+		}
+		/* changeOnNext boundary marks — see _renderChangeOnNextMarks. Short
+		   (33% of content height, from the top) and dark gray, distinct from
+		   the anchor's red. */
+		.change-on-next-mark {
+			position: absolute;
+			top: 0;
+			height: 33%;
+			width: 7px;
+			margin-left: -3px;
+			cursor: ew-resize;
+			z-index: 3;
+			touch-action: none;
+		}
+		.change-on-next-mark::before {
+			content: "";
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 50%;
+			width: 1px;
+			background: #666;
+			transform: translateX(-50%);
+		}
+		/* A triggered Stinger's own live position pointer — see
+		   _handleStingerDoubleClick/_updateStingerPointers. Same look as the
+		   main .playhead, scoped to just this Stinger's own row. */
+		.stinger-pointer {
+			position: absolute;
+			top: 0;
+			width: 0;
+			border-left: 2px solid #ff5a5a;
+			z-index: 7;
+			pointer-events: none;
+		}
+		/* The rest of a Stinger's own box/content (and its nested Options)
+		   drags to reposition relative to the anchor — gets the horizontal
+		   double-arrow the anchor itself used to show, now that the anchor
+		   has its own "grab" cursor instead. */
+		.stinger-grid .timed-box,
+		.stinger-grid .nested-option {
+			cursor: ew-resize;
 		}
 		.timed-box {
 			position: absolute;
@@ -481,6 +578,7 @@ template.innerHTML = `
 		<span class="tp-position">1.1.00</span>
 		<span class="tp-info"></span>
 		<div class="zoom-controls">
+			<select class="grid-select" title="Grid resolution"></select>
 			<span>H</span>
 			<button class="zoom-btn" data-zoom="h-out">−</button>
 			<button class="zoom-btn" data-zoom="h-in">+</button>
@@ -490,14 +588,15 @@ template.innerHTML = `
 		</div>
 	</div>
 	<div class="scroll-area">
+		<div class="section-divider layers-divider">Layers</div>
 		<div class="layer-scroll">
 			<div class="grid" hidden>
 				<div class="corner"></div>
 				<div class="ruler"></div>
 			</div>
 		</div>
-		<div class="stinger-divider" hidden>Stingers</div>
-		<div class="stinger-scroll" hidden>
+		<div class="section-divider stinger-divider">Stingers</div>
+		<div class="stinger-scroll">
 			<div class="grid stinger-grid"></div>
 		</div>
 		<div class="empty-hint">Select a &lt;Section&gt; element to see it here.</div>
@@ -514,6 +613,7 @@ export class WaSectionView extends HTMLElement {
 		this._layerScroll = this.shadowRoot.querySelector(".layer-scroll");
 		this._grid = this.shadowRoot.querySelector(".layer-scroll .grid");
 		this._ruler = this.shadowRoot.querySelector(".ruler");
+		this._layersDivider = this.shadowRoot.querySelector(".layers-divider");
 		this._stingerDivider = this.shadowRoot.querySelector(".stinger-divider");
 		this._stingerScroll = this.shadowRoot.querySelector(".stinger-scroll");
 		this._stingerGrid = this.shadowRoot.querySelector(".stinger-grid");
@@ -524,6 +624,10 @@ export class WaSectionView extends HTMLElement {
 
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
+		// The finest grid the zoom-adaptive resolution (_effectiveGridBeats) is
+		// allowed to reach — "1/4" through "1/32", or "off" to disable
+		// grid/snapping entirely. User-selectable via the grid-resolution menu.
+		this._gridResolution = "1/16";
 		this._cursorTime = 0;
 		this._isPlaying = false;
 		this._playStartAudioTime = 0;
@@ -535,6 +639,7 @@ export class WaSectionView extends HTMLElement {
 		this._openSegmentIds = new Set();
 		this._selectedIds = new Set(); // multi-select for bulk delete (Layer/Segment/Option ids)
 		this._dragState = null; // {kind, nodeId, grabOffsetSeconds} for an in-progress Option/Segment drag — set at dragstart since dataTransfer.getData() isn't readable until drop; grabOffsetSeconds is where within the box the drag started, so the box keeps that same offset from the cursor instead of snapping its left edge under it
+		this._activeStingerTriggers = new Map(); // stingerId -> {triggerAudioTime, startOffsetSeconds, durationSeconds, el} — see _handleStingerDoubleClick
 
 		this._onKeyDown = this._onKeyDown.bind(this);
 	}
@@ -548,6 +653,24 @@ export class WaSectionView extends HTMLElement {
 
 		this.shadowRoot.querySelectorAll(".zoom-btn").forEach((btn) => {
 			btn.addEventListener("click", () => this._handleZoom(btn.dataset.zoom));
+		});
+
+		const gridSelect = this.shadowRoot.querySelector(".grid-select");
+		GRID_RESOLUTIONS.forEach((r) => {
+			const opt = document.createElement("option");
+			opt.value = r.label;
+			opt.textContent = r.label;
+			gridSelect.appendChild(opt);
+		});
+		const offOpt = document.createElement("option");
+		offOpt.value = "off";
+		offOpt.textContent = "Off";
+		gridSelect.appendChild(offOpt);
+		gridSelect.value = this._gridResolution;
+		gridSelect.addEventListener("change", () => {
+			this._gridResolution = gridSelect.value;
+			const node = this._getActiveSectionNode();
+			if (node) this._renderSection(node);
 		});
 
 		xmlStore.addEventListener("change", () => this._onStoreChange());
@@ -590,6 +713,7 @@ export class WaSectionView extends HTMLElement {
 			this._teardownActive();
 			this._lastSectionId = null;
 			this._grid.hidden = true;
+			this._layersDivider.hidden = true;
 			this._stingerDivider.hidden = true;
 			this._stingerScroll.hidden = true;
 			this._emptyHint.hidden = false;
@@ -654,6 +778,11 @@ export class WaSectionView extends HTMLElement {
 		this._playBtn.classList.remove("active");
 		this._stopPositionLoop();
 		this._updatePlayheadVisual();
+		// A triggered Stinger only "plays" for as long as the Section itself
+		// is — stopping the Section stops everything, so nothing should keep
+		// animating a pointer for content that's no longer sounding.
+		this._activeStingerTriggers.forEach((entry) => entry.el?.remove());
+		this._activeStingerTriggers.clear();
 	}
 
 	_handleGoToStart() {
@@ -699,6 +828,7 @@ export class WaSectionView extends HTMLElement {
 			}
 			this._updatePlayheadVisual();
 			this._updatePositionReadout();
+			this._updateStingerPointers();
 			this._rafId = requestAnimationFrame(step);
 		};
 		this._rafId = requestAnimationFrame(step);
@@ -739,6 +869,90 @@ export class WaSectionView extends HTMLElement {
 		const beatInBar = Math.floor((this._cursorTime % info.barDuration) / info.beatDuration) + 1;
 		const frac = Math.floor((this._cursorTime % info.beatDuration) / info.beatDuration * 100);
 		this._positionEl.textContent = `${bar}.${beatInBar}.${String(frac).padStart(2, "0")}`;
+	}
+
+	// --- Stinger triggering & live position pointer ---
+
+	// Double-click a Stinger (its label, or its own content/box) to trigger
+	// it live during Section Preview playback — mirrors the "double-click to
+	// preview a sound" gesture common in DAWs; single click stays reserved
+	// for selection. Only meaningful while the Section is actually playing,
+	// since there's no "current position" to compute against otherwise.
+	//
+	// waxml.js starts a triggered Stinger's own audio mid-sample — its
+	// internal position pointer picks up at (elapsed Section time) mod (its
+	// quantize duration), not from its own beginning — confirmed with Hans.
+	// The pointer this animates mirrors that: it starts at the Stinger's own
+	// resolved position (basePos, i.e. where its waveform is actually drawn)
+	// plus that same remainder, then advances in real time from there.
+	_handleStingerDoubleClick(stinger, info) {
+		if (!this._isPlaying) return;
+		const stingerNow = ops.findNodeById(xmlStore.root, stinger.id);
+		if (!stingerNow || !stingerNow.attributes.id) return;
+
+		bridge.trigNode(stingerNow.attributes.id);
+
+		const quantizeDurationSeconds = parseDivision(stingerNow.attributes.quantize, info);
+		const startOffsetSeconds = quantizeDurationSeconds > 0 ? this._cursorTime % quantizeDurationSeconds : 0;
+
+		this._activeStingerTriggers.set(stinger.id, {
+			triggerAudioTime: bridge.audioContext.currentTime,
+			startOffsetSeconds,
+			durationSeconds: this._estimateStingerDuration(stingerNow, info),
+			el: null
+		});
+
+		const node = this._getActiveSectionNode();
+		if (node) this._renderSection(node);
+	}
+
+	// Best-effort playback-duration estimate for a triggered Stinger, used
+	// only to know when to stop animating its pointer — waxml.js doesn't
+	// expose "how long will this actually play" from the outside. Uses
+	// whatever's already decoded/cached for its own waveform (the first
+	// Option's, for a with-Options Stinger, since which one the engine
+	// actually picks isn't predictable from the XML alone), falling back to
+	// its own quantize duration (or a bar) if nothing's decoded yet.
+	_estimateStingerDuration(stinger, info) {
+		const options = getOptions(stinger);
+		const srcAttr = options.length > 0 ? findSrcAttribute(xmlStore.schema, options[0]) : findSrcAttribute(xmlStore.schema, stinger);
+		const resolvedUrl = srcAttr ? resolvePlayableUrl(srcAttr.value) : null;
+		const buffer = resolvedUrl ? this._resolvedBuffers.get(resolvedUrl) : null;
+		if (buffer) return buffer.duration;
+		const quantizeDurationSeconds = parseDivision(stinger.attributes.quantize, info);
+		return quantizeDurationSeconds > 0 ? quantizeDurationSeconds : info.barDuration;
+	}
+
+	// Called every animation frame while playing (see _startPositionLoop) —
+	// advances each actively-triggered Stinger's own pointer, removing it
+	// once its estimated duration has elapsed. Only repositions an existing
+	// element (built by _buildStingerLane, which owns creating/attaching it,
+	// same split as the main playhead's own _playheadEl/_updatePlayheadVisual).
+	_updateStingerPointers() {
+		if (this._activeStingerTriggers.size === 0) return;
+		const node = this._getActiveSectionNode();
+		if (!node) return;
+		const info = readSectionInfo(node);
+		const nowAudioTime = bridge.audioContext.currentTime;
+
+		for (const [stingerId, entry] of this._activeStingerTriggers) {
+			const elapsedSinceTrigger = nowAudioTime - entry.triggerAudioTime;
+			if (elapsedSinceTrigger >= entry.durationSeconds) {
+				entry.el?.remove();
+				this._activeStingerTriggers.delete(stingerId);
+				continue;
+			}
+			const stinger = ops.findNodeById(xmlStore.root, stingerId);
+			if (!stinger) {
+				entry.el?.remove();
+				this._activeStingerTriggers.delete(stingerId);
+				continue;
+			}
+			if (!entry.el) continue; // its lane isn't currently rendered
+			const basePos = readStingerQuantizePosition(stinger, info) + readStingerOffset(stinger, info);
+			const pointerAbsSeconds = basePos + entry.startOffsetSeconds + elapsedSinceTrigger;
+			entry.el.style.left = `${this._timeToPx(pointerAbsSeconds, info)}px`;
+		}
 	}
 
 	// --- selection & deletion ---
@@ -790,6 +1004,9 @@ export class WaSectionView extends HTMLElement {
 
 		this._emptyHint.hidden = true;
 		this._grid.hidden = false;
+		this._layersDivider.hidden = false;
+		this._stingerDivider.hidden = false;
+		this._stingerScroll.hidden = false;
 
 		const info = readSectionInfo(node);
 		this._infoEl.textContent = `${info.tempo} BPM · ${info.timeSign.label}${info.id ? " · " + info.id : ""}`;
@@ -844,11 +1061,14 @@ export class WaSectionView extends HTMLElement {
 	// Layer's content is; it can trigger at any moment, so its row has no
 	// business being dragged sideways by the Layer area's playhead-follow
 	// auto-scroll during playback.
+	//
+	// Always renders (even with zero Stingers) so the Section Preview
+	// reserves vertical space for this area the same way the Layer area
+	// always does — a trailing empty-state row (mirrors _buildDropZone's
+	// "isLast" ghost hint) doubles as a drop target that creates the
+	// Section's first Stinger, per Hans.
 	_renderStingers(sectionNode, info, totalWidth, totalDuration, token) {
 		const stingers = getStingers(sectionNode);
-		this._stingerDivider.hidden = stingers.length === 0;
-		this._stingerScroll.hidden = stingers.length === 0;
-		if (stingers.length === 0) return;
 
 		this._stingerGrid.innerHTML = "";
 		const corner = document.createElement("div");
@@ -867,9 +1087,69 @@ export class WaSectionView extends HTMLElement {
 				e.stopPropagation();
 				this._handleItemClick(stinger.id, e);
 			});
+			label.addEventListener("dblclick", (e) => {
+				e.stopPropagation();
+				this._handleStingerDoubleClick(stinger, info);
+			});
 			this._stingerGrid.appendChild(label);
 			this._stingerGrid.appendChild(this._buildStingerLane(stinger, info, totalWidth, token));
 		});
+
+		const isOnlyRow = stingers.length === 0;
+		const emptyLabel = this._buildDropZoneFiller();
+		emptyLabel.textContent = "Stinger";
+		if (isOnlyRow) emptyLabel.classList.add("preview-layer");
+		this._stingerGrid.appendChild(emptyLabel);
+		this._stingerGrid.appendChild(this._buildStingerEmptyDropzone(sectionNode, info, totalWidth, isOnlyRow));
+	}
+
+	// Trailing drop target for the Stinger area, always present — a file or
+	// dragged Option dropped here creates a brand-new <Stinger> (no quantize,
+	// same as adding one via the "+" button) and puts the content directly
+	// on it. Same idea as _buildDropZone's "isLast" Layer zone, simplified
+	// since Stinger rows aren't ordered/inserted-between the way Layers are.
+	_buildStingerEmptyDropzone(sectionNode, info, totalWidth, isOnlyRow) {
+		const zone = document.createElement("div");
+		zone.className = isOnlyRow ? "dropzone preview-layer" : "dropzone";
+		zone.style.minWidth = `${totalWidth}px`;
+		zone.style.height = `${isOnlyRow ? this._rowHeight : DROPZONE_HEIGHT}px`;
+
+		const isAcceptable = (types) => this._isFileDrag(types) || types.includes(OPTION_DRAG_TYPE);
+
+		zone.addEventListener("dragover", (e) => {
+			if (!isAcceptable(e.dataTransfer.types)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = this._isFileDrag(e.dataTransfer.types) ? "copy" : "move";
+			zone.classList.add("drop-active");
+		});
+		zone.addEventListener("dragleave", (e) => {
+			if (e.target !== zone) return;
+			zone.classList.remove("drop-active");
+		});
+		zone.addEventListener("drop", async (e) => {
+			const types = e.dataTransfer.types;
+			if (!isAcceptable(types)) return;
+			e.preventDefault();
+			zone.classList.remove("drop-active");
+
+			if (this._isFileDrag(types)) {
+				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
+				if (!fileId) return;
+				const fileNode = vfs.getNode(fileId);
+				if (!fileNode || fileNode.type !== "file") return;
+				const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", {});
+				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id) });
+				return;
+			}
+
+			const draggedOptionId = e.dataTransfer.getData(OPTION_DRAG_TYPE);
+			if (!draggedOptionId) return;
+			const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", {});
+			xmlStore.reparentNode(draggedOptionId, stinger.id);
+			this._stripPos(draggedOptionId);
+		});
+
+		return zone;
 	}
 
 	// A Stinger lane: a bare src renders like a bare Layer src (one
@@ -924,14 +1204,32 @@ export class WaSectionView extends HTMLElement {
 				if (!stingerNow) return;
 				xmlStore.updateAttributes(stinger.id, {
 					...stingerNow.attributes,
-					quantize: secondsToQuantizeString(newQuantizePos, info, GRID_BEATS)
+					quantize: secondsToQuantizeString(newQuantizePos, info, this._effectiveGridBeats(info))
 				});
 			},
-			content ? [content] : []
+			content ? [content] : [],
+			(committedSeconds) => this._updateStingerQuantizeGuides(lane, info, committedSeconds)
 		);
 		lane.appendChild(anchor);
 
 		this._wireStingerLaneDropTarget(lane, stinger, info);
+
+		// Live position pointer for this Stinger, only present while it's
+		// actually been triggered (double-click) during playback — see
+		// _handleStingerDoubleClick/_updateStingerPointers. Rebuilt on every
+		// render (like the main .playhead) so zoom/scroll changes don't
+		// leave it stale; the animation loop just repositions it in place.
+		const activeTrigger = this._activeStingerTriggers.get(stinger.id);
+		if (activeTrigger) {
+			const pointerEl = document.createElement("div");
+			pointerEl.className = "stinger-pointer";
+			pointerEl.style.height = `${this._rowHeight}px`;
+			const elapsed = bridge.audioContext.currentTime - activeTrigger.triggerAudioTime;
+			const pointerAbsSeconds = basePos + activeTrigger.startOffsetSeconds + elapsed;
+			pointerEl.style.left = `${this._timeToPx(pointerAbsSeconds, info)}px`;
+			lane.appendChild(pointerEl);
+			activeTrigger.el = pointerEl;
+		}
 
 		if (options.length === 0) {
 			if (content) {
@@ -941,12 +1239,24 @@ export class WaSectionView extends HTMLElement {
 				// it added explicitly since _renderWaveformOnly is generic
 				// (also used for a plain Layer, which doesn't want this).
 				this._wireBoxDropTarget(content, stinger, "Stinger", info);
+				// Marks append to `lane` (the canvas itself can't have DOM
+				// children) using the same lane-absolute coordinates the
+				// canvas and anchor already use.
+				this._renderChangeOnNextMarks(lane, stinger, info, basePos, quantizePos, (s) => this._timeToPx(s, info));
+				content.addEventListener("dblclick", (e) => {
+					e.stopPropagation();
+					this._handleStingerDoubleClick(stinger, info);
+				});
 			}
 			return lane;
 		}
 
 		const box = content;
 		this._wireStingerContentDrag(box, stinger, info, quantizePos, basePos);
+		box.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			this._handleStingerDoubleClick(stinger, info);
+		});
 
 		// Each Option's own pos=0 sits at the *Stinger's* resolved position
 		// (basePos), not the raw quantize point — its offset stacks on top
@@ -954,7 +1264,7 @@ export class WaSectionView extends HTMLElement {
 		// line (always at the box's own local left edge, since that's
 		// exactly where the box itself renders) is what an Option's own
 		// drag is relative to.
-		const optionsAnchor = this._buildStingerAnchor(this._rowHeight - 4);
+		const optionsAnchor = this._buildStingerAnchor(this._rowHeight - 4, false);
 		optionsAnchor.style.left = "0px";
 		optionsAnchor.title = "Each Option's own pos is relative to this point";
 		box.appendChild(optionsAnchor);
@@ -971,7 +1281,14 @@ export class WaSectionView extends HTMLElement {
 				{ top: idx * optionRowHeight, height: optionRowHeight },
 				true
 			);
-			if (nested) this._wireStingerContentDrag(nested, option, info, basePos, basePos + optionOffset);
+			if (nested) {
+				this._wireStingerContentDrag(nested, option, info, basePos, basePos + optionOffset);
+				// Marks append inside `nested` itself, positioned relative to
+				// its own left edge (basePos + optionOffset) the same way
+				// _renderNestedOption itself positions it relative to `box`.
+				const optionStartSeconds = basePos + optionOffset;
+				this._renderChangeOnNextMarks(nested, option, info, optionStartSeconds, basePos, (s) => (s - optionStartSeconds) * this._pxPerSecond);
+			}
 		});
 		lane.appendChild(box);
 		return lane;
@@ -1022,11 +1339,107 @@ export class WaSectionView extends HTMLElement {
 		});
 	}
 
-	_buildStingerAnchor(heightPx) {
+	_buildStingerAnchor(heightPx, draggable = true) {
 		const anchor = document.createElement("div");
-		anchor.className = "stinger-anchor";
+		anchor.className = draggable ? "stinger-anchor" : "stinger-anchor static";
 		anchor.style.height = `${heightPx}px`;
 		return anchor;
+	}
+
+	// Faint vertical guide lines across a Stinger's own lane, shown only
+	// while its anchor is being dragged — one at every multiple of the
+	// *live* quantize duration currently being previewed (so dragging to
+	// quantize="1/4" shows a line every beat, quantize="1" every bar, etc,
+	// per Hans), from the current scroll position out to the visible
+	// viewport's right edge. committedSeconds === null (drag not active, or
+	// just ended) clears them.
+	_updateStingerQuantizeGuides(lane, info, committedSeconds) {
+		(lane._quantizeGuideEls || []).forEach((el) => el.remove());
+		lane._quantizeGuideEls = [];
+		if (committedSeconds === null) return;
+
+		const quantizeDurationSeconds = committedSeconds + info.barDuration;
+		if (!(quantizeDurationSeconds > 0) || !Number.isFinite(quantizeDurationSeconds)) return;
+
+		const scrollLeftPx = this._stingerScroll ? this._stingerScroll.scrollLeft : 0;
+		const viewportWidthPx = this._stingerScroll ? this._stingerScroll.clientWidth : lane.clientWidth;
+		const viewportLeftSeconds = this._pxToTime(scrollLeftPx, info);
+		const viewportRightSeconds = this._pxToTime(scrollLeftPx + viewportWidthPx, info);
+		const startMultiple = Math.floor(viewportLeftSeconds / quantizeDurationSeconds) * quantizeDurationSeconds;
+
+		const MAX_GUIDES = 300; // safety cap in case a tiny quantize duration would otherwise flood the DOM
+		let t = startMultiple;
+		for (let i = 0; i < MAX_GUIDES && t <= viewportRightSeconds; i++, t += quantizeDurationSeconds) {
+			const guide = document.createElement("div");
+			guide.className = "stinger-quantize-guide";
+			guide.style.left = `${this._timeToPx(t, info)}px`;
+			lane.appendChild(guide);
+			lane._quantizeGuideEls.push(guide);
+		}
+	}
+
+	// changeOnNext marks: when a Stinger's (or one of its Options') own
+	// content is positioned to start *before* its anchor, waxml.js can start
+	// playback mid-sample at trigger time — waiting for the next
+	// changeOnNext-length boundary before actually starting, per Hans (the
+	// engine side of this is his own to port from <leadin> to <Stinger>; this
+	// is purely the Section Preview's visualization/editing of it). One thin
+	// mark per changeOnNext-multiple, counting back from the anchor, for as
+	// long as that stays within the content's own start — none at all if
+	// changeOnNext isn't set, or if the content doesn't actually start
+	// before its anchor.
+	//
+	// container: DOM element the marks are appended to as children — must
+	// not be a <canvas> (it can't have children), so the bare-src case
+	// passes `lane` itself rather than the canvas. toLeftPx: converts an
+	// absolute (lane-timeline) seconds value into container's own `left`
+	// coordinate system — lane-absolute (_timeToPx) for `lane`, or relative
+	// to a nested Option's own left edge for one of its marks — matching
+	// whatever convention that particular container already uses elsewhere.
+	_renderChangeOnNextMarks(container, node, info, contentStartSeconds, anchorSeconds, toLeftPx) {
+		const changeOnNextSeconds = parseDivision(node.attributes.changeOnNext, info);
+		if (!(changeOnNextSeconds > 0) || !(anchorSeconds > contentStartSeconds)) return;
+
+		const marks = [];
+		let index = 1;
+		for (let pos = anchorSeconds - changeOnNextSeconds; pos > contentStartSeconds + 1e-9; pos -= changeOnNextSeconds, index++) {
+			const mark = document.createElement("div");
+			mark.className = "change-on-next-mark";
+			mark.style.left = `${toLeftPx(pos)}px`;
+			container.appendChild(mark);
+			marks.push({ el: mark, index, startAbsSeconds: pos });
+		}
+
+		marks.forEach(({ el, index: ownIndex, startAbsSeconds }) => {
+			this._wireStingerDrag(
+				el,
+				info,
+				startAbsSeconds,
+				(newAbsSeconds) => {
+					const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+					if (!nodeNow) return;
+					const newDuration = Math.max(0.01, (anchorSeconds - newAbsSeconds) / ownIndex);
+					xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, changeOnNext: secondsToLengthString(newDuration) });
+				},
+				[],
+				(committedSeconds) => {
+					// This mark's own position is already kept current by
+					// _wireStingerDrag itself; only the *other* marks need
+					// live repositioning here, since dragging one rescales
+					// the spacing between all of them (not a uniform shift,
+					// so the generic followerEls delta wouldn't be correct).
+					if (committedSeconds === null) return;
+					const liveDuration = Math.max(0.01, (anchorSeconds - committedSeconds) / ownIndex);
+					marks.forEach(({ el: otherEl, index: otherIndex }) => {
+						if (otherIndex === ownIndex) return;
+						const otherPos = anchorSeconds - otherIndex * liveDuration;
+						const inRange = otherPos > contentStartSeconds && otherPos < anchorSeconds;
+						otherEl.style.display = inRange ? "" : "none";
+						if (inRange) otherEl.style.left = `${toLeftPx(otherPos)}px`;
+					});
+				}
+			);
+		});
 	}
 
 	// Shared pointer-drag-to-reposition: tracks a raw pixel delta from
@@ -1048,7 +1461,13 @@ export class WaSectionView extends HTMLElement {
 	// change, since the content's offset from the anchor stays fixed, but
 	// the *display* needs to move together or a drag looks like nothing is
 	// happening until you let go).
-	_wireStingerDrag(el, info, startAbsSeconds, onCommit, followerEls = []) {
+	//
+	// onLiveMove (optional): called with the live committedSeconds on every
+	// update once dragging starts, and with null once the drag ends — only
+	// the Stinger's own anchor uses this (to draw the quantize guide lines
+	// while its being dragged, see _buildStingerLane); a plain content drag
+	// or an Option's own anchor-relative drag has no use for it.
+	_wireStingerDrag(el, info, startAbsSeconds, onCommit, followerEls = [], onLiveMove = null) {
 		el.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			// A nested Option's own drag target sits inside the Stinger's own
@@ -1076,18 +1495,21 @@ export class WaSectionView extends HTMLElement {
 					} catch {}
 				}
 				const rawSeconds = startAbsSeconds + deltaPx / this._pxPerSecond;
-				const beatCount = Math.round(rawSeconds / info.beatDuration / GRID_BEATS) * GRID_BEATS;
+				const gridBeats = this._effectiveGridBeats(info);
+				const beatCount = gridBeats ? Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats : rawSeconds / info.beatDuration;
 				committedSeconds = beatCount * info.beatDuration;
 				const visualDeltaPx = (committedSeconds - startAbsSeconds) * this._pxPerSecond;
 				el.style.left = `${startLeftPx + visualDeltaPx}px`;
 				followerEls.forEach((f, i) => {
 					f.style.left = `${followerStartLeftPx[i] + visualDeltaPx}px`;
 				});
+				if (onLiveMove) onLiveMove(committedSeconds);
 			};
 			const onUp = () => {
 				el.removeEventListener("pointermove", onMove);
 				el.removeEventListener("pointerup", onUp);
 				if (dragging) onCommit(committedSeconds);
+				if (onLiveMove) onLiveMove(null);
 			};
 			el.addEventListener("pointermove", onMove);
 			el.addEventListener("pointerup", onUp);
@@ -1104,7 +1526,7 @@ export class WaSectionView extends HTMLElement {
 			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 			if (!nodeNow) return;
 			const newPosSeconds = newAbsSeconds - anchorSeconds + readUpbeatSeconds(nodeNow, info);
-			xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, pos: secondsToPosString(newPosSeconds, info, GRID_BEATS) });
+			xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, pos: secondsToPosString(newPosSeconds, info, this._effectiveGridBeats(info)) });
 		});
 	}
 
@@ -1178,13 +1600,42 @@ export class WaSectionView extends HTMLElement {
 		return px / this._pxPerSecond - info.barDuration * PRE_ROLL_BARS;
 	}
 
+	// The grid granularity (in beats) that drag-quantization and the ruler's
+	// sub-beat ticks should actually use right now: the finest of
+	// GRID_RESOLUTIONS, up to whatever this._gridResolution caps it at, whose
+	// on-screen spacing at the *current* zoom is still >= MIN_TICK_SPACING_PX
+	// — "as dense as possible without being too dense", per Hans. Returns
+	// null when the menu is set to "off" (no grid/snap at all, though bars/
+	// beats still show on the ruler regardless — see _buildRuler).
+	_effectiveGridBeats(info) {
+		if (this._gridResolution === "off") return null;
+		const capIndex = GRID_RESOLUTIONS.findIndex((r) => r.label === this._gridResolution);
+		const cap = capIndex === -1 ? GRID_RESOLUTIONS.length - 1 : capIndex;
+		let chosen = GRID_RESOLUTIONS[0].beats;
+		for (let i = 0; i <= cap; i++) {
+			const spacingPx = this._pxPerSecond * info.beatDuration * GRID_RESOLUTIONS[i].beats;
+			if (spacingPx >= MIN_TICK_SPACING_PX) chosen = GRID_RESOLUTIONS[i].beats;
+		}
+		return chosen;
+	}
+
 	// Bars are numbered on the same 1-indexed convention pos uses (bar 1 =
 	// time 0), so the pre-roll bars to its left are bar 0, bar -1, ... —
 	// negative-position content on those correctly reads as "before bar 1".
+	//
+	// Sub-beat gridlines (below the always-shown bar/beat ticks) only appear
+	// once _effectiveGridBeats resolves finer than a whole beat, and get
+	// progressively fainter the finer they are ("tunnare och tunnare för
+	// varje multipel av grid-värdet", per Hans — an actual sub-1px border
+	// can't get visually thinner, so opacity stands in for thickness here).
 	_buildRuler(info, totalWidth, totalDuration) {
 		const ruler = document.createElement("div");
 		ruler.className = "ruler";
 		ruler.style.minWidth = `${totalWidth}px`;
+
+		const gridBeats = this._effectiveGridBeats(info);
+		const showBeatTicks = this._pxPerSecond * info.beatDuration > 18;
+		const showSubBeatTicks = gridBeats && gridBeats < 1;
 
 		const firstBar = 1 - PRE_ROLL_BARS;
 		const barCount = Math.ceil(totalDuration / info.barDuration) + 1 + PRE_ROLL_BARS;
@@ -1200,7 +1651,7 @@ export class WaSectionView extends HTMLElement {
 			tick.appendChild(label);
 			ruler.appendChild(tick);
 
-			if (this._pxPerSecond * info.beatDuration > 18) {
+			if (showBeatTicks) {
 				for (let beat = 1; beat < info.timeSign.numerator; beat++) {
 					const beatTick = document.createElement("div");
 					beatTick.className = "ruler-tick";
@@ -1208,10 +1659,35 @@ export class WaSectionView extends HTMLElement {
 					ruler.appendChild(beatTick);
 				}
 			}
+
+			if (showSubBeatTicks) {
+				for (let beatIdx = 0; beatIdx < info.timeSign.numerator; beatIdx++) {
+					const beatStart = barTime + beatIdx * info.beatDuration;
+					for (let frac = gridBeats; frac < 1 - 1e-9; frac += gridBeats) {
+						const subTick = document.createElement("div");
+						subTick.className = `ruler-tick sub tier-${this._subBeatTier(frac)}`;
+						subTick.style.left = `${this._timeToPx(beatStart + frac * info.beatDuration, info)}px`;
+						ruler.appendChild(subTick);
+					}
+				}
+			}
 		}
 
 		this._ruler = ruler;
 		return ruler;
+	}
+
+	// Classifies a sub-beat gridline's fractional-beat offset (0 < frac < 1)
+	// into a thickness/faintness tier: 1 = an eighth-note position, 2 = a
+	// sixteenth, 3 = a thirty-second or a triplet subdivision (neither of
+	// which nests cleanly into the straight 1/2-1/4-1/8 ladder, so both just
+	// get the thinnest/faintest tier).
+	_subBeatTier(frac) {
+		const EPS = 1e-6;
+		const nearMultipleOf = (unit) => Math.abs(frac / unit - Math.round(frac / unit)) < EPS;
+		if (nearMultipleOf(0.5)) return 1;
+		if (nearMultipleOf(0.25)) return 2;
+		return 3;
 	}
 
 	// What a Layer/Segment/Option box shows as its own name: its `label`
@@ -1335,7 +1811,8 @@ export class WaSectionView extends HTMLElement {
 			const onMove = (moveEvt) => {
 				const laneRect = lane.getBoundingClientRect();
 				const rawSeconds = this._pxToTime(moveEvt.clientX - laneRect.left + lane.scrollLeft, info);
-				const beatCount = Math.max(1, Math.round(rawSeconds / info.beatDuration / GRID_BEATS) * GRID_BEATS);
+				const gridBeats = this._effectiveGridBeats(info) || 1;
+				const beatCount = Math.max(1, Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats);
 				pendingSeconds = beatCount * info.beatDuration;
 				marker.style.left = `${this._timeToPx(pendingSeconds, info)}px`;
 			};
@@ -1801,7 +2278,7 @@ export class WaSectionView extends HTMLElement {
 		// A Segment can legitimately start before bar 1 (an upbeat for the
 		// whole Layer) — clamp only to the pre-roll reserve, not to 0.
 		const seconds = Math.max(-info.barDuration * PRE_ROLL_BARS, rawSeconds);
-		return secondsToPosString(seconds, info, GRID_BEATS);
+		return secondsToPosString(seconds, info, this._effectiveGridBeats(info));
 	}
 
 	// Width (in seconds) the ghost preview — and the real Segment that would
