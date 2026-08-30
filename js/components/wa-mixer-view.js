@@ -1099,15 +1099,18 @@ export class WaMixerView extends HTMLElement {
 	// --- live metering, driven by the global player (see player-store.js) ---
 	// A <Mixer> has no audio source of its own (it's a processing graph —
 	// EQ/pan/gain — not something that "trigs") and no Play/Stop of its
-	// own any more, per Hans — Play/Stop is global, in the app header. Once
-	// *anything* is playing, this Mixer's own Chains exist in that same
-	// loaded graph regardless of what triggered it, so meters connect
-	// whenever playerStore.isPlaying goes true. Whether anything audible is
-	// actually flowing through a given Chain depends on real content being
-	// routed in elsewhere (via input=/output= selectors) — the meters will
-	// correctly show silence otherwise, which is accurate, not broken.
+	// own any more, per Hans — Play/Stop is global, in the app header.
+	// This Mixer's own Chains exist in the live graph as soon as the graph
+	// is loaded at all (playerStore.isDocumentLoaded) — no <Composition>/
+	// <Section> ever needs to actually "play" for that to be true, per
+	// Hans: the graph loads proactively on every structural edit now (see
+	// player-store.js), independent of the transport. Whether anything
+	// audible is actually flowing through a given Chain depends on real
+	// content being routed in elsewhere (via input=/output= selectors) —
+	// the meters will correctly show silence otherwise, which is accurate,
+	// not broken.
 	_onPlayerStoreChange() {
-		if (playerStore.isPlaying) {
+		if (playerStore.isDocumentLoaded) {
 			const node = this._activeMixerId ? ops.findNodeById(xmlStore.root, this._activeMixerId) : null;
 			if (node) {
 				this._connectMeters(node);
@@ -1124,7 +1127,7 @@ export class WaMixerView extends HTMLElement {
 			});
 			this.shadowRoot.querySelectorAll(".solo-btn .lamp").forEach((lamp) => {
 				lamp.style.background = "";
-				lamp.style.filter = "";
+				lamp.style.opacity = "";
 				lamp.style.boxShadow = "";
 			});
 			// Nothing will ever confirm a quantize-gated change once playback
@@ -1141,9 +1144,9 @@ export class WaMixerView extends HTMLElement {
 	// extends EventTarget and already dispatches "change"/similar events
 	// elsewhere in waxml.js (e.g. `set mix`) — same pattern, different event
 	// name. Re-wires whenever the live object identity changes (e.g. after a
-	// structural rebuild) and is a no-op if nothing's playing yet.
+	// structural rebuild) and is a no-op if no graph is loaded yet.
 	_wireMixerUpdateListener(mixerNode) {
-		if (!playerStore.isPlaying || !mixerNode?.attributes.id) return;
+		if (!playerStore.isDocumentLoaded || !mixerNode?.attributes.id) return;
 		let liveObj;
 		try {
 			const matches = playerStore.getLiveObjects(`[id='${mixerNode.attributes.id}']`);
@@ -1232,7 +1235,7 @@ export class WaMixerView extends HTMLElement {
 	_startMeterLoop() {
 		this._stopMeterLoop();
 		const step = () => {
-			if (!playerStore.isPlaying) return;
+			if (!playerStore.isDocumentLoaded) return;
 			this._meterState.forEach((entry) => {
 				if (!entry.vuFillEl) return;
 				entry.analyser.getByteTimeDomainData(entry.dataArray);
@@ -1608,7 +1611,7 @@ export class WaMixerView extends HTMLElement {
 		const transitionAttr = mixerNode.attributes.transitionTime !== undefined ? parseFloat(mixerNode.attributes.transitionTime) : DEFAULT_TRANSITION_TIME_MS;
 		this._transitionSlider.value = String(Number.isFinite(transitionAttr) ? Math.max(0, Math.min(TRANSITION_TIME_MAX_MS, transitionAttr)) : DEFAULT_TRANSITION_TIME_MS);
 
-		if (playerStore.isPlaying) this._wireMixerUpdateListener(mixerNode);
+		if (playerStore.isDocumentLoaded) this._wireMixerUpdateListener(mixerNode);
 		this._attachMeterElements();
 		this._updateSoloSliderGeometry();
 	}

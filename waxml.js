@@ -2882,8 +2882,10 @@ class Connector {
 			xml.obj._node.gain.value = 0;
 			this.connect(xml);
 			setTimeout(() => {
-				xml.obj.fade(xml.obj._params.gain || 1, 0.5)}
-				, 1000);
+				if(xml.obj && xml.obj._node && xml.obj._params){
+					xml.obj.fade(xml.obj._params.gain || 1, 0.5);
+				}
+			}, 1000);
 		}
 		
 	}
@@ -9391,10 +9393,11 @@ class Parser {
 			let parser = new DOMParser();
 			let xml = parser.parseFromString(str,"text/xml");
 			this._xml = xml.firstElementChild;
-			if(this._xml.firstElementChild.tagName == "parsererror"){
-				alert(this._xml.firstElementChild.textContent);
-				reject(this._xml);
+			if(xml.querySelector("parsererror")){
+				alert(xml.querySelector("parsererror").textContent);
+				reject(xml);
 			} else {
+				this._xml = xml.firstElementChild;
 				this.parseXML(this._xml);
 				resolve(this._xml);
 			}
@@ -12581,7 +12584,7 @@ class WebAudio extends EventTarget {
 				this.dispatchEvent(new CustomEvent("init"));
 				this.dispatchEvent(new CustomEvent("inited"));
 				resolve(xml);
-			});
+			}).catch(reject);
 		});
 	}
 

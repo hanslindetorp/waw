@@ -1,17 +1,18 @@
 import { playerStore } from "./player-store.js";
 
 // Applies a value directly to a node's *live* waxml object, if one exists
-// right now (i.e. playback is running and this node survived into the
-// currently-loaded engine graph) — no engine reload, an immediate,
-// click-free change via waxml's own setTargetAtTime-backed property
-// setters. A no-op whenever nothing's playing — xmlStore is always the
-// source of truth; this is purely a "also nudge the currently-sounding
-// audio to match" side channel. Shared by every component that edits a
-// live-audio-relevant attribute (wa-mixer-view's own knobs/faders,
+// right now (i.e. the graph is currently loaded — playerStore.isDocumentLoaded,
+// which no longer requires Play to have ever been pressed, see
+// player-store.js — and this node survived into it) — no engine reload, an
+// immediate, click-free change via waxml's own setTargetAtTime-backed
+// property setters. A no-op whenever no graph is loaded — xmlStore is
+// always the source of truth; this is purely a "also nudge whatever's
+// currently live to match" side channel. Shared by every component that
+// edits a live-audio-relevant attribute (wa-mixer-view's own knobs/faders,
 // wa-node-inspector's attribute sliders, ...), so any of them behaves the
-// same way during playback.
+// same way.
 export function applyLiveProperty(nodeId, propName, value) {
-	if (!playerStore.isPlaying || !nodeId) return;
+	if (!playerStore.isDocumentLoaded || !nodeId) return;
 	let liveObj;
 	try {
 		const matches = playerStore.getLiveObjects(`[id='${nodeId}']`);
@@ -31,10 +32,10 @@ export function applyLiveProperty(nodeId, propName, value) {
 
 // Same idea as applyLiveProperty, but for nudging the live graph via a
 // *method* rather than a property assignment (e.g. Mixer's own
-// clearSolo()) — same lookup, same no-op-when-not-playing/not-found
+// clearSolo()) — same lookup, same no-op-when-no-graph-loaded/not-found
 // behavior, same "never worth surfacing a failure here" reasoning.
 export function applyLiveMethodCall(nodeId, methodName, ...args) {
-	if (!playerStore.isPlaying || !nodeId) return;
+	if (!playerStore.isDocumentLoaded || !nodeId) return;
 	let liveObj;
 	try {
 		const matches = playerStore.getLiveObjects(`[id='${nodeId}']`);
