@@ -28,3 +28,24 @@ export function applyLiveProperty(nodeId, propName, value) {
 		// attribute is still the source of truth and already updated.
 	}
 }
+
+// Same idea as applyLiveProperty, but for nudging the live graph via a
+// *method* rather than a property assignment (e.g. Mixer's own
+// clearSolo()) — same lookup, same no-op-when-not-playing/not-found
+// behavior, same "never worth surfacing a failure here" reasoning.
+export function applyLiveMethodCall(nodeId, methodName, ...args) {
+	if (!playerStore.isPlaying || !nodeId) return;
+	let liveObj;
+	try {
+		const matches = playerStore.getLiveObjects(`[id='${nodeId}']`);
+		liveObj = matches && matches[0];
+	} catch {
+		liveObj = null;
+	}
+	if (!liveObj || typeof liveObj[methodName] !== "function") return;
+	try {
+		liveObj[methodName](...args);
+	} catch {
+		// Same reasoning as applyLiveProperty's own catch above.
+	}
+}

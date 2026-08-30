@@ -1,7 +1,7 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
-import { applyLiveProperty } from "../waxml-integration/live-property.js";
+import { applyLiveProperty, applyLiveMethodCall } from "../waxml-integration/live-property.js";
 import { linearRatioToDb } from "../waxml-integration/gain-units.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
@@ -810,6 +810,14 @@ template.innerHTML = `
 			box-sizing: border-box;
 			padding-top: ${MINI_SLIDERS_PADDING_TOP}px;
 			flex: 0 0 auto;
+			opacity: 1;
+			transition: opacity 0.15s ease-out;
+		}
+		/* Same faded-when-not-engaged look and timing as .solo-slider-handle's
+		   own .active toggle, per Hans — blend/transitionTime only mean
+		   anything while a solo position is actually set. */
+		.mini-sliders.solo-inactive {
+			opacity: 0.35;
 		}
 		.mini-slider-row {
 			display: flex;
@@ -1036,6 +1044,12 @@ export class WaMixerView extends HTMLElement {
 		// by _buildSoloButton on every render instead, so it survives that
 		// rebuild until the live "update" event clears it.
 		this._pendingSoloChannelIndex = null;
+		// Whether <Mixer>'s `solo` attribute is currently set — kept in sync
+		// by _render(), read by the RAF meter loop's _updateSoloButtonGains
+		// so lamps go dark the instant solo is cleared instead of drifting
+		// back to "lit" off a stale/default (unity-gain) getChannelGain()
+		// reading on the next frame.
+		this._soloActive = false;
 		// Set around every xmlStore.updateAttributes call fired from a knob/
 		// fader's own continuous drag (see _commitAttributes) — xmlStore's
 		// "change" event fires synchronously, and without this guard the
@@ -1239,14 +1253,44 @@ export class WaMixerView extends HTMLElement {
 		this._meterRafId = requestAnimationFrame(step);
 	}
 
-	// getChannelGain(index) is a live per-channel solo-crossfade readout Hans
-	// is building in waxml.js in parallel with this UI — called defensively
-	// (the function may not exist yet on any given live Mixer object).
+	// getChannelGain(index) is a live per-channel solo-crossfade readout,
+	// confirmed (per waxml.js) to return the live GainNode's own `.gain.value`
+	// — a linear amplitude multiplier, same domain as every other
+	// GainNode.gain in this file — read straight off the AudioParam, so it
+	// already reflects an in-progress transitionTime ramp; and since
+	// waxml.js's solo setter only actually applies a new value after any
+	// quantize delay elapses, a channel mid-"waiting for quantize" correctly
+	// keeps reading its OLD gain here until the real change lands, matching
+	// the .standby blink's own "hasn't happened yet" meaning — no extra
+	// bookkeeping needed on this side for either.
+	//
+	// <Mixer>'s crossfade is equal-POWER (per Hans): at the exact midpoint
+	// between two channels each gets gain ~0.7071 (cos/sin of 45°) — a
+	// linear amplitude value doesn't map to a visually-half-lit lamp at
+	// that point, but its square (power = amplitude²) does, since power is
+	// exactly what an equal-power crossfade keeps summing to 1 across the
+	// two channels involved. Using that power value directly as the lamp's
+	// CSS opacity means a channel exactly halfway into a crossfade reads as
+	// exactly half-lit, and the two lamps' opacities visually add up to
+	// "one lamp's worth" of light at any crossfade position, matching the
+	// crossfade law itself rather than an unrelated display curve.
 	_updateSoloButtonGains() {
 		if (!this._liveMixerObj || typeof this._liveMixerObj.getChannelGain !== "function") return;
 		this.shadowRoot.querySelectorAll(".solo-btn").forEach((btn) => {
 			const lamp = btn.querySelector(".lamp");
 			if (!lamp) return;
+			// Without an active solo position, every channel's live gain is
+			// just sitting at unity (clearSolo()'s own doing, or the graph's
+			// untouched default) — reading that as power below would light
+			// every lamp fully instead of none, per Hans: no solo engaged
+			// means no lamp reflects a solo state at all, regardless of
+			// what the underlying gain value happens to be.
+			if (!this._soloActive) {
+				lamp.style.background = "";
+				lamp.style.opacity = "";
+				lamp.style.boxShadow = "";
+				return;
+			}
 			const idx = parseInt(btn.dataset.channelIndex, 10);
 			let gain = 0;
 			try {
@@ -1254,14 +1298,14 @@ export class WaMixerView extends HTMLElement {
 			} catch {
 				gain = 0;
 			}
-			const t = Number.isFinite(gain) ? Math.max(0, Math.min(1, gain)) : 0;
-			if (t > 0.02) {
+			const power = Number.isFinite(gain) ? Math.max(0, Math.min(1, gain * gain)) : 0;
+			if (power > 0.02) {
 				lamp.style.background = "radial-gradient(circle at 35% 30%, #fff3b0, #a8860a 72%)";
-				lamp.style.filter = `brightness(${(1 + t * 1.2).toFixed(2)})`;
-				lamp.style.boxShadow = `0 0 ${(4 + t * 8).toFixed(1)}px rgba(232, 211, 77, ${(0.3 + t * 0.7).toFixed(2)})`;
+				lamp.style.opacity = String(power);
+				lamp.style.boxShadow = `0 0 ${(4 + power * 8).toFixed(1)}px rgba(232, 211, 77, ${(0.3 + power * 0.7).toFixed(2)})`;
 			} else {
 				lamp.style.background = "";
-				lamp.style.filter = "";
+				lamp.style.opacity = "";
 				lamp.style.boxShadow = "";
 			}
 		});
@@ -1437,9 +1481,10 @@ export class WaMixerView extends HTMLElement {
 		const node = ops.findNodeById(xmlStore.root, this._activeMixerId);
 		if (!node) return;
 		xmlStore.updateAttributes(node.id, { ...node.attributes, solo: String(Math.round(value * 1000) / 1000) });
-		// The engine (Hans is wiring this up) is what actually honors
-		// `quantize` — this side only shows a "pending" state until the live
-		// Mixer object's own "update" event tells us the change landed.
+		// waxml.js's own `solo` setter is what actually honors `quantize`
+		// (delays applying + fires "update" once it does) — this side only
+		// shows a "pending" state until that "update" event tells us the
+		// change landed (see _wireMixerUpdateListener).
 		if (node.attributes.quantize) this._soloHandle.classList.add("standby");
 	}
 
@@ -1457,20 +1502,20 @@ export class WaMixerView extends HTMLElement {
 	// Clicking a Solo button that's already the active one turns solo back
 	// off entirely, per Hans — removes the attribute rather than writing 0
 	// (0 is itself a valid solo *position*, the first channel's, not "no
-	// solo"). No live-apply call here: unlike a value change, there's no
-	// confirmed engine API for "clear solo" to guess at (Hans is building
-	// that engine side in parallel) — the XML attribute removal, which
-	// applies live without a graph rebuild since it's a non-structural
-	// update, is the only side effect until that's confirmed.
+	// solo"). Mixer.clearSolo() (waxml.js) ramps every channel back to unity
+	// gain immediately — confirmed it does NOT honor `quantize` the way the
+	// `solo` setter does, and never fires "update" — so unlike
+	// _commitSoloValue/the per-channel solo click below, this never adds the
+	// .standby "waiting" cue: there would be nothing to ever clear it.
 	_clearSoloValue() {
 		this._applySoloSliderVisual(0.5, false);
 		if (!this._activeMixerId) return;
 		const node = ops.findNodeById(xmlStore.root, this._activeMixerId);
 		if (!node) return;
+		applyLiveMethodCall(node.attributes.id, "clearSolo");
 		const attrs = { ...node.attributes };
 		delete attrs.solo;
 		xmlStore.updateAttributes(node.id, attrs);
-		if (node.attributes.quantize) this._soloHandle.classList.add("standby");
 	}
 
 	_handleQuantizeChange() {
@@ -1529,22 +1574,31 @@ export class WaMixerView extends HTMLElement {
 		});
 		this._channels.appendChild(this._buildAddChannelStrip(mixerNode));
 
+		const soloRaw = mixerNode.attributes.solo;
+		const soloValue = soloRaw !== undefined ? parseFloat(soloRaw) : undefined;
+		const hasSolo = soloRaw !== undefined && Number.isFinite(soloValue);
+		// Read by _updateSoloButtonGains (the RAF loop) so a lamp never
+		// re-lights itself off a stale/default getChannelGain() reading once
+		// solo's been cleared — see that method's own comment.
+		this._soloActive = hasSolo;
+		this._applySoloSliderVisual(hasSolo ? soloValue : 0.5, hasSolo);
+
 		// The blend/transitionTime mini-sliders configure the big solo
 		// slider's crossfade — pointless with fewer than two channels, same
 		// threshold as that slider's own visibility. The matching blank
 		// .mini-sliders-row-spacer in every channel strip has to hide right
 		// along with it, or row-labels and each bottom-group's total content
 		// height stop matching and Pan/Vol/ON/Solo drift out of alignment.
+		// Faded (not hidden) whenever solo itself isn't currently engaged —
+		// per Hans, clearing solo should visibly fade these right along with
+		// the big slider and the per-channel lamps, since none of them mean
+		// anything until a solo position exists again.
 		const showMiniSliders = totalCount >= 2;
 		this._miniSliders.style.display = showMiniSliders ? "" : "none";
+		this._miniSliders.classList.toggle("solo-inactive", !hasSolo);
 		this._channels.querySelectorAll(".mini-sliders-row-spacer").forEach((el) => {
 			el.style.display = showMiniSliders ? "" : "none";
 		});
-
-		const soloRaw = mixerNode.attributes.solo;
-		const soloValue = soloRaw !== undefined ? parseFloat(soloRaw) : undefined;
-		const hasSolo = soloRaw !== undefined && Number.isFinite(soloValue);
-		this._applySoloSliderVisual(hasSolo ? soloValue : 0.5, hasSolo);
 
 		this._quantizeSelect.value = mixerNode.attributes.quantize || "";
 

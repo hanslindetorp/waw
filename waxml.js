@@ -618,7 +618,6 @@ class AudioObject extends EventTarget{
 		  	case "audio":
 				case "waxml":
         case "gainnode":
-        case "mixer":
         case "voice":
         case "include":
         case "xi:include":
@@ -1712,18 +1711,23 @@ class AudioObject extends EventTarget{
       this.mix = val;
     }
 
-    set mix(val){
-      if(isNaN(val)){
-        return;
-      }
 
-      val = Math.max(0, Math.min(val, 1));
-      this._params.mix = val;
+    set transitionTime(val){
+      this._params.transitionTime = val;
+    }
+
+    get transitionTime(){
+      return this._params.transitionTime || 0.001;
+    }
+
+    setSolo(val){
+
+      this._params.solo = val;
       let targets = this.childObjects; //.length ? this.childObjects : this.inputs; // XXX this was prior to 2025-04-16 not using this.inputs. Why?
         
       val *= (targets.length-1); // 0 - nr of children or channelCount
 
-      let crossFadeRange = this._params.crossfaderange;
+      let crossFadeRange = this._params.blend || this._params.crossfaderange;
       if(typeof crossFadeRange != "undefined"){
         crossFadeRange = crossFadeRange.valueOf();
       } else {
@@ -1784,8 +1788,57 @@ class AudioObject extends EventTarget{
       });
     }
 
+    set mix(val){
+      this.solo = val;
+    }
+
     get mix(){
-      return this._params.mix || 0;
+      return this.solo;
+    }
+
+
+    set solo(val){
+      if(isNaN(val)){
+        return;
+      }
+
+      val = Math.max(0, Math.min(val, 1));
+      if(this._params.quantize){
+        let delay = this.waxml.musicEngine.timeTo(this._params.quantize) * 1000;
+        if(this.setSoloTimer){
+          clearTimeout(this.setSoloTimer);
+        }
+        this.setSoloTimer = setTimeout(() => {
+          this.setSolo(val);
+          // fire custom event "update" to notify that the solo value has changed
+          this.dispatchEvent(new CustomEvent("update", {detail: {value: val}}));
+        }, delay);
+      } else {
+        this.setSolo(val);
+      }
+    }
+
+    get solo(){
+      return this._params.solo || false;
+    }
+
+    clearSolo(){
+      this.inputs.forEach((input, i) => {
+        input.gain.setTargetAtTime(1, input.context.currentTime, 0.001);
+      });
+      this._params.solo = undefined;
+    }
+
+    set blend(val){
+      this._params.blend = val;
+    }
+
+    get blend(){
+      return this._params.blend || false;
+    }
+
+    getChannelGain(childIndex){
+      return this.inputs[childIndex].gain.value;
     }
 
   	set pan(val){
@@ -19608,16 +19661,6 @@ class Music extends EventTarget {
 	
 	
 	
-		iMus.timeToNext = function(val){
-			return defaultInstance.timeToNext(val);
-		}
-		iMus.prototype.timeToNext = function(val){
-	
-			return this.divisionToTime(val)*1000;
-		}
-	
-	
-	
 	
 		iMus.solo = function(grp, val){
 	
@@ -19672,10 +19715,23 @@ class Music extends EventTarget {
 		}
 	
 	
+		iMus.timeToNext = function(val){
+			return defaultInstance.timeToNext(val);
+		}
+		iMus.prototype.timeToNext = function(val){
+
+			return this.divisionToTime(val)*1000;
+		}
+
+		iMus.prototype.timeTo = function(val){
+			return this.on(val);
+		}
+
+
+	
 		iMus.prototype.on = function on(int, fn, offset, repeat){
 	
 	
-			if(!fn){return}
 			offset = offset || 0;
 			offset /= 1000;
 	
@@ -19715,23 +19771,27 @@ class Music extends EventTarget {
 			}
 	
 	
-			if(repeat == 1){
-				if(delay < timeWindow*2 || musicTime < 0){delay += interval}
-				return setTimeout(() => fn(), delay*1000);
+
+			if(fn){
+
+				if(repeat == 1){
+					if(delay < timeWindow*2 || musicTime < 0){delay += interval}
+					return setTimeout(() => fn(), delay*1000);
+				} else {
+					if(musicTime < 0){delay += interval}
+					var timerID = setInterval(() => {
+						// this function will drift out of sync!!!
+						setTimeout( () => fn(), delay*1000);
+						counter++;
+		
+						if(counter >= repeat && repeat != -1){clearInterval(timerID)}
+					}, interval*1000);
+					return timerID;
+				}
 			} else {
-				if(musicTime < 0){delay += interval}
-				var timerID = setInterval(() => {
-					// this function will drift out of sync!!!
-					setTimeout( () => fn(), delay*1000);
-					counter++;
-	
-					if(counter >= repeat && repeat != -1){clearInterval(timerID)}
-				}, interval*1000);
-				return timerID;
+				return delay;
 			}
 	
-	
-			return interval;
 	
 		}
 	
@@ -20538,11 +20598,16 @@ class Music extends EventTarget {
 		iMus.setParams = setParams;
 	
 		iMus.set = function(param, val){
-			var sectionID = defaultInstance.sections.length - 1;
-			var obj = defaultInstance.sections[sectionID].set(param, val);
-			defaultInstance.parameters[obj.param] = obj.val;
-			defaultParams[obj.param] = obj.val;
-	
+
+			let obj;
+
+			defaultInstance.sections.forEach(section => {
+				obj = section.set(param, val) || obj;
+			});
+			if(obj && obj.param){
+				defaultInstance.parameters[obj.param] = obj.val;
+				defaultParams[obj.param] = obj.val;
+			}
 			switch(param){
 	
 				case "osc":
