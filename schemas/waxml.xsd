@@ -950,7 +950,7 @@
 
   <xs:simpleType name="mix">
     <xs:annotation>
-      <xs:documentation>Dry/wet mix ratio. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+      <xs:documentation>Used as Mixer's "solo" attribute (was named "mix" before): a continuous channel-select position across a Mixer's children - 0 selects the first child, 1 the last, evenly spaced values in between select/blend the ones between. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
     </xs:annotation>
     <xs:union memberTypes="mixValue mathExpression"/>
   </xs:simpleType>
@@ -964,7 +964,7 @@
 
   <xs:simpleType name="crossFadeRange">
     <xs:annotation>
-      <xs:documentation>Range over which crossfading is applied. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+      <xs:documentation>Used as Mixer's "blend" attribute (was named "crossFadeRange" before): how much a Mixer crossfades between two adjacent children when "solo" lands between them, rather than exactly on one. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
     </xs:annotation>
     <xs:union memberTypes="crossFadeRangeValue mathExpression"/>
   </xs:simpleType>
@@ -1450,10 +1450,15 @@
           <xs:group ref="waxml" minOccurs="0" maxOccurs="unbounded"/>
           <xs:attributeGroup ref="commonNodeAttributes"/>
           <xs:attribute name="gain" type="gain"/>
-          <xs:attribute name="mix" type="mix"/>
+          <!-- "solo" was named "mix" before - same 0-1 type, now a
+               continuous channel-select position (0 = first child, 1 =
+               last) rather than a dry/wet ratio. -->
+          <xs:attribute name="solo" type="mix"/>
           <xs:attribute name="selectIndex" type="selectIndex"/>
-          <xs:attribute name="crossFadeRange" type="crossFadeRange"/>
+          <!-- "blend" was named "crossFadeRange" before - same 0-1 type. -->
+          <xs:attribute name="blend" type="crossFadeRange"/>
           <xs:attribute name="transitionTime" type="transitionTime"/>
+          <xs:attribute name="quantize" type="quantize"/>
         </xs:complexType>
       </xs:element>
 
@@ -1674,11 +1679,11 @@
     <!-- Send -->
     <xs:attribute name="bus" type="bus"/> 
 
-    <!-- Mixer -->
-    <xs:attribute name="mix" type="mix"/> 
-    <xs:attribute name="crossFadeRange" type="crossFadeRange"/> 
-    <xs:attribute name="peak" type="peak"/> 
-    <xs:attribute name="selectIndex" type="selectIndex"/> 
+    <!-- Mixer (solo/blend were named mix/crossFadeRange before) -->
+    <xs:attribute name="solo" type="mix"/>
+    <xs:attribute name="blend" type="crossFadeRange"/>
+    <xs:attribute name="peak" type="peak"/>
+    <xs:attribute name="selectIndex" type="selectIndex"/>
 
     <!-- Envelope -->
     <xs:attribute name="legato" type="xs:boolean"/> 
@@ -1709,7 +1714,13 @@
   <!--   Layer        - only inside Section                            -->
   <!--   Segment      - only inside Layer                              -->
   <!--   Option       - only inside Layer, Segment, or Stinger           -->
-  <!--   Command      - only inside Stinger                              -->
+  <!--   Command      - inside Option, Segment, Stinger, Layer, or        -->
+  <!--                   Composition, AND as a repeatable root-level      -->
+  <!--                   sibling of Audio's own top-level content (see    -->
+  <!--                   the root element's own complexType below) - not  -->
+  <!--                   just Stinger, despite this list's old wording    -->
+  <!--                   (root-level Command is how the player bar's      -->
+  <!--                   trigger-shortcut buttons are defined)            -->
   <!--   Stinger      - only inside Composition or Section              -->
   <!--   envelope     - commented out for now (see bottom of section)  -->
   <!--                                                                 -->
@@ -1729,6 +1740,8 @@
 
   <xs:complexType name="commandContentType">
     <xs:attribute name="label" type="label"/>
+    <xs:attribute name="class" type="iMusicClass"/>
+    <xs:attribute name="id" type="iMusicId"/>
     <xs:attribute name="pos" type="position"/>
     <xs:attribute name="type" type="commandType"/>
     <xs:attribute name="selector" type="xs:string"/>

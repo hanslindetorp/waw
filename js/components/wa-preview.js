@@ -3,12 +3,13 @@ import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribut
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 import "./wa-section-view.js";
+import "./wa-mixer-view.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
 // (panel 2) / XML code (panel 4) — they all share xmlStore's selectedNodeId.
-// <Section> gets a full DAW-style arrange view; other audio-bearing
-// elements get a waveform + WAXML play/stop. More element-specific views
-// (WAM modules, mixer, ...) land in later steps per
+// <Section> gets a full DAW-style arrange view; <Mixer> gets a channel-strip
+// mixer view; other audio-bearing elements get a waveform + WAXML play/stop.
+// More element-specific views (WAM modules, ...) land in later steps per
 // docs/WAXML-Workstation-spec.md avsnitt 5.4/9.
 
 const bridge = new WaxmlBridge();
@@ -18,6 +19,14 @@ const bridge = new WaxmlBridge();
 // their <Composition>/<Section> parent) — selecting one still shows its
 // waveform for reference, but without the (would-be-broken) WAXML play button.
 const COMPOSITION_CONTEXT_TAGS = new Set(["Layer", "Segment", "Option", "Stinger", "Command"]);
+
+// A Mixer's own descendants — selecting one of these while the mixer view
+// is already showing shouldn't yank the panel away to a bare attribute
+// list. Also covers xmlStore.insertNewChild's own side effect of moving
+// the global selection to whatever it just created (e.g. clicking a
+// channel strip's "+ add insert" button selects the new <Wam>) — without
+// this, every "+" click in wa-mixer-view would otherwise hide it instantly.
+const MIXER_CONTEXT_TAGS = new Set(["Chain", "Send", "Wam", "GainNode", "BiquadFilterNode", "StereoPannerNode"]);
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -105,6 +114,10 @@ template.innerHTML = `
 		<wa-section-view></wa-section-view>
 	</div>
 
+	<div class="state" data-state="mixer">
+		<wa-mixer-view></wa-mixer-view>
+	</div>
+
 	<div class="state padded" data-state="audio">
 		<p class="node-label"><span class="tag"></span></p>
 		<canvas class="waveform" width="600" height="100"></canvas>
@@ -169,12 +182,29 @@ export class WaPreview extends HTMLElement {
 			return;
 		}
 
+		if (node.tagName === "Mixer") {
+			// Same "always mounted, listens to xmlStore itself" shape as
+			// wa-section-view — see wa-mixer-view.js.
+			this._showState("mixer");
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
 		// Selecting one of a Section's own parts (e.g. clicking a Layer/Segment/
 		// Option box inside the arrange view itself, to select it for the
 		// Inspector or for multi-delete) shouldn't yank the whole panel away
 		// to a bare waveform view out from under the user — wa-section-view
 		// tracks its own active Section independently and keeps rendering it.
 		if (COMPOSITION_CONTEXT_TAGS.has(node.tagName) && this._activeState === "section") {
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
+		// Same idea as the Section carve-out above, for a Mixer's own
+		// descendants — see MIXER_CONTEXT_TAGS.
+		if (MIXER_CONTEXT_TAGS.has(node.tagName) && this._activeState === "mixer") {
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;

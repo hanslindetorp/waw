@@ -1,5 +1,6 @@
 import "./components/wa-panel.js";
 import "./components/wa-file-menu.js";
+import "./components/wa-player-bar.js";
 import "./components/wa-file-manager.js";
 import "./components/wa-preview.js";
 import "./components/wa-xml-editor.js";

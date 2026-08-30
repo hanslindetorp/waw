@@ -3045,7 +3045,9 @@ class Connector {
 					case "xi:include":
 					case "include":
 					case "channelsplitternode":
-					xmlNode.obj.connect(xmlNode.parentNode.obj._node);
+					if(xmlNode.obj){
+						xmlNode.obj.connect(xmlNode.parentNode.obj._node);
+					}
 					break;
 
 
@@ -9888,9 +9890,54 @@ class Parser {
 			this.imports.push(promise);
 			break;
 
-			default:
+			case "composition":
+			// XXX
+			// The old iMusic structure is still alive and kicking behind the scenes
+			// It should be removed and replaced with a new Music structure, but that requires a lot of work.
+
+			// case "section":
+			// case "layer":
+			// case "segment":
+			// case "option":
+			// case "stinger":
+			break;
+
+			case "analysernode":
+			case "audiobuffersourcenode":
+			case "oscillatornode":
+			case "mediastreamaudiosourcenode":
+			case "biquadfilternode":
+			case "convolvernode":
+			case "delaynode":
+			case "dynamicscompressornode":
+			case "stereopannernode":
+			case "pannernode":
+			case "waveshapernode":
+			case "periodicwavenode":
+			case "iirfilternode":
+			case "audioworkletnode":
+			case "mixer":
+			case "audio":
+			case "waxml":
+			case "gainnode":
+			case "mixer":
+			case "voice":
+			case "include":
+			case "xi:include":
+			case "objectbasedaudio":
+			case "ambientaudio":
+			case "noise":
+			case "send":
+			case "chain":
+			case "channelsplitternode":
+			case "channelmergernode":
+			case "envelope":
 			xmlNode.obj = new AudioObject(xmlNode, this.waxml, localPath, params);
 			Array.from(xmlNode.children).forEach(node => this.parseXML(node, localPath));
+			break;
+
+
+			default:
 			break;
 		}
 		xmlNode.audioObject = xmlNode.obj;
@@ -20492,16 +20539,7 @@ class Music extends EventTarget {
 	
 		iMus.set = function(param, val){
 			var sectionID = defaultInstance.sections.length - 1;
-			// The iMusic plugin's update() wipes defaultInstance.sections to []
-			// right before re-parsing a new <Composition> (see its "update"
-			// callback), and parseXML() calls setParams()/set() for the
-			// Composition's own attributes (tempo, timeSign, ...) before its
-			// arrangements.forEach() loop has added any section back — so
-			// sections[-1] here was throwing on every single reload. Falling
-			// back to {param, val} as-is matches what section.set() itself
-			// returns in the normal case, so the rest of this function (which
-			// just stores obj.param/obj.val) doesn't need to change.
-			var obj = sectionID >= 0 ? defaultInstance.sections[sectionID].set(param, val) : { param: param, val: val };
+			var obj = defaultInstance.sections[sectionID].set(param, val);
 			defaultInstance.parameters[obj.param] = obj.val;
 			defaultParams[obj.param] = obj.val;
 	
@@ -21406,13 +21444,8 @@ class Music extends EventTarget {
 				if(musicStructure instanceof Node){
 					// clean up old structure
 					myInstance.sections.forEach(section => section.remove());
-					// Motif.prototype has no remove() at all (unlike Section's), so
-					// any document containing a <Stinger>/motif/leadin crashed here
-					// on every reparse — guarded rather than implemented, since a
-					// real remove() would need to know how to tear down a Motif's
-					// own audio graph, which is Hans's call, not a guess to make here.
-					myInstance.motifs.forEach(motif => { if(typeof motif.remove === "function"){motif.remove()} });
-
+					myInstance.motifs.forEach(motif => motif.remove());
+					
 					myInstance.sections = [];
 					myInstance.motifs = [];
 

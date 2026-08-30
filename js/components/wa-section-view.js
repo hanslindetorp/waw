@@ -26,6 +26,7 @@ import {
 import { findSrcAttribute, getSchemaSrcAttributeName, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
+import { playerStore } from "../waxml-integration/player-store.js";
 
 // DAW-style "arrange window" for the <Section> element type: transport bar, a
 // bars/beats ruler derived from the section's own tempo/timeSign, one lane per
@@ -570,11 +571,6 @@ template.innerHTML = `
 		}
 	</style>
 	<div class="transport">
-		<button class="tp-btn" data-action="start" title="Go to start">|◀</button>
-		<button class="tp-btn" data-action="rewind" title="Rewind" hidden>◀◀</button>
-		<button class="tp-btn tp-play" data-action="play" title="Play">▶</button>
-		<button class="tp-btn" data-action="stop" title="Stop">■</button>
-		<button class="tp-btn" data-action="forward" title="Fast forward" hidden>▶▶</button>
 		<span class="tp-position">1.1.00</span>
 		<span class="tp-info"></span>
 		<div class="zoom-controls">
@@ -620,7 +616,6 @@ export class WaSectionView extends HTMLElement {
 		this._emptyHint = this.shadowRoot.querySelector(".empty-hint");
 		this._positionEl = this.shadowRoot.querySelector(".tp-position");
 		this._infoEl = this.shadowRoot.querySelector(".tp-info");
-		this._playBtn = this.shadowRoot.querySelector('[data-action="play"]');
 
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
@@ -642,15 +637,10 @@ export class WaSectionView extends HTMLElement {
 		this._activeStingerTriggers = new Map(); // stingerId -> {triggerAudioTime, startOffsetSeconds, durationSeconds, el} — see _handleStingerDoubleClick
 
 		this._onKeyDown = this._onKeyDown.bind(this);
+		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 	}
 
 	connectedCallback() {
-		this.shadowRoot.querySelector('[data-action="play"]').addEventListener("click", () => this._handlePlay());
-		this.shadowRoot.querySelector('[data-action="stop"]').addEventListener("click", () => this._handleStop());
-		this.shadowRoot.querySelector('[data-action="start"]').addEventListener("click", () => this._handleGoToStart());
-		this.shadowRoot.querySelector('[data-action="rewind"]').addEventListener("click", () => this._handleSeekRelative(-1));
-		this.shadowRoot.querySelector('[data-action="forward"]').addEventListener("click", () => this._handleSeekRelative(1));
-
 		this.shadowRoot.querySelectorAll(".zoom-btn").forEach((btn) => {
 			btn.addEventListener("click", () => this._handleZoom(btn.dataset.zoom));
 		});
@@ -675,12 +665,14 @@ export class WaSectionView extends HTMLElement {
 
 		xmlStore.addEventListener("change", () => this._onStoreChange());
 		document.addEventListener("keydown", this._onKeyDown);
+		playerStore.addEventListener("change", this._onPlayerStoreChange);
 		this._onStoreChange();
 	}
 
 	disconnectedCallback() {
 		this._stopPositionLoop();
 		document.removeEventListener("keydown", this._onKeyDown);
+		playerStore.removeEventListener("change", this._onPlayerStoreChange);
 	}
 
 	// --- reacting to selection / edits ---
@@ -703,6 +695,16 @@ export class WaSectionView extends HTMLElement {
 			this._openSegmentIds.clear();
 			this._selectedIds.clear();
 			this._lastSectionId = selected.id;
+			// Arms the global player's PLAY button to target this Section —
+			// and, if it's already playing, immediately trigs this one too
+			// (browsing to a different Section mid-playback previews it live
+			// without stopping anything else), per Hans. Playback itself is
+			// entirely global now (see player-store.js) — this view only
+			// ever *reads* whether it's the current target, in
+			// _onPlayerStoreChange, never starts/stops anything itself.
+			if (selected.attributes.id) {
+				playerStore.setTriggerSelector(`[id='${selected.attributes.id}']`, selected.id);
+			}
 		}
 
 		if (!this._lastSectionId) return;
@@ -723,8 +725,14 @@ export class WaSectionView extends HTMLElement {
 		this._renderSection(node);
 	}
 
+	// Resets this view's own local playhead/visual state — does NOT touch
+	// global playback (see class doc): switching which Section is being
+	// *viewed* must never stop what's actually *playing*, per Hans.
 	_teardownActive() {
-		this._handleStop();
+		this._isPlaying = false;
+		this._stopPositionLoop();
+		this._activeStingerTriggers.forEach((entry) => entry.el?.remove());
+		this._activeStingerTriggers.clear();
 	}
 
 	// The Section this view is actually showing (see _onStoreChange above) —
@@ -739,22 +747,30 @@ export class WaSectionView extends HTMLElement {
 		return ops.findNodeById(xmlStore.root, this._lastSectionId);
 	}
 
-	// --- transport ---
+	// --- playback (driven by the global player-store, not owned here) ---
 
-	_handlePlay() {
-		const node = this._getActiveSectionNode();
-		if (!node || !xmlStore.root) return;
+	// Reacts to the shared player's Play/Stop/selector-target state — this
+	// view's own playhead only animates while *this* Section is the one
+	// actually being targeted, so navigating elsewhere in the player (or
+	// switching which Section it targets) correctly stops this view's own
+	// visualization without issuing any stop of its own.
+	_onPlayerStoreChange() {
+		const isThisSectionPlaying = playerStore.isPlaying && playerStore.activeSectionId === this._lastSectionId;
+		if (isThisSectionPlaying === this._isPlaying) return;
 
-		// No known seek API (see file header) — every Play starts the engine
-		// from its true beginning, so the visual cursor always resets to 0 too.
-		this._cursorTime = 0;
-		bridge.loadDocumentTargeting(xmlStore.root, node.id).then(() => {
-			bridge.play();
-			this._isPlaying = true;
-			this._playBtn.classList.add("active");
-			this._playStartAudioTime = bridge.audioContext.currentTime;
+		this._isPlaying = isThisSectionPlaying;
+		if (this._isPlaying) {
+			// No known seek API (see file header) — every trig starts the
+			// engine from its true beginning, so the visual cursor resets too.
+			this._cursorTime = 0;
+			this._playStartAudioTime = playerStore.audioContext.currentTime;
 			this._startPositionLoop();
-		});
+		} else {
+			this._stopPositionLoop();
+			this._updatePlayheadVisual();
+			this._activeStingerTriggers.forEach((entry) => entry.el?.remove());
+			this._activeStingerTriggers.clear();
+		}
 	}
 
 	_readEnginePosition() {
@@ -764,41 +780,6 @@ export class WaSectionView extends HTMLElement {
 			if (pos && Number.isFinite(pos.time)) return pos.time;
 		}
 		return null;
-	}
-
-	_handleStop() {
-		if (this._isPlaying) {
-			try {
-				bridge.stop();
-			} catch {
-				// waxml not loaded / nothing playing — fine, we're stopping anyway.
-			}
-		}
-		this._isPlaying = false;
-		this._playBtn.classList.remove("active");
-		this._stopPositionLoop();
-		this._updatePlayheadVisual();
-		// A triggered Stinger only "plays" for as long as the Section itself
-		// is — stopping the Section stops everything, so nothing should keep
-		// animating a pointer for content that's no longer sounding.
-		this._activeStingerTriggers.forEach((entry) => entry.el?.remove());
-		this._activeStingerTriggers.clear();
-	}
-
-	_handleGoToStart() {
-		this._handleStop();
-		this._cursorTime = 0;
-		this._updatePlayheadVisual();
-		this._updatePositionReadout();
-	}
-
-	_handleSeekRelative(direction) {
-		this._handleStop();
-		const node = this._getActiveSectionNode();
-		const step = node ? readSectionInfo(node).barDuration : 2;
-		this._cursorTime = Math.max(0, this._cursorTime + direction * step);
-		this._updatePlayheadVisual();
-		this._updatePositionReadout();
 	}
 
 	_handleZoom(kind) {
@@ -1041,9 +1022,14 @@ export class WaSectionView extends HTMLElement {
 
 		const totalRowsHeight = rowsPerLayer.reduce((sum, n) => sum + n * this._rowHeight, 0);
 		const dropZoneCount = layers.length + 1;
+		// With no Layers at all, the section's only dropzone is a full-height
+		// placeholder row (see _buildDropZone's isOnlyRow), not the usual
+		// thin DROPZONE_HEIGHT sliver — the playhead needs to span that too,
+		// or it ends up just a few pixels tall, per Hans.
+		const emptyRowExtraHeight = layers.length === 0 ? this._rowHeight - DROPZONE_HEIGHT : 0;
 		const playhead = document.createElement("div");
 		playhead.className = "playhead";
-		playhead.style.height = `${RULER_HEIGHT + totalRowsHeight + dropZoneCount * DROPZONE_HEIGHT}px`;
+		playhead.style.height = `${RULER_HEIGHT + totalRowsHeight + dropZoneCount * DROPZONE_HEIGHT + emptyRowExtraHeight}px`;
 		this._grid.appendChild(playhead);
 		this._playheadEl = playhead;
 
@@ -1114,6 +1100,10 @@ export class WaSectionView extends HTMLElement {
 		zone.style.minWidth = `${totalWidth}px`;
 		zone.style.height = `${isOnlyRow ? this._rowHeight : DROPZONE_HEIGHT}px`;
 
+		const ghost = document.createElement("div");
+		ghost.className = "segment-ghost";
+		zone.appendChild(ghost);
+
 		const isAcceptable = (types) => this._isFileDrag(types) || types.includes(OPTION_DRAG_TYPE);
 
 		zone.addEventListener("dragover", (e) => {
@@ -1121,35 +1111,64 @@ export class WaSectionView extends HTMLElement {
 			e.preventDefault();
 			e.dataTransfer.dropEffect = this._isFileDrag(e.dataTransfer.types) ? "copy" : "move";
 			zone.classList.add("drop-active");
+			const anchorSeconds = this._stingerAnchorDropSeconds(e, zone, info);
+			ghost.style.top = "2px";
+			ghost.style.height = `${zone.clientHeight - 4}px`;
+			ghost.style.left = `${this._timeToPx(anchorSeconds, info)}px`;
+			ghost.style.width = `${Math.max(this._ghostWidthSeconds(info) * this._pxPerSecond, 4)}px`;
+			ghost.style.display = "block";
 		});
 		zone.addEventListener("dragleave", (e) => {
 			if (e.target !== zone) return;
 			zone.classList.remove("drop-active");
+			this._hideGhost(ghost);
 		});
 		zone.addEventListener("drop", async (e) => {
 			const types = e.dataTransfer.types;
 			if (!isAcceptable(types)) return;
 			e.preventDefault();
 			zone.classList.remove("drop-active");
+			this._hideGhost(ghost);
+			// A brand-new Stinger has no anchor yet — so unlike dropping onto
+			// an *existing* Stinger's lane (which sets the new content's own
+			// pos, leaving that Stinger's own anchor alone), here the anchor
+			// itself is what should land at the drop point (its own
+			// quantize), with no pos offset needed at all — "ljudfilen med
+			// anchor ska hamna där man släpper", per Hans.
+			const anchorSeconds = this._stingerAnchorDropSeconds(e, zone, info);
+			const quantizeString = secondsToQuantizeString(anchorSeconds, info, this._effectiveGridBeats(info));
 
 			if (this._isFileDrag(types)) {
 				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
 				if (!fileId) return;
 				const fileNode = vfs.getNode(fileId);
 				if (!fileNode || fileNode.type !== "file") return;
-				const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", {});
+				const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { quantize: quantizeString });
 				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id) });
 				return;
 			}
 
 			const draggedOptionId = e.dataTransfer.getData(OPTION_DRAG_TYPE);
 			if (!draggedOptionId) return;
-			const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", {});
+			const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { quantize: quantizeString });
 			xmlStore.reparentNode(draggedOptionId, stinger.id);
 			this._stripPos(draggedOptionId);
 		});
 
 		return zone;
+	}
+
+	// Grid-snapped, bar-0-floored absolute position for a Stinger's own
+	// anchor at this cursor position — same snap+clamp rule
+	// _wireStingerDrag's own onMove applies when dragging an *existing*
+	// anchor, used here so dropping a file to create a brand-new Stinger
+	// lands its anchor exactly where dropped (see _buildStingerEmptyDropzone).
+	_stingerAnchorDropSeconds(e, referenceEl, info) {
+		const rect = referenceEl.getBoundingClientRect();
+		const rawSeconds = this._pxToTime(e.clientX - rect.left + referenceEl.scrollLeft, info);
+		const gridBeats = this._effectiveGridBeats(info);
+		const beatCount = gridBeats ? Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats : rawSeconds / info.beatDuration;
+		return Math.max(-info.barDuration, beatCount * info.beatDuration);
 	}
 
 	// A Stinger lane: a bare src renders like a bare Layer src (one
@@ -1208,11 +1227,15 @@ export class WaSectionView extends HTMLElement {
 				});
 			},
 			content ? [content] : [],
-			(committedSeconds) => this._updateStingerQuantizeGuides(lane, info, committedSeconds)
+			(committedSeconds) => this._updateStingerQuantizeGuides(lane, info, committedSeconds),
+			-info.barDuration // a Stinger can't be dragged left of bar 0, per Hans
 		);
 		lane.appendChild(anchor);
 
-		this._wireStingerLaneDropTarget(lane, stinger, info);
+		const ghost = document.createElement("div");
+		ghost.className = "segment-ghost";
+		lane.appendChild(ghost);
+		this._wireStingerLaneDropTarget(lane, stinger, info, ghost, basePos);
 
 		// Live position pointer for this Stinger, only present while it's
 		// actually been triggered (double-click) during playback — see
@@ -1297,13 +1320,13 @@ export class WaSectionView extends HTMLElement {
 	// A Stinger's lane background (not its own bare-src canvas or with-
 	// Options box, both handled separately): a dropped file adds a new
 	// <Option src="..."/> as a direct child — no <Segment> wrapper, since a
-	// Stinger's schema doesn't have one — landing at pos=0 (right at the
-	// Stinger's own resolved position); a dragged Option gets reparented in
-	// the same way, losing its own old pos for the same reason a drop into a
-	// brand-new Segment does elsewhere. Unlike a Layer's lane drop, this
-	// doesn't need a ghost preview or a computed drop position — a Stinger's
-	// timeline is governed by quantize/anchor, not by where you drop.
-	_wireStingerLaneDropTarget(lane, stinger, info) {
+	// Stinger's schema doesn't have one — landing at whatever `pos` the
+	// cursor's own (grid-snapped) horizontal position resolves to, relative
+	// to the Stinger's own anchor (basePos) — same idea as a Layer's lane
+	// drop, just anchor-relative instead of absolute (see
+	// _stingerDropPositionString). A dragged Option gets reparented and its
+	// own `pos` rewritten the same way.
+	_wireStingerLaneDropTarget(lane, stinger, info, ghost, basePos) {
 		const isAcceptable = (types) => this._isFileDrag(types) || types.includes(OPTION_DRAG_TYPE);
 
 		lane.addEventListener("dragover", (e) => {
@@ -1311,31 +1334,44 @@ export class WaSectionView extends HTMLElement {
 			if (!isAcceptable(types)) return;
 			e.preventDefault();
 			e.dataTransfer.dropEffect = this._isFileDrag(types) ? "copy" : "move";
-			lane.classList.add("drop-active");
+			// No lane-wide drop-active outline here — the ghost below already
+			// shows exactly where the drop will land, so a second dashed box
+			// around the whole track on top of it was just noise, per Hans.
+			if (ghost) {
+				const posString = this._stingerDropPositionString(e, lane, basePos, info);
+				const dropAbsSeconds = basePos + parsePosition(posString, info);
+				ghost.style.top = "2px";
+				ghost.style.height = `${lane.clientHeight - 4}px`;
+				ghost.style.left = `${this._timeToPx(dropAbsSeconds, info)}px`;
+				ghost.style.width = `${Math.max(this._ghostWidthSeconds(info) * this._pxPerSecond, 4)}px`;
+				ghost.style.display = "block";
+			}
 		});
 		lane.addEventListener("dragleave", (e) => {
 			if (e.target !== lane) return;
-			lane.classList.remove("drop-active");
+			this._hideGhost(ghost);
 		});
 		lane.addEventListener("drop", async (e) => {
 			const types = e.dataTransfer.types;
 			if (!isAcceptable(types)) return;
 			e.preventDefault();
-			lane.classList.remove("drop-active");
+			this._hideGhost(ghost);
+			const posString = this._stingerDropPositionString(e, lane, basePos, info);
 
 			if (this._isFileDrag(types)) {
 				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
 				if (!fileId) return;
 				const fileNode = vfs.getNode(fileId);
 				if (!fileNode || fileNode.type !== "file") return;
-				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id) });
+				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id), pos: posString });
 				return;
 			}
 
 			const draggedOptionId = e.dataTransfer.getData(OPTION_DRAG_TYPE);
 			if (!draggedOptionId || draggedOptionId === stinger.id) return;
 			xmlStore.reparentNode(draggedOptionId, stinger.id);
-			this._stripPos(draggedOptionId);
+			const nodeNow = ops.findNodeById(xmlStore.root, draggedOptionId);
+			if (nodeNow) xmlStore.updateAttributes(draggedOptionId, { ...nodeNow.attributes, pos: posString });
 		});
 	}
 
@@ -1353,13 +1389,29 @@ export class WaSectionView extends HTMLElement {
 	// per Hans), from the current scroll position out to the visible
 	// viewport's right edge. committedSeconds === null (drag not active, or
 	// just ended) clears them.
+	//
+	// A pointermove fires far more often than the grid-snapped
+	// committedSeconds actually changes — most calls during a drag land on
+	// the exact same quantize duration as the previous one. Rebuilding up to
+	// MAX_GUIDES DOM nodes on every single one of those was the cause of the
+	// sluggish anchor-drag response Hans reported; skipping the rebuild
+	// whenever the duration hasn't actually changed fixes it without
+	// changing what gets drawn.
 	_updateStingerQuantizeGuides(lane, info, committedSeconds) {
-		(lane._quantizeGuideEls || []).forEach((el) => el.remove());
-		lane._quantizeGuideEls = [];
-		if (committedSeconds === null) return;
+		if (committedSeconds === null) {
+			(lane._quantizeGuideEls || []).forEach((el) => el.remove());
+			lane._quantizeGuideEls = [];
+			lane._lastGuideQuantizeDuration = undefined;
+			return;
+		}
 
 		const quantizeDurationSeconds = committedSeconds + info.barDuration;
 		if (!(quantizeDurationSeconds > 0) || !Number.isFinite(quantizeDurationSeconds)) return;
+		if (lane._lastGuideQuantizeDuration === quantizeDurationSeconds) return;
+		lane._lastGuideQuantizeDuration = quantizeDurationSeconds;
+
+		(lane._quantizeGuideEls || []).forEach((el) => el.remove());
+		lane._quantizeGuideEls = [];
 
 		const scrollLeftPx = this._stingerScroll ? this._stingerScroll.scrollLeft : 0;
 		const viewportWidthPx = this._stingerScroll ? this._stingerScroll.clientWidth : lane.clientWidth;
@@ -1467,7 +1519,12 @@ export class WaSectionView extends HTMLElement {
 	// the Stinger's own anchor uses this (to draw the quantize guide lines
 	// while its being dragged, see _buildStingerLane); a plain content drag
 	// or an Option's own anchor-relative drag has no use for it.
-	_wireStingerDrag(el, info, startAbsSeconds, onCommit, followerEls = [], onLiveMove = null) {
+	//
+	// minAbsSeconds (optional): floors the live/committed position — used by
+	// the Stinger's own anchor so it can't be dragged left of bar 0, per
+	// Hans (content-relative-to-anchor drags don't get this floor, since
+	// content legitimately starts before its own anchor, e.g. a leadin).
+	_wireStingerDrag(el, info, startAbsSeconds, onCommit, followerEls = [], onLiveMove = null, minAbsSeconds = -Infinity) {
 		el.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			// A nested Option's own drag target sits inside the Stinger's own
@@ -1497,7 +1554,7 @@ export class WaSectionView extends HTMLElement {
 				const rawSeconds = startAbsSeconds + deltaPx / this._pxPerSecond;
 				const gridBeats = this._effectiveGridBeats(info);
 				const beatCount = gridBeats ? Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats : rawSeconds / info.beatDuration;
-				committedSeconds = beatCount * info.beatDuration;
+				committedSeconds = Math.max(minAbsSeconds, beatCount * info.beatDuration);
 				const visualDeltaPx = (committedSeconds - startAbsSeconds) * this._pxPerSecond;
 				el.style.left = `${startLeftPx + visualDeltaPx}px`;
 				followerEls.forEach((f, i) => {
@@ -2266,6 +2323,21 @@ export class WaSectionView extends HTMLElement {
 		});
 	}
 
+	// Like _dropPositionString, but for a drop onto a Stinger's own row: the
+	// resulting `pos` is relative to anchorSeconds (the Stinger's own
+	// resolved position, e.g. basePos for an existing Stinger) rather than
+	// an absolute Section-timeline position — matching how an Option's own
+	// pos already stacks on top of its Stinger's anchor everywhere else in
+	// this file. Unlike _dropPositionString there's no grab-offset case
+	// (nothing is ever "re-grabbed" mid-drop here) and no pre-roll clamp —
+	// a Stinger's own pos legitimately extends earlier than its anchor
+	// (e.g. a leadin), so nothing here should cut that off.
+	_stingerDropPositionString(e, referenceEl, anchorSeconds, info) {
+		const rect = referenceEl.getBoundingClientRect();
+		const rawSeconds = this._pxToTime(e.clientX - rect.left + referenceEl.scrollLeft, info);
+		return secondsToPosString(rawSeconds - anchorSeconds, info, this._effectiveGridBeats(info));
+	}
+
 	_dropPositionString(e, referenceEl, info) {
 		const rect = referenceEl.getBoundingClientRect();
 		// Repositioning an existing Option/Segment (this._dragState set) keeps
@@ -2385,23 +2457,31 @@ export class WaSectionView extends HTMLElement {
 	// barely-visible sliver the way the above/between strips do.
 	_buildDropZone(sectionNode, layers, zoneIndex, info, totalWidth, filler) {
 		const isLast = zoneIndex === layers.length;
+		// The section's very first (only) row reserves full row height
+		// permanently, not just while something's being dragged over it —
+		// same reserved-space rule as the Stinger area's own empty state
+		// (see _buildStingerEmptyDropzone), per Hans.
+		const isOnlyRow = isLast && layers.length === 0;
 		const zone = document.createElement("div");
-		zone.className = "dropzone";
+		zone.className = isOnlyRow ? "dropzone preview-layer" : "dropzone";
 		zone.style.minWidth = `${totalWidth}px`;
+		zone.style.height = `${isOnlyRow ? this._rowHeight : DROPZONE_HEIGHT}px`;
 
 		const ghost = document.createElement("div");
 		ghost.className = "segment-ghost";
 		zone.appendChild(ghost);
 
 		if (isLast) filler.textContent = "Layer";
+		if (isOnlyRow) filler.classList.add("preview-layer");
 
 		const isAcceptable = (types) => this._isFileDrag(types) || types.includes(OPTION_DRAG_TYPE) || types.includes(SEGMENT_DRAG_TYPE);
 
 		const setPreviewLayerActive = (active) => {
 			if (!isLast) return;
-			zone.classList.toggle("preview-layer", active);
-			filler.classList.toggle("preview-layer", active);
-			zone.style.height = `${active ? this._rowHeight : DROPZONE_HEIGHT}px`;
+			const expanded = active || isOnlyRow;
+			zone.classList.toggle("preview-layer", expanded);
+			filler.classList.toggle("preview-layer", expanded);
+			zone.style.height = `${expanded ? this._rowHeight : DROPZONE_HEIGHT}px`;
 		};
 
 		zone.addEventListener("dragover", (e) => {

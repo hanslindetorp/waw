@@ -32,23 +32,28 @@ class XmlStore extends EventTarget {
 
 	// --- schema ---
 
+	// structural=false on all three below: none of these ever change the
+	// XML document's own shape (selection/schema aren't document content at
+	// all) — without this, player-store.js would incorrectly treat every
+	// tree/Inspector click as if it could invalidate the live audio graph
+	// and stop playback just from browsing around.
 	setSchema(schema, fileName) {
 		this.schema = schema;
 		this.schemaFileName = fileName || "";
-		this._emit();
+		this._emit(false);
 	}
 
 	clearSchema() {
 		this.schema = null;
 		this.schemaFileName = "";
-		this._emit();
+		this._emit(false);
 	}
 
 	// --- selection ---
 
 	selectNode(id) {
 		this.selectedNodeId = id;
-		this._emit();
+		this._emit(false);
 	}
 
 	getSelectedNode() {
@@ -135,16 +140,22 @@ copyNode(nodeId) {
 		this._syncCode();
 	}
 
+	// structural=false: an attribute value changing never adds/removes/
+	// reorders a node, so it can never change what a live waxml audio graph
+	// needs to look like — only *what value* a node's live setter should be
+	// given (see player-store.js, which listens for exactly this flag to
+	// decide whether a live edit can be applied via a direct setter, or
+	// needs the whole engine graph stopped and rebuilt).
 	updateAttributes(nodeId, attributes) {
 		if (!this.root) return;
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
-		this._syncCode();
+		this._syncCode(false);
 	}
 
 	renameSrcReferences(oldPath, newPath) {
 		if (!this.root) return;
 		this.root = ops.renameSrcReferences(this.root, this.schema, oldPath, newPath);
-		this._syncCode();
+		this._syncCode(false);
 	}
 
 	updateTagName(nodeId, tagName) {
@@ -185,7 +196,12 @@ copyNode(nodeId) {
 		this._emit();
 	}
 
-	_syncCode() {
+	// structural (default true — the safe default, since under-flagging a
+	// real structural change is a worse bug than an occasional unnecessary
+	// engine stop): whether this edit could have changed the *shape* the
+	// live waxml audio graph needs (nodes added/removed/reordered/retyped),
+	// as opposed to just a value on an already-existing node.
+	_syncCode(structural = true) {
 		if (this.root) {
 			this.root = ops.backfillElementIds(this.root, this._idCounters);
 			const { xml, lineMap } = ops.generateFullXmlWithLineMap(this.root);
@@ -195,11 +211,11 @@ copyNode(nodeId) {
 			this.codeValue = EMPTY_XML;
 			this.lineMap = new Map();
 		}
-		this._emit();
+		this._emit(structural);
 	}
 
-	_emit() {
-		this.dispatchEvent(new CustomEvent("change"));
+	_emit(structural = true) {
+		this.dispatchEvent(new CustomEvent("change", { detail: { structural } }));
 	}
 }
 
