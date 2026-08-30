@@ -741,6 +741,22 @@ template.innerHTML = `
 			border-radius: 3px;
 			padding: 0 0.2rem;
 		}
+		/* Same box as .channel-label, swapped in on double-click (see
+		   _startChannelLabelEdit) — an actual <input> instead of a <div>. */
+		.channel-label-input {
+			height: ${CHANNEL_LABEL_HEIGHT}px;
+			margin-top: ${CHANNEL_LABEL_MARGIN_TOP}px;
+			box-sizing: border-box;
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.65rem;
+			text-align: center;
+			width: 100%;
+			color: #e8ecef;
+			background: #1a1c1f;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			border-radius: 3px;
+			padding: 0 0.2rem;
+		}
 		.channel-label-row-spacer {
 			height: ${CHANNEL_LABEL_MARGIN_TOP + CHANNEL_LABEL_HEIGHT}px;
 		}
@@ -1020,6 +1036,7 @@ export class WaMixerView extends HTMLElement {
 		super();
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
+		this._mixerRoot = this.shadowRoot.querySelector(".mixer");
 		this._channels = this.shadowRoot.querySelector(".channels");
 		this._channelsScroll = this.shadowRoot.querySelector(".channels-scroll");
 		this._mixerBody = this.shadowRoot.querySelector(".mixer-body");
@@ -1082,6 +1099,15 @@ export class WaMixerView extends HTMLElement {
 		// channels are visible without firing a "scroll" event.
 		this._resizeObserver = new ResizeObserver(() => this._updateSoloSliderGeometry());
 		this._resizeObserver.observe(this._mixerBody);
+		// Anything within a channel strip (or the add-channel-strip, or a
+		// filter-type/channel-type menu option) already stops its own click
+		// from bubbling this far — see _wireStripSelect and friends — so this
+		// only ever fires for a click on genuine background: row-labels, the
+		// gaps around strips, the bottom-row area. Selects <Mixer> itself,
+		// per Hans.
+		this._mixerRoot.addEventListener("click", () => {
+			if (this._activeMixerId) xmlStore.selectNode(this._activeMixerId);
+		});
 		this._onStoreChange();
 		this._onPlayerStoreChange();
 	}
@@ -1701,6 +1727,7 @@ export class WaMixerView extends HTMLElement {
 		if (!mixerNow) return;
 		const nextNum = this._nextChannelId(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: `MixChan-${nextNum}` });
+		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first, per Hans (same as Full Channel Strip)
 		xmlStore.insertNewChild(chain.id, "StereoPannerNode", {});
 		xmlStore.insertNewChild(chain.id, "GainNode", {});
 	}
@@ -1833,12 +1860,85 @@ export class WaMixerView extends HTMLElement {
 		return btn;
 	}
 
-	// Clicking anywhere on a channel strip's own background (not a control
-	// inside it — those all stopPropagation on their own click/pointerdown)
-	// selects that channel's node, which also drives the highlighted-ring
-	// visual via the "selected" class checked in _buildChannelStrip.
+	// Clicking anywhere on a channel strip selects that channel's node
+	// (drives the highlighted-ring visual via the "selected" class in
+	// _buildChannelStrip) — UNLESS the click landed on an actual control
+	// (knob, fader, button, select, text input, insert/send slot), per
+	// Hans: using a control should never also (re)select the strip out
+	// from under it. Every click here stops propagation regardless, so it
+	// never reaches the Mixer-background click-to-select-<Mixer> handler
+	// either (see connectedCallback) — a click inside a channel strip is
+	// always this strip's own business, control or not.
 	_wireStripSelect(strip, child) {
-		strip.addEventListener("click", () => xmlStore.selectNode(child.id));
+		strip.addEventListener("click", (e) => {
+			e.stopPropagation();
+			if (e.target.closest("button, select, input, .knob, .fader-handle, .insert-slot")) return;
+			xmlStore.selectNode(child.id);
+		});
+	}
+
+	// The channel-label row, shared by all three channel-strip shapes
+	// (VU-only, "other node", full Chain) — double-click (per Hans) swaps
+	// it for an inline text field that writes to `child`'s own "label"
+	// attribute (child is always the Mixer's direct child: a bare
+	// <GainNode> or a <Chain>). displayLabel() already prefers `label`
+	// over `id` everywhere a channel's name is shown, so this is the one
+	// place that attribute actually gets set.
+	_buildChannelLabel(child) {
+		const label = document.createElement("div");
+		label.className = "channel-label";
+		label.textContent = displayLabel(child);
+		label.title = child.attributes.id || "";
+		label.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			this._startChannelLabelEdit(label, child);
+		});
+		return label;
+	}
+
+	_startChannelLabelEdit(label, child) {
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "channel-label-input";
+		input.value = child.attributes.label || "";
+		input.placeholder = child.attributes.id || child.tagName;
+		label.replaceWith(input);
+		input.focus();
+		input.select();
+
+		// Same commit/revert shape as wa-node-inspector.js's own tag-name
+		// rename field: Enter/blur commit, Escape reverts — guarded against
+		// double-firing since blur fires right after Enter's own commit too.
+		let committed = false;
+		const commit = () => {
+			if (committed) return;
+			committed = true;
+			const value = input.value.trim();
+			if (value !== (child.attributes.label || "")) {
+				const nodeNow = ops.findNodeById(xmlStore.root, child.id);
+				if (nodeNow) {
+					const attrs = { ...nodeNow.attributes };
+					if (value) attrs.label = value;
+					else delete attrs.label;
+					xmlStore.updateAttributes(nodeNow.id, attrs);
+					return; // the resulting re-render replaces this input for us
+				}
+			}
+			input.replaceWith(this._buildChannelLabel(child));
+		};
+		input.addEventListener("keydown", (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commit();
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				committed = true;
+				input.replaceWith(this._buildChannelLabel(child));
+			}
+		});
+		input.addEventListener("blur", commit);
+		input.addEventListener("click", (e) => e.stopPropagation());
 	}
 
 	// Bare <GainNode> direct child of <Mixer> — the "VU" channel type: shows
@@ -1877,11 +1977,7 @@ export class WaMixerView extends HTMLElement {
 		faderRow.appendChild(vuMeter);
 		bottomGroup.appendChild(faderRow);
 
-		const label = document.createElement("div");
-		label.className = "channel-label";
-		label.textContent = displayLabel(child);
-		label.title = child.attributes.id || "";
-		bottomGroup.appendChild(label);
+		bottomGroup.appendChild(this._buildChannelLabel(child));
 
 		strip.appendChild(bottomGroup);
 		return strip;
@@ -1926,10 +2022,7 @@ export class WaMixerView extends HTMLElement {
 			faderRow.style.height = `${FADER_ROW_HEIGHT}px`;
 			bottomGroup.appendChild(faderRow);
 
-			const label = document.createElement("div");
-			label.className = "channel-label";
-			label.textContent = displayLabel(child);
-			bottomGroup.appendChild(label);
+			bottomGroup.appendChild(this._buildChannelLabel(child));
 
 			strip.appendChild(bottomGroup);
 			return strip;
@@ -1967,11 +2060,7 @@ export class WaMixerView extends HTMLElement {
 		faderRow.appendChild(this._buildFader(roles.gainNode, child.id));
 		bottomGroup.appendChild(faderRow);
 
-		const label = document.createElement("div");
-		label.className = "channel-label";
-		label.textContent = displayLabel(child);
-		label.title = child.attributes.id || "";
-		bottomGroup.appendChild(label);
+		bottomGroup.appendChild(this._buildChannelLabel(child));
 
 		strip.appendChild(bottomGroup);
 
