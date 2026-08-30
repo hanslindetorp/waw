@@ -1,4 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
+import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
@@ -24,9 +25,22 @@ const COMPOSITION_CONTEXT_TAGS = new Set(["Layer", "Segment", "Option", "Stinger
 // is already showing shouldn't yank the panel away to a bare attribute
 // list. Also covers xmlStore.insertNewChild's own side effect of moving
 // the global selection to whatever it just created (e.g. clicking a
-// channel strip's "+ add insert" button selects the new <Wam>) — without
-// this, every "+" click in wa-mixer-view would otherwise hide it instantly.
-const MIXER_CONTEXT_TAGS = new Set(["Chain", "Send", "Wam", "GainNode", "BiquadFilterNode", "StereoPannerNode"]);
+// channel strip's "+ add insert" button selects the new <Wam>), and
+// xmlStore.removeNode's own "select the parent" behavior on delete —
+// without this, every "+" click, or every Backspace on a channel-strip
+// element, would otherwise hide the mixer view instantly. Walks the real
+// tree (rather than an enumerated tag whitelist) so it stays correct for
+// any element type nested under a Mixer, present or future, per Hans.
+function isDescendantOfTag(node, tagName) {
+	let cur = node;
+	while (cur && cur.parent) {
+		const parent = findNodeById(xmlStore.root, cur.parent);
+		if (!parent) return false;
+		if (parent.tagName === tagName) return true;
+		cur = parent;
+	}
+	return false;
+}
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -203,8 +217,8 @@ export class WaPreview extends HTMLElement {
 		}
 
 		// Same idea as the Section carve-out above, for a Mixer's own
-		// descendants — see MIXER_CONTEXT_TAGS.
-		if (MIXER_CONTEXT_TAGS.has(node.tagName) && this._activeState === "mixer") {
+		// descendants — see isDescendantOfTag.
+		if (this._activeState === "mixer" && isDescendantOfTag(node, "Mixer")) {
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;

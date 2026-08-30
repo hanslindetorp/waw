@@ -530,6 +530,39 @@ template.innerHTML = `
 			white-space: nowrap;
 			z-index: 1;
 		}
+		/* One small tag per <Command> child of a Layer/Segment/Option/Stinger —
+		   the only representation Command elements get in this view, per Hans
+		   (previously none at all). Plain flex row by default (fits inline
+		   into .layer-label's own flex row); absolutely positioned only when
+		   nested inside a .timed-box, which is itself position:absolute. */
+		.command-marks {
+			display: flex;
+			align-items: center;
+			gap: 2px;
+			flex: 0 0 auto;
+		}
+		.timed-box .command-marks {
+			position: absolute;
+			bottom: 1px;
+			right: 2px;
+			z-index: 2;
+		}
+		.command-mark {
+			width: 7px;
+			height: 7px;
+			border-radius: 2px;
+			background: #e8d34d;
+			border: 1px solid #7a6a10;
+			cursor: pointer;
+			flex: 0 0 auto;
+		}
+		.command-mark:hover {
+			border-color: var(--waw-accent, #4fa3ff);
+		}
+		.command-mark.selected {
+			outline: 1px solid var(--waw-fg, #e8e8e8);
+			outline-offset: 1px;
+		}
 		.nested-option {
 			position: absolute;
 			border-top: 1px solid rgba(69, 181, 140, 0.6);
@@ -633,6 +666,7 @@ export class WaSectionView extends HTMLElement {
 		this._maxDecodedEnd = 0; // seconds; grows monotonically as bare-layer srcs decode
 		this._openSegmentIds = new Set();
 		this._selectedIds = new Set(); // multi-select for bulk delete (Layer/Segment/Option ids)
+		this._lastSelfSelectedId = null; // see _onStoreChange's external-selection sync
 		this._dragState = null; // {kind, nodeId, grabOffsetSeconds} for an in-progress Option/Segment drag — set at dragstart since dataTransfer.getData() isn't readable until drop; grabOffsetSeconds is where within the box the drag started, so the box keeps that same offset from the cursor instead of snapping its left edge under it
 		this._activeStingerTriggers = new Map(); // stingerId -> {triggerAudioTime, startOffsetSeconds, durationSeconds, el} — see _handleStingerDoubleClick
 
@@ -695,6 +729,7 @@ export class WaSectionView extends HTMLElement {
 			this._openSegmentIds.clear();
 			this._selectedIds.clear();
 			this._lastSectionId = selected.id;
+			this._lastSelfSelectedId = null;
 			// Arms the global player's PLAY button to target this Section —
 			// and, if it's already playing, immediately trigs this one too
 			// (browsing to a different Section mid-playback previews it live
@@ -722,7 +757,40 @@ export class WaSectionView extends HTMLElement {
 			return;
 		}
 
+		// Keep this view's own box highlighting in sync with a selection made
+		// *elsewhere* (the XML tree, the Code panel) — clicking a box *inside*
+		// this view (_handleItemClick) pre-announces its own id via
+		// _lastSelfSelectedId before calling xmlStore.selectNode, so this only
+		// reacts to genuinely external selection changes, never collapsing a
+		// ctrl/cmd multi-select the user just built up by clicking boxes here.
+		const selectedId = selected ? selected.id : null;
+		if (selectedId !== this._lastSelfSelectedId) {
+			if (selected && this._isNodeWithinSection(selected, node)) {
+				this._selectedIds = new Set([selected.id]);
+			} else if (this._selectedIds.size) {
+				this._selectedIds.clear();
+			}
+			this._lastSelfSelectedId = selectedId;
+		}
+
 		this._renderSection(node);
+		this._updateSelectionHighlight();
+	}
+
+	// Walks up from `node` to see whether it's `sectionNode` itself or nested
+	// somewhere inside it — used to decide whether an externally-made
+	// selection (tree/Code panel) is something this view should highlight at
+	// all, versus a node that belongs to a completely different part of the
+	// document (e.g. a Mixer channel).
+	_isNodeWithinSection(node, sectionNode) {
+		if (!sectionNode) return false;
+		let cur = node;
+		while (cur) {
+			if (cur.id === sectionNode.id) return true;
+			if (!cur.parent) return false;
+			cur = ops.findNodeById(xmlStore.root, cur.parent);
+		}
+		return false;
 	}
 
 	// Resets this view's own local playhead/visual state — does NOT touch
@@ -945,6 +1013,11 @@ export class WaSectionView extends HTMLElement {
 		} else {
 			this._selectedIds = new Set([id]);
 		}
+		// Set before selectNode: xmlStore.selectNode dispatches its "change"
+		// event synchronously, so _onStoreChange's external-selection sync
+		// runs before this call returns — pre-announcing the id here is what
+		// tells it "this change came from me, don't resync/collapse it".
+		this._lastSelfSelectedId = id;
 		xmlStore.selectNode(id);
 		this._updateSelectionHighlight();
 	}
@@ -1766,11 +1839,38 @@ export class WaSectionView extends HTMLElement {
 		label.dataset.nodeId = layer.id;
 		label.style.height = `${this._rowHeight * rowsNeeded}px`;
 		label.textContent = this._displayLabel(layer, "Layer");
+		const marks = this._buildCommandMarks(layer);
+		if (marks) label.appendChild(marks);
 		label.addEventListener("click", (e) => {
 			e.stopPropagation();
 			this._handleItemClick(layer.id, e);
 		});
 		return label;
+	}
+
+	// Small clickable tags for a node's own <Command> children — the only
+	// representation Command elements get anywhere in this view (they have no
+	// timeline span of their own to render as a box). Selecting one here just
+	// updates xmlStore's global selection like any other click; there's no
+	// dedicated Command editor in this view, only the shared Inspector.
+	_buildCommandMarks(node) {
+		const commands = node.children.filter((c) => c.tagName === "Command");
+		if (!commands.length) return null;
+		const wrap = document.createElement("div");
+		wrap.className = "command-marks";
+		commands.forEach((cmd) => {
+			const mark = document.createElement("span");
+			mark.className = "command-mark";
+			mark.dataset.nodeId = cmd.id;
+			mark.title = this._displayLabel(cmd, "Command");
+			mark.classList.toggle("selected", this._selectedIds.has(cmd.id));
+			mark.addEventListener("click", (e) => {
+				e.stopPropagation();
+				this._handleItemClick(cmd.id, e);
+			});
+			wrap.appendChild(mark);
+		});
+		return wrap;
 	}
 
 	// Non-looping layers render their content once, at offset 0, and are
@@ -2122,6 +2222,9 @@ export class WaSectionView extends HTMLElement {
 		label.className = "box-label";
 		label.textContent = this._displayLabel(node, kind);
 		box.appendChild(label);
+
+		const commandMarks = this._buildCommandMarks(node);
+		if (commandMarks) box.appendChild(commandMarks);
 
 		const applyWidth = (seconds) => {
 			box.style.width = `${Math.max(seconds * this._pxPerSecond, 4)}px`;

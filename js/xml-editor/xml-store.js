@@ -114,9 +114,17 @@ class XmlStore extends EventTarget {
 		return child;
 	}
 
+	// Selecting the parent (rather than clearing to nothing) on delete is
+	// deliberate: a view that only shows itself while something inside its
+	// own subtree is selected (Section preview, Mixer preview) would
+	// otherwise vanish out from under the user the moment they delete
+	// whatever they were just looking at.
 	removeNode(nodeId) {
 		if (!this.root) return;
-		if (this.selectedNodeId === nodeId) this.selectedNodeId = null;
+		if (this.selectedNodeId === nodeId) {
+			const node = ops.findNodeById(this.root, nodeId);
+			this.selectedNodeId = node?.parent ?? null;
+		}
 		this.root = ops.removeNode(this.root, nodeId);
 		this._syncCode();
 	}
