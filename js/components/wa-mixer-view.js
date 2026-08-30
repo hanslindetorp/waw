@@ -2,7 +2,14 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { applyLiveProperty, applyLiveMethodCall } from "../waxml-integration/live-property.js";
-import { linearRatioToDb } from "../waxml-integration/gain-units.js";
+import {
+	parseGainAttributeToDb,
+	formatGainAttribute,
+	EQ_GAIN_MIN_DB as EQ_MIN_DB,
+	EQ_GAIN_MAX_DB as EQ_MAX_DB,
+	FADER_GAIN_MIN_DB as FADER_MIN_DB,
+	FADER_GAIN_MAX_DB as FADER_MAX_DB
+} from "../waxml-integration/gain-units.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
@@ -16,30 +23,11 @@ import { linearRatioToDb } from "../waxml-integration/gain-units.js";
 // <Mixer> only ever appears at the document root or nested inside another
 // Mixer/Chain (schema doesn't allow it inside <Section>/<Composition>).
 
-// A GainNode/BiquadFilterNode's `gain` attribute (schema type "gain") is
-// either a 0-1 linear ratio or a "-XdB"/"XdB" string. We always *write* the
-// dB form (unambiguous for either node type), but need to *read* either
-// form back for knob/fader positioning.
-function gainToDb(rawValue) {
-	if (rawValue === undefined || rawValue === null || rawValue === "") return 0;
-	const str = String(rawValue).trim();
-	const dbMatch = /^(-?\d+(\.\d+)?)dB$/i.exec(str);
-	if (dbMatch) return parseFloat(dbMatch[1]);
-	const num = parseFloat(str);
-	if (Number.isFinite(num)) return linearRatioToDb(num);
-	return 0; // a mathExpression or unparseable value — fall back to unity for display
-}
-
-function dbToGainAttr(db) {
-	if (!(db > FADER_MIN_DB)) return "0";
-	return `${Math.round(db * 10) / 10}dB`;
-}
-
-// Mixer-specific floor on top of the shared, pure linearRatioToDb/its
-// inverse: below the fader's own -60dB convention-for-silence, snap to
-// exactly 0 rather than the tiny-but-nonzero value the raw log-taper math
-// would otherwise give (Math.pow(10, -60/20) = 0.001, not 0) — matches the
-// fader track's own "all the way down = true silence" semantics.
+// Mixer-specific floor on top of gain-units.js's own dB<->linear math:
+// below the fader's own -60dB convention-for-silence, snap to exactly 0
+// rather than the tiny-but-nonzero value the raw log-taper math would
+// otherwise give (Math.pow(10, -60/20) = 0.001, not 0) — matches the fader
+// track's own "all the way down = true silence" semantics.
 function dbToLinear(db) {
 	if (!(db > FADER_MIN_DB)) return 0;
 	return Math.pow(10, db / 20);
@@ -47,9 +35,10 @@ function dbToLinear(db) {
 
 // gain is special-cased: GainNode.gain is a linear multiplier, but
 // BiquadFilterNode.gain (and Send, which routes through its own bus) is
-// native dB already in Web Audio — same nuance as dbToGainAttr's own XML
-// string form, just resolved against the live AudioParam's own unit
-// instead of the schema's flexible "0-1 or XdB" attribute grammar.
+// native dB already in Web Audio — same nuance as formatGainAttribute's own
+// XML string form (gain-units.js), just resolved against the live
+// AudioParam's own unit instead of the schema's flexible "0-1 or XdB"
+// attribute grammar.
 function applyLiveGainDb(nodeId, db, isLinearGainNode) {
 	applyLiveProperty(nodeId, "gain", isLinearGainNode ? dbToLinear(db) : db);
 }
@@ -68,8 +57,8 @@ function displayLabel(node) {
 // Fader taper: 0dB sits at FADER_ZERO_DB_POS up the track (a typical mixer
 // convention — the top portion is a small +dB boost range, the much larger
 // bottom portion tapers down to silence), not a plain linear dB scale.
-const FADER_MAX_DB = 9;
-const FADER_MIN_DB = -60; // practical floor before snapping to true silence (gain="0")
+// FADER_MAX_DB/FADER_MIN_DB themselves come from gain-units.js (imported
+// above) — shared with wa-node-inspector.js's own generic gain slider.
 const FADER_ZERO_DB_POS = 0.75;
 const FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
 
@@ -122,8 +111,6 @@ function readQ(node) {
 	return Number.isFinite(num) ? Math.max(Q_MIN, Math.min(Q_MAX, num)) : 1;
 }
 
-const EQ_MIN_DB = -15;
-const EQ_MAX_DB = 15;
 const FADER_TRACK_HEIGHT = 150;
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range
 // Fixed, shared-across-all-channels section heights — each is set by
@@ -2267,21 +2254,31 @@ export class WaMixerView extends HTMLElement {
 		const { wrap, knob, dial } = this._buildKnobSkeleton("", 32);
 		knob.classList.add("knob-large", "knob-gain");
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, EQ_MIN_DB, EQ_MAX_DB);
-		applyVisual(gainToDb(node.attributes.gain));
-		knob.title = `${node.attributes.type || "filter"} gain`;
+		const startDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
+		applyVisual(startDb);
+		knob.title = "Gain";
 
 		this._wireVerticalDrag(
 			knob,
-			gainToDb(node.attributes.gain),
+			startDb,
 			EQ_MIN_DB,
 			EQ_MAX_DB,
 			(db) => {
 				applyVisual(db);
+				knob.title = `${db.toFixed(1)} dB`;
 				applyLiveGainDb(node.attributes.id, db, false); // BiquadFilterNode.gain is native dB
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, gain: dbToGainAttr(db) });
+				// BiquadFilterNode.gain is native dB in Web Audio, so its XML
+				// attribute stays a bare number (unit implied) — everything
+				// else gets an explicit "XdB" string, since a bare number
+				// there means the *linear* 0-1 ratio instead (formatGainAttribute
+				// draws this distinction by tag, per Hans).
+				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, gain: formatGainAttribute(node.tagName, db) });
 			},
-			() => {}
+			() => {
+				knob.title = "Gain";
+			},
+			0 // double-click resets to unity gain (0dB)
 		);
 
 		return wrap;
@@ -2296,7 +2293,12 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (t) => this._applyKnobRotation(dial, t, 0, 1);
 		const startT = freqToKnobT(readFrequency(node));
 		applyVisual(startT);
-		knob.title = `Freq ${Math.round(readFrequency(node))} Hz`;
+		knob.title = "Frequency";
+		// Same per-type frequency FILTER_TYPE_DEFAULT_FREQUENCY uses for a
+		// freshly-created filter (defaultFilterAttributes) — double-clicking
+		// resets to that same "sensible starting point", not just any fixed
+		// value.
+		const defaultFreq = FILTER_TYPE_DEFAULT_FREQUENCY[node.attributes.type] ?? 300;
 
 		this._wireVerticalDrag(
 			knob,
@@ -2305,12 +2307,15 @@ export class WaMixerView extends HTMLElement {
 			1,
 			(t) => {
 				applyVisual(t);
-				knob.title = `Freq ${Math.round(knobTToFreq(t))} Hz`;
+				knob.title = `${Math.round(knobTToFreq(t))} Hz`;
 				applyLiveProperty(node.attributes.id, "frequency", knobTToFreq(t));
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, frequency: String(Math.round(knobTToFreq(t))) });
 			},
-			() => {}
+			() => {
+				knob.title = "Frequency";
+			},
+			freqToKnobT(defaultFreq)
 		);
 
 		return wrap;
@@ -2321,7 +2326,7 @@ export class WaMixerView extends HTMLElement {
 		knob.classList.add("knob-small", "knob-q");
 		const applyVisual = (q) => this._applyKnobRotation(dial, q, Q_MIN, Q_MAX);
 		applyVisual(readQ(node));
-		knob.title = `Q ${readQ(node).toFixed(1)}`;
+		knob.title = "Q";
 
 		this._wireVerticalDrag(
 			knob,
@@ -2335,7 +2340,10 @@ export class WaMixerView extends HTMLElement {
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, Q: String(Math.round(q * 10) / 10) });
 			},
-			() => {}
+			() => {
+				knob.title = "Q";
+			},
+			0
 		);
 
 		return wrap;
@@ -2357,11 +2365,15 @@ export class WaMixerView extends HTMLElement {
 			1,
 			(pan) => {
 				applyVisual(pan);
+				knob.title = pan.toFixed(2);
 				applyLiveProperty(node.attributes.id, "pan", pan);
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, pan: String(Math.round(pan * 100) / 100) });
 			},
-			() => {}
+			() => {
+				knob.title = "Pan";
+			},
+			0
 		);
 
 		return wrap;
@@ -2442,7 +2454,11 @@ export class WaMixerView extends HTMLElement {
 	// since it's a linear track position the pointer follows directly
 	// rather than a relative drag delta, and needs the nonlinear dB<->
 	// position taper (see dbToFaderPosition/faderPositionToDb).
-	_wireVerticalDrag(el, startValue, min, max, onLiveChange, onCommit) {
+	//
+	// defaultValue (optional): if given, double-clicking the control resets
+	// it straight to that value — per Hans, the same quick "back to
+	// default" gesture for every drag-based control.
+	_wireVerticalDrag(el, startValue, min, max, onLiveChange, onCommit, defaultValue) {
 		el.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			e.preventDefault();
@@ -2469,6 +2485,15 @@ export class WaMixerView extends HTMLElement {
 			el.addEventListener("pointermove", onMove);
 			el.addEventListener("pointerup", onUp);
 		});
+
+		if (defaultValue !== undefined) {
+			el.addEventListener("dblclick", (e) => {
+				e.stopPropagation();
+				const clamped = Math.max(min, Math.min(max, defaultValue));
+				onLiveChange(clamped);
+				onCommit(clamped);
+			});
+		}
 	}
 
 	// --- fader (gain, dB, nonlinear taper) + VU meter ---
@@ -2528,9 +2553,21 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (db) => {
 			handle.style.bottom = `${dbToFaderPosition(db) * 100}%`;
 		};
-		let currentDb = gainToDb(gainNode.attributes.gain);
-		applyVisual(currentDb);
-		handle.title = Number.isFinite(currentDb) ? `${currentDb.toFixed(1)} dB` : "-∞ dB";
+		const startDb = parseGainAttributeToDb(gainNode.tagName, gainNode.attributes.gain);
+		applyVisual(startDb);
+		handle.title = "Volume";
+
+		const resetToDefault = () => {
+			applyVisual(0);
+			applyLiveGainDb(gainNode.attributes.id, 0, true);
+			const nodeNow = ops.findNodeById(xmlStore.root, gainNode.id);
+			if (nodeNow) this._commitAttributes(gainNode.id, { ...nodeNow.attributes, gain: formatGainAttribute(gainNode.tagName, 0) });
+			handle.title = "Volume";
+		};
+		handle.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			resetToDefault();
+		});
 
 		handle.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
@@ -2546,13 +2583,15 @@ export class WaMixerView extends HTMLElement {
 				const t = Math.max(0, Math.min(1, 1 - relY / trackRect.height));
 				const committedDb = faderPositionToDb(t);
 				applyVisual(committedDb);
+				handle.title = Number.isFinite(committedDb) ? `${committedDb.toFixed(1)} dB` : "-∞ dB";
 				applyLiveGainDb(gainNode.attributes.id, committedDb, true); // GainNode.gain is linear
 				const nodeNow = ops.findNodeById(xmlStore.root, gainNode.id);
-				if (nodeNow) this._commitAttributes(gainNode.id, { ...nodeNow.attributes, gain: dbToGainAttr(committedDb) });
+				if (nodeNow) this._commitAttributes(gainNode.id, { ...nodeNow.attributes, gain: formatGainAttribute(gainNode.tagName, committedDb) });
 			};
 			const onUp = () => {
 				handle.removeEventListener("pointermove", onMove);
 				handle.removeEventListener("pointerup", onUp);
+				handle.title = "Volume";
 			};
 			handle.addEventListener("pointermove", onMove);
 			handle.addEventListener("pointerup", onUp);
@@ -2622,20 +2661,25 @@ export class WaMixerView extends HTMLElement {
 
 		const { wrap: knobWrap, knob, dial } = this._buildKnobSkeleton("");
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, EQ_MIN_DB, EQ_MAX_DB);
-		applyVisual(gainToDb(send.attributes.gain));
-		knob.title = "Send level";
+		const startDb = parseGainAttributeToDb(send.tagName, send.attributes.gain);
+		applyVisual(startDb);
+		knob.title = "Send Level";
 		this._wireVerticalDrag(
 			knob,
-			gainToDb(send.attributes.gain),
+			startDb,
 			EQ_MIN_DB,
 			EQ_MAX_DB,
 			(db) => {
 				applyVisual(db);
+				knob.title = `${db.toFixed(1)} dB`;
 				applyLiveGainDb(send.attributes.id, db, true); // Send routes through a GainNode-based bus, linear like GainNode
 				const nodeNow = ops.findNodeById(xmlStore.root, send.id);
-				if (nodeNow) this._commitAttributes(send.id, { ...nodeNow.attributes, gain: dbToGainAttr(db) });
+				if (nodeNow) this._commitAttributes(send.id, { ...nodeNow.attributes, gain: formatGainAttribute(send.tagName, db) });
 			},
-			() => {}
+			() => {
+				knob.title = "Send Level";
+			},
+			0
 		);
 		row.appendChild(knobWrap);
 

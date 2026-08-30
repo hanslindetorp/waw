@@ -1727,7 +1727,7 @@ class AudioObject extends EventTarget{
         
       val *= (targets.length-1); // 0 - nr of children or channelCount
 
-      let crossFadeRange = this._params.blend || this._params.crossfaderange;
+      let crossFadeRange = this._params.blend ?? this._params.crossfaderange;
       if(typeof crossFadeRange != "undefined"){
         crossFadeRange = crossFadeRange.valueOf();
       } else {

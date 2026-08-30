@@ -1,7 +1,8 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
-import { getSmartRange, testPattern } from "../xml-editor/attribute-controls.js";
+import { testPattern } from "../xml-editor/attribute-controls.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
-import { linearRatioToDb } from "../waxml-integration/gain-units.js";
+import { parseGainAttributeToDb, isDbNativeGain, dbToLinearRatio } from "../waxml-integration/gain-units.js";
+import { getAttributeCurve } from "../xml-editor/attribute-curves.js";
 
 // Nudges the live audio graph (if currently playing and this node survived
 // into it) to match a value just edited here — same "also move the
@@ -10,17 +11,19 @@ import { linearRatioToDb } from "../waxml-integration/gain-units.js";
 // (see applyLiveProperty), so dragging *this* slider is just as live, per
 // Hans. Most attributes share their unit with the live Web Audio param
 // they drive, so the raw parsed number just passes straight through —
-// `gain` is the one that needs converting first: this attribute (and its
-// slider) is always the 0-1 linear-ratio form, but only some node types'
-// live gain param is natively linear (GainNode/Send) — a BiquadFilterNode's
-// is natively dB (see wa-mixer-view.js's own applyLiveGainDb, same rule).
+// `gain` is the one that needs converting first: the XML attribute is
+// either a 0-1 linear ratio or a "-XdB"/bare-number-dB string depending on
+// the node (see gain-units.js), but only some node types' *live* gain
+// param is natively linear (GainNode/Send) — a BiquadFilterNode's is
+// natively dB (see wa-mixer-view.js's own applyLiveGainDb, same rule).
 function applyLiveAttributeNudge(node, attrName, rawValue) {
-	const num = parseFloat(rawValue);
-	if (!Number.isFinite(num)) return; // a "-40dB"/mathExpression form, or non-numeric — no live nudge, XML stays authoritative
-	if (attrName === "gain" && node.tagName === "BiquadFilterNode") {
-		applyLiveProperty(node.attributes.id, "gain", linearRatioToDb(num));
+	if (attrName === "gain") {
+		const db = parseGainAttributeToDb(node.tagName, rawValue);
+		applyLiveProperty(node.attributes.id, "gain", isDbNativeGain(node.tagName) ? db : dbToLinearRatio(db));
 		return;
 	}
+	const num = parseFloat(rawValue);
+	if (!Number.isFinite(num)) return; // a mathExpression form, or non-numeric — no live nudge, XML stays authoritative
 	applyLiveProperty(node.attributes.id, attrName, num);
 }
 
@@ -112,9 +115,56 @@ template.innerHTML = `
 			flex: 1 1 auto;
 			min-width: 0;
 		}
+		/* Custom track/thumb (was bare browser-default styling, "Safari
+		   default" per Hans) — flat dark track, round accent-colored
+		   thumb, no native padding eating into the ends of its own travel
+		   so the thumb can actually reach both edges of the row. */
 		.attr-control input[type="range"] {
 			flex: 1 1 auto;
-			accent-color: var(--waw-accent, #4fa3ff);
+			min-width: 0;
+			-webkit-appearance: none;
+			appearance: none;
+			width: 100%;
+			height: 4px;
+			margin: 0;
+			padding: 0;
+			background: transparent;
+			cursor: pointer;
+		}
+		.attr-control input[type="range"]::-webkit-slider-runnable-track {
+			height: 4px;
+			border-radius: 2px;
+			background: #2a2d31;
+		}
+		.attr-control input[type="range"]::-moz-range-track {
+			height: 4px;
+			border-radius: 2px;
+			background: #2a2d31;
+		}
+		.attr-control input[type="range"]::-webkit-slider-thumb {
+			-webkit-appearance: none;
+			width: 13px;
+			height: 13px;
+			margin-top: -4.5px;
+			border-radius: 50%;
+			background: var(--waw-accent, #4fa3ff);
+			border: 2px solid #0b0c0d;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+		}
+		.attr-control input[type="range"]::-moz-range-thumb {
+			width: 13px;
+			height: 13px;
+			border-radius: 50%;
+			background: var(--waw-accent, #4fa3ff);
+			border: 2px solid #0b0c0d;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+		}
+		.attr-control input[type="range"]:hover::-webkit-slider-thumb {
+			filter: brightness(1.15);
+		}
+		.attr-control input[type="range"]:focus-visible {
+			outline: 2px solid var(--waw-accent, #4fa3ff);
+			outline-offset: 2px;
 		}
 		.num-value {
 			width: 4.5rem;
@@ -784,10 +834,20 @@ export class WaNodeInspector extends HTMLElement {
 		return frag;
 	}
 
+	// The slider's own position and the attribute's real value aren't
+	// necessarily the same number any more — see attribute-curves.js: gain
+	// drags in dB and writes a tag-appropriate string, frequency/time-like
+	// attributes drag logarithmically. curve.parse/format round-trip
+	// through the XML attribute's own string form; the number input always
+	// shows/edits the real value (Hz, dB, ms, ...), never the raw slider
+	// position.
 	_renderNumberControl(attrName, value, attrSchema, onChange) {
-		const range = getSmartRange(attrName, attrSchema.minValue, attrSchema.maxValue);
+		const node = xmlStore.getSelectedNode();
+		const curve = getAttributeCurve(attrName, node?.tagName, attrSchema.minValue, attrSchema.maxValue);
 		const hasValue = value !== undefined;
-		const numVal = hasValue && Number.isFinite(parseFloat(value)) ? parseFloat(value) : range.min;
+		const parsed = hasValue ? curve.parse(value) : NaN;
+		const isNumeric = Number.isFinite(parsed);
+		const realValue = isNumeric ? parsed : curve.positionToValue(curve.sliderMin);
 
 		const frag = document.createElement("div");
 		frag.style.display = "flex";
@@ -798,16 +858,16 @@ export class WaNodeInspector extends HTMLElement {
 
 		const slider = document.createElement("input");
 		slider.type = "range";
-		slider.min = range.min;
-		slider.max = range.max;
-		slider.step = range.step;
-		slider.value = Math.min(Math.max(numVal, range.min), range.max);
+		slider.min = curve.sliderMin;
+		slider.max = curve.sliderMax;
+		slider.step = curve.sliderStep;
+		slider.value = curve.valueToPosition(realValue);
 
 		const numberInput = document.createElement("input");
 		numberInput.type = "number";
 		numberInput.className = "num-value";
-		numberInput.step = range.step;
-		numberInput.value = value ?? "";
+		numberInput.step = curve.numberStep;
+		numberInput.value = isNumeric ? curve.displayRound(realValue) : "";
 
 		// Commits on every "input" tick (not just "change" at release), per
 		// Hans — safe here specifically because onChange sets _isLocalEdit
@@ -816,12 +876,14 @@ export class WaNodeInspector extends HTMLElement {
 		// preview, ...) still see every intermediate value via xmlStore's
 		// own "change" event, same as before.
 		slider.addEventListener("input", () => {
-			numberInput.value = slider.value;
-			onChange(slider.value);
+			const v = curve.positionToValue(parseFloat(slider.value));
+			numberInput.value = curve.displayRound(v);
+			onChange(curve.format(v));
 		});
 		numberInput.addEventListener("input", () => {
-			slider.value = numberInput.value;
-			onChange(numberInput.value);
+			const v = parseFloat(numberInput.value);
+			if (numberInput.value !== "" && Number.isFinite(v)) slider.value = curve.valueToPosition(v);
+			onChange(numberInput.value === "" ? "" : curve.format(v));
 		});
 
 		frag.appendChild(slider);
