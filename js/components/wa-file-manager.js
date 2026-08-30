@@ -2,6 +2,7 @@ import { vfs, ROOT_ID } from "../vfs/VFS.js";
 import { importZip } from "../vfs/zip-import.js";
 import { selection } from "../state/selection.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState } from "../vfs/drag-types.js";
+import { STATE_FILE_NAME } from "../project/workstation-state.js";
 
 const ACCEPTED = ".mp3,.wav,.ogg,.m4a,.xml,.zip";
 
@@ -239,13 +240,21 @@ export class WaFileManager extends HTMLElement {
 	render() {
 		this._tree.innerHTML = "";
 		this._tree.appendChild(this._renderChildren(ROOT_ID));
-		this._emptyHint.style.display = vfs.listFolder(ROOT_ID).length === 0 ? "" : "none";
+		this._emptyHint.style.display = this._visibleChildren(ROOT_ID).length === 0 ? "" : "none";
 		this._highlightSelection(selection.id);
+	}
+
+	// workstation-state.json lives at the project root like any other VFS
+	// file (so exportProjectAsZip's normal walk picks it up for free — see
+	// workstation-state.js) but per Hans users shouldn't see or touch it
+	// here: it's Workstation's own editor state, not project content.
+	_visibleChildren(folderId) {
+		return vfs.listFolder(folderId).filter((n) => !(folderId === ROOT_ID && n.name === STATE_FILE_NAME));
 	}
 
 	_renderChildren(folderId) {
 		const fragment = document.createDocumentFragment();
-		const children = [...vfs.listFolder(folderId)].sort((a, b) =>
+		const children = [...this._visibleChildren(folderId)].sort((a, b) =>
 			a.type === b.type ? a.name.localeCompare(b.name) : a.type === "folder" ? -1 : 1
 		);
 

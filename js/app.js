@@ -9,10 +9,12 @@ import "./components/wa-xml-code.js";
 import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
 import { createDefaultProject } from "./project/project-manager.js";
+import { registerPanels } from "./project/workstation-state.js";
 
 const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
 const DEFAULT_SCHEMA_NAME = "waxml.xsd";
 
+registerPanels([...document.querySelectorAll("main.app-panels > wa-panel")]);
 loadDefaultSchema().then(createDefaultProject);
 
 async function loadDefaultSchema() {

@@ -2,7 +2,9 @@
 // VFS, mirroring the archive's folder structure 1:1 (see docs/WAXML-Workstation-spec.md,
 // avsnitt 10 — "spegla mappstruktur 1:1" chosen over flattening).
 
-const SUPPORTED_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml"];
+// .json is here for workstation-state.json (see workstation-state.js) —
+// Workstation's own editor-state companion file, not a WAXML content type.
+const SUPPORTED_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml", ".json"];
 
 const MIME_BY_EXTENSION = {
 	".mp3": "audio/mpeg",
@@ -10,7 +12,8 @@ const MIME_BY_EXTENSION = {
 	".ogg": "audio/ogg",
 	".m4a": "audio/mp4",
 	".xml": "text/xml",
-	".waxml": "text/xml"
+	".waxml": "text/xml",
+	".json": "application/json"
 };
 
 export async function importZip(vfs, parentId, zipFile) {

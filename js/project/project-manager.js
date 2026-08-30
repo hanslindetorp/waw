@@ -4,6 +4,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { createXmlNode } from "../xml-editor/xml-tree-ops.js";
 import { selection } from "../state/selection.js";
 import { bindCurrentFile, getCurrentFileId } from "./document-sync.js";
+import { initWorkstationState, flushWorkstationState } from "./workstation-state.js";
 
 // A "project" = the VFS's files/folders + the XML document currently open in
 // xmlStore. The schema (waxml.xsd) is an app-level constant, not project
@@ -19,6 +20,7 @@ export function createDefaultProject() {
 	const fileNode = vfs.uploadFile(ROOT_ID, new File([xmlStore.codeValue], PROJECT_FILE_NAME, { type: "application/xml" }));
 	bindCurrentFile(fileNode.id, xmlStore.codeValue);
 	selection.select(fileNode.id);
+	initWorkstationState();
 }
 
 // The root tag name comes from the active schema (its own root element
@@ -57,6 +59,11 @@ export async function openProjectFromFile(file) {
 		} else {
 			xmlStore.setRoot(null);
 		}
+		// After the document (if any) is loaded, so a saved selectedElementId
+		// can actually resolve against the real tree — looks for an imported
+		// workstation-state.json and applies it, or creates a fresh default
+		// one if this zip never had one (e.g. not authored by Workstation).
+		initWorkstationState();
 		return;
 	}
 
@@ -65,6 +72,7 @@ export async function openProjectFromFile(file) {
 	xmlStore.setCodeValue(text);
 	bindCurrentFile(fileNode.id, text);
 	selection.select(fileNode.id);
+	initWorkstationState();
 }
 
 // Breadth-first search for a file literally named wa.xml (case-insensitive),
@@ -96,6 +104,11 @@ export async function exportProjectAsZip() {
 	if (typeof JSZip === "undefined") {
 		throw new Error("JSZip is not loaded (check the <script> tag in index.html).");
 	}
+
+	// Guarantees the bundled workstation-state.json reflects the very latest
+	// panel/selection state rather than whatever was true up to its own save
+	// debounce ago (same reasoning as document-sync.js's flushPendingSync).
+	flushWorkstationState();
 
 	const zip = new JSZip();
 	const addFolder = (folderId, zipFolder) => {

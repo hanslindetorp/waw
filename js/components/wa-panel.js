@@ -141,6 +141,10 @@ export class WaPanel extends HTMLElement {
 		}
 	}
 
+	get collapsed() {
+		return this._collapsed;
+	}
+
 	toggleCollapse(force) {
 		const next = typeof force === "boolean" ? force : !this._collapsed;
 		if (next === this._collapsed) return;
@@ -149,6 +153,9 @@ export class WaPanel extends HTMLElement {
 		this._collapseBtn.textContent = this._collapsed ? "+" : "-";
 		this._header.title = this._collapsed ? this.getAttribute("panel-title") || "" : "";
 		this._applyFlex();
+		// Lets workstation-state.js (or anything else) persist panel layout
+		// without polling every panel's own .collapsed getter.
+		this.dispatchEvent(new CustomEvent("collapse-change", { bubbles: true, detail: { collapsed: this._collapsed } }));
 
 		// Hand this panel's freed (or reclaimed) width to the nearest
 		// expanded panel to its left, skipping past any that are themselves
