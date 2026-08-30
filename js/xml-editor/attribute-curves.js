@@ -18,9 +18,13 @@ import { parseGainAttributeToDb, formatGainAttribute, gainDbRangeForTag } from "
 //
 // A curve is { sliderMin, sliderMax, sliderStep, numberStep,
 //   positionToValue(pos), valueToPosition(value), parse(rawAttrString),
-//   format(value), displayRound(value) }. `parse`/`format` round-trip
+//   format(value), displayRound(value), unit? }. `parse`/`format` round-trip
 // through the XML attribute's own string form; `positionToValue`/
 // `valueToPosition` only concern the <input type="range">'s own position.
+// `unit`, when present, is shown next to the number field (e.g. "dB") —
+// the number field itself always shows/edits the plain real value (the
+// unit is never part of what you type), since native <input type="number">
+// can't hold non-numeric text.
 export function getAttributeCurve(attrName, tagName, schemaMin, schemaMax) {
 	if (attrName === "gain") return gainCurve(tagName);
 	if (attrName === "frequency") return logCurve(schemaMin, schemaMax, 20000, (v) => String(Math.round(v)), 1);
@@ -62,7 +66,8 @@ function gainCurve(tagName) {
 		valueToPosition: (value) => value,
 		parse: (raw) => parseGainAttributeToDb(tagName, raw),
 		format: (db) => formatGainAttribute(tagName, db),
-		displayRound: (db) => Math.round(db * 10) / 10
+		displayRound: (db) => Math.round(db * 10) / 10,
+		unit: "dB"
 	};
 }
 

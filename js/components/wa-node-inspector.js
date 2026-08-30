@@ -16,6 +16,40 @@ import { getAttributeCurve } from "../xml-editor/attribute-curves.js";
 // the node (see gain-units.js), but only some node types' *live* gain
 // param is natively linear (GainNode/Send) — a BiquadFilterNode's is
 // natively dB (see wa-mixer-view.js's own applyLiveGainDb, same rule).
+// A union attribute's free-text edit mode (_renderStringControl, reached
+// via _renderUnionControl's pencil cycle) used to validate a typed value
+// against only the ONE member currently cycled to — so e.g. typing a bare
+// number, or a "$var" math expression, into gain's "-XdB" string mode
+// showed a false-positive red ✗, even though that value is perfectly valid
+// for a *different* member of the same union (gain is a number OR a
+// "-XdB" string OR a math expression — per Hans, all three should just
+// work when typing, not only whichever one you happened to be cycled to).
+// Builds one combined pattern covering every member's own shape instead,
+// so "is this a legal value for this attribute at all" is what gets
+// validated, not "does it match this specific representation of it".
+// Returns null (skip validation entirely) if any member is a fully
+// unconstrained string, since the union then accepts literally anything.
+function combineUnionPattern(members) {
+	const parts = [];
+	for (const m of members) {
+		if (m.type === "number") {
+			parts.push("-?\\d+(\\.\\d+)?");
+		} else if (m.type === "boolean") {
+			parts.push("true|false");
+		} else if (m.type === "enum" && m.enumValues?.length) {
+			parts.push(m.enumValues.map(escapeRegExp).join("|"));
+		} else if (m.type === "string") {
+			if (!m.pattern) return null;
+			parts.push(m.pattern);
+		}
+	}
+	return parts.length ? parts.map((p) => `(?:${p})`).join("|") : null;
+}
+
+function escapeRegExp(str) {
+	return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function applyLiveAttributeNudge(node, attrName, rawValue) {
 	if (attrName === "gain") {
 		const db = parseGainAttributeToDb(node.tagName, rawValue);
@@ -170,6 +204,12 @@ template.innerHTML = `
 			width: 4.5rem;
 			flex: 0 0 auto;
 			text-align: right;
+		}
+		.num-unit {
+			flex: 0 0 auto;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.72rem;
+			margin-left: -0.15rem;
 		}
 		.toggle-btn {
 			flex: 0 0 auto;
@@ -634,7 +674,11 @@ export class WaNodeInspector extends HTMLElement {
 			} else if (member.type === "number") {
 				controlSlot.appendChild(this._renderNumberControl(attrName, memberValue, member, onChange));
 			} else {
-				controlSlot.appendChild(this._renderStringControl(memberValue, member, onChange));
+				// Validate against the whole union's shape, not just this one
+				// cycled-to member's own pattern — see combineUnionPattern.
+				const combined = combineUnionPattern(members);
+				const validationSchema = { ...member, pattern: combined || undefined };
+				controlSlot.appendChild(this._renderStringControl(memberValue, validationSchema, onChange));
 			}
 		};
 
@@ -888,6 +932,16 @@ export class WaNodeInspector extends HTMLElement {
 
 		frag.appendChild(slider);
 		frag.appendChild(numberInput);
+		// The number field only ever holds the plain real value (a native
+		// <input type="number"> can't contain non-numeric text like "dB") —
+		// the unit, when the curve has one, is shown as its own small label
+		// right after it instead, per Hans.
+		if (curve.unit) {
+			const unitLabel = document.createElement("span");
+			unitLabel.className = "num-unit";
+			unitLabel.textContent = curve.unit;
+			frag.appendChild(unitLabel);
+		}
 		return frag;
 	}
 

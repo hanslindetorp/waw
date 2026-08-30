@@ -1038,15 +1038,22 @@ export class WaMixerView extends HTMLElement {
 		this._blendSlider = this.shadowRoot.querySelector(".blend-slider");
 		this._transitionSlider = this.shadowRoot.querySelector(".transition-slider");
 		this._activeMixerId = null;
-		this._liveMixerObj = null; // the live waxml Mixer object currently wired for "update"-event standby-clearing, per Hans's addEventListener("update") proposal
+		this._liveMixerObj = null; // the live waxml Mixer object currently wired for "update"/"transitionReady"-event standby-clearing, per Hans's addEventListener proposal
 		this._liveMixerUpdateHandler = null;
+		this._liveMixerTransitionReadyHandler = null;
+		// Which of the two possible delay reasons a pending solo change is
+		// still waiting on — see _markSoloPending/_clearSoloStandbyIfSettled.
+		// Both can be true at once (quantize delays when the crossfade
+		// *starts*, transitionTime is how long it then takes to finish).
+		this._pendingQuantize = false;
+		this._pendingTransition = false;
 		// Which channel index's Solo button is showing the "waiting for real
 		// status" blink — instance state, not just a DOM class, because
 		// _setSoloValue/_clearSoloValue trigger a synchronous re-render
 		// (xmlStore.updateAttributes) that rebuilds every .solo-btn from
 		// scratch, detaching the very button a click just marked. Read back
 		// by _buildSoloButton on every render instead, so it survives that
-		// rebuild until the live "update" event clears it.
+		// rebuild until _clearSoloStandbyIfSettled clears it.
 		this._pendingSoloChannelIndex = null;
 		// Whether <Mixer>'s `solo` attribute is currently set — kept in sync
 		// by _render(), read by the RAF meter loop's _updateSoloButtonGains
@@ -1147,20 +1154,25 @@ export class WaMixerView extends HTMLElement {
 				lamp.style.opacity = "";
 				lamp.style.boxShadow = "";
 			});
-			// Nothing will ever confirm a quantize-gated change once playback
-			// stops (no more live object to fire "update") — leaving the flag
-			// set would blink a stale button on the next unrelated render.
+			// Nothing will ever confirm a pending change once the graph
+			// unloads (no more live object to fire "update"/"transitionReady")
+			// — leaving these set would blink a stale button on the next
+			// unrelated render.
+			this._pendingQuantize = false;
+			this._pendingTransition = false;
 			this._pendingSoloChannelIndex = null;
 			this.shadowRoot.querySelectorAll(".solo-btn.standby").forEach((btn) => btn.classList.remove("standby"));
 		}
 	}
 
-	// Per Hans's proposal: listen for the "update" event on the live Mixer
-	// object to know when a quantize-gated solo change has actually taken
-	// effect, so the standby blink can clear. Idiomatic given AudioObject
-	// extends EventTarget and already dispatches "change"/similar events
-	// elsewhere in waxml.js (e.g. `set mix`) — same pattern, different event
-	// name. Re-wires whenever the live object identity changes (e.g. after a
+	// Per Hans's proposal: listen for "update" (a quantize-gated solo change
+	// actually took effect) and "transitionReady" (the transitionTime-based
+	// crossfade ramp actually finished) on the live Mixer object, so the
+	// standby blink can clear once every reason it was shown for has
+	// actually resolved (see _clearSoloStandbyIfSettled). Idiomatic given
+	// AudioObject extends EventTarget and already dispatches "change"/
+	// similar events elsewhere in waxml.js (e.g. `set mix`) — same pattern.
+	// Re-wires whenever the live object identity changes (e.g. after a
 	// structural rebuild) and is a no-op if no graph is loaded yet.
 	_wireMixerUpdateListener(mixerNode) {
 		if (!playerStore.isDocumentLoaded || !mixerNode?.attributes.id) return;
@@ -1176,11 +1188,15 @@ export class WaMixerView extends HTMLElement {
 		this._unwireMixerUpdateListener();
 		this._liveMixerObj = liveObj;
 		this._liveMixerUpdateHandler = () => {
-			this._soloHandle.classList.remove("standby");
-			this._pendingSoloChannelIndex = null;
-			this.shadowRoot.querySelectorAll(".solo-btn.standby").forEach((btn) => btn.classList.remove("standby"));
+			this._pendingQuantize = false;
+			this._clearSoloStandbyIfSettled();
+		};
+		this._liveMixerTransitionReadyHandler = () => {
+			this._pendingTransition = false;
+			this._clearSoloStandbyIfSettled();
 		};
 		liveObj.addEventListener("update", this._liveMixerUpdateHandler);
+		liveObj.addEventListener("transitionReady", this._liveMixerTransitionReadyHandler);
 	}
 
 	_unwireMixerUpdateListener() {
@@ -1189,8 +1205,24 @@ export class WaMixerView extends HTMLElement {
 				this._liveMixerObj.removeEventListener("update", this._liveMixerUpdateHandler);
 			} catch {}
 		}
+		if (this._liveMixerObj && this._liveMixerTransitionReadyHandler) {
+			try {
+				this._liveMixerObj.removeEventListener("transitionReady", this._liveMixerTransitionReadyHandler);
+			} catch {}
+		}
 		this._liveMixerObj = null;
 		this._liveMixerUpdateHandler = null;
+		this._liveMixerTransitionReadyHandler = null;
+	}
+
+	// Only actually clears the standby blink (big slider + whichever
+	// per-channel Solo button it's pinned to) once neither pending reason
+	// is still outstanding — see _markSoloPending.
+	_clearSoloStandbyIfSettled() {
+		if (this._pendingQuantize || this._pendingTransition) return;
+		this._pendingSoloChannelIndex = null;
+		this._soloHandle.classList.remove("standby");
+		this.shadowRoot.querySelectorAll(".solo-btn.standby").forEach((btn) => btn.classList.remove("standby"));
 	}
 
 	// Taps each <Chain>'s live output GainNode with our own AnalyserNode —
@@ -1528,11 +1560,25 @@ export class WaMixerView extends HTMLElement {
 		const node = ops.findNodeById(xmlStore.root, this._activeMixerId);
 		if (!node) return;
 		xmlStore.updateAttributes(node.id, { ...node.attributes, solo: String(Math.round(value * 1000) / 1000) });
-		// waxml.js's own `solo` setter is what actually honors `quantize`
-		// (delays applying + fires "update" once it does) — this side only
-		// shows a "pending" state until that "update" event tells us the
-		// change landed (see _wireMixerUpdateListener).
-		if (node.attributes.quantize) this._soloHandle.classList.add("standby");
+		this._markSoloPending(node);
+	}
+
+	// waxml.js's own `solo` setter is what actually honors `quantize`
+	// (delays applying + fires "update" once it does) and, separately,
+	// ramps the crossfade over `transitionTime` (firing "transitionReady"
+	// once THAT finishes) — this side just shows a "pending" cue until
+	// every applicable one of those has actually happened, per Hans. Both
+	// can apply at once (quantize delays when the ramp *starts*,
+	// transitionTime is how long the ramp itself then takes) — the cue only
+	// clears once every reason we set has reported in (see
+	// _clearSoloStandbyIfSettled).
+	_markSoloPending(node) {
+		const hasQuantize = !!node.attributes.quantize;
+		const transitionMs = parseFloat(node.attributes.transitionTime);
+		const hasTransition = Number.isFinite(transitionMs) && transitionMs > 0;
+		this._pendingQuantize = hasQuantize;
+		this._pendingTransition = hasTransition;
+		if (hasQuantize || hasTransition) this._soloHandle.classList.add("standby");
 	}
 
 	// Per-channel solo button: jumps the big slider straight to
@@ -1729,9 +1775,28 @@ export class WaMixerView extends HTMLElement {
 		return existingNums.length ? Math.max(...existingNums) + 1 : 1;
 	}
 
+	// <Mixer> gets sensible blend/transitionTime defaults the first time it
+	// grows a channel via the "+" menu, per Hans — never touches either one
+	// if it's already set (by the user, or an earlier add), so this can
+	// never clobber a real value.
+	_ensureMixerDefaults(mixerNow) {
+		const attrs = { ...mixerNow.attributes };
+		let changed = false;
+		if (attrs.blend === undefined) {
+			attrs.blend = "1";
+			changed = true;
+		}
+		if (attrs.transitionTime === undefined) {
+			attrs.transitionTime = "0";
+			changed = true;
+		}
+		if (changed) xmlStore.updateAttributes(mixerNow.id, attrs);
+	}
+
 	_addChannelFull(mixerNode) {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
+		this._ensureMixerDefaults(mixerNow);
 		const nextNum = this._nextChannelId(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: `MixChan-${nextNum}` });
 		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first in the signal chain, per Hans
@@ -1745,6 +1810,7 @@ export class WaMixerView extends HTMLElement {
 	_addChannelPanVolVU(mixerNode) {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
+		this._ensureMixerDefaults(mixerNow);
 		const nextNum = this._nextChannelId(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: `MixChan-${nextNum}` });
 		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first, per Hans (same as Full Channel Strip)
@@ -1755,6 +1821,7 @@ export class WaMixerView extends HTMLElement {
 	_addChannelVU(mixerNode) {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
+		this._ensureMixerDefaults(mixerNow);
 		const nextNum = this._nextChannelId(mixerNow);
 		xmlStore.insertNewChild(mixerNow.id, "GainNode", { id: `MixChan-${nextNum}` });
 	}
@@ -1830,11 +1897,15 @@ export class WaMixerView extends HTMLElement {
 			// see its own comment) *before* committing, since
 			// _setSoloValue/_clearSoloValue trigger a synchronous re-render
 			// that replaces this very button; _buildSoloButton reads the flag
-			// back above on the next build. Only quantize actually delays
-			// anything (transitionTime alone already self-visualizes via the
-			// lamp's own live brightness ramping), so only quantize earns the
-			// blink.
-			this._pendingSoloChannelIndex = mixerNode?.attributes.quantize ? index : null;
+			// back above on the next build. Quantize delays when the change
+			// even starts; transitionTime (per Hans) is how long the ramp
+			// itself then takes to finish — either one means the real status
+			// hasn't landed yet, so either earns the blink (see
+			// _markSoloPending, called from _setSoloValue/_commitSoloValue
+			// right after this).
+			const transitionMs = parseFloat(mixerNode?.attributes.transitionTime);
+			const hasPending = !!mixerNode?.attributes.quantize || (Number.isFinite(transitionMs) && transitionMs > 0);
+			this._pendingSoloChannelIndex = hasPending ? index : null;
 			if (isActive) this._clearSoloValue();
 			else this._setSoloValue(targetValue);
 		});

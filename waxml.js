@@ -1785,6 +1785,12 @@ class AudioObject extends EventTarget{
         let time = this.getParameter("transitionTime");
         input.gain.setTargetAtTime(gain, input.context.currentTime, time);
         target.dispatchEvent(new CustomEvent("change", {detail: {time: time, value: gain}}));
+
+        // fire custom event "transitionReady" to notify that the fade transition is finished
+        setTimeout(() => {
+          target.dispatchEvent(new CustomEvent("transitionReady", {detail: {time: time, value: gain}}));
+        }, time * 1000);
+
       });
     }
 
