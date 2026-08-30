@@ -19726,10 +19726,6 @@ class Music extends EventTarget {
 			return this.divisionToTime(val)*1000;
 		}
 
-		iMus.prototype.timeTo = function(val){
-			return this.on(val);
-		}
-
 
 	
 		iMus.prototype.on = function on(int, fn, offset, repeat){
@@ -21215,6 +21211,7 @@ class Music extends EventTarget {
 		var defaultInstance = new iMus();
 		iMus.instance = defaultInstance;
 		myInstance = defaultInstance;
+		this.defaultInstance = defaultInstance;
 		//defaultInstance.addSection({tags: defaultSectionName});
 		// Ta bort denna tomma instans. Men det kräver också att kod
 		// som beror på den måste fixas som t.ex. iMus.set()
@@ -21536,6 +21533,10 @@ class Music extends EventTarget {
 	}
 
 
+	timeTo(val){
+		return defaultInstance.on(val);
+	}
+	
 }
 
 

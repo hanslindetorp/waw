@@ -1075,6 +1075,10 @@ export class WaMixerView extends HTMLElement {
 		// partway through the gesture (confirmed via a real drag test).
 		// Mirrors the same pattern already used in wa-node-inspector.js.
 		this._isLocalEdit = false;
+		// The xmlStore.root reference / active Mixer id _render() last
+		// actually rebuilt from — see _onStoreChange's fast path for why.
+		this._lastRenderedRoot = null;
+		this._lastRenderedMixerId = null;
 		this._meterState = new Map(); // chainId (internal tree id) -> {analyser, dataArray, vuFillEl, smoothedT}
 		this._meterRafId = null;
 		this._onStoreChange = this._onStoreChange.bind(this);
@@ -1365,7 +1369,34 @@ export class WaMixerView extends HTMLElement {
 			this._activeMixerId = null;
 			return;
 		}
+		// A pure selection change (xmlStore.selectNode) only ever touches
+		// xmlStore.selectedNodeId, never reassigns xmlStore.root — every real
+		// mutation (attribute/structural) does, per the immutable-update
+		// pattern in xml-tree-ops.js. So root staying reference-equal to what
+		// _render() last actually built from, *for this same active Mixer*
+		// (switching which Mixer is shown always needs a real rebuild, even
+		// with root unchanged, since it's a different set of channels),
+		// means nothing here needs rebuilding — just the "selected" ring's
+		// target. Skipping the full rebuild in that case matters concretely
+		// for the channel-label's double-click-to-rename (per Hans): the
+		// first of the two clicks already re-selects the (already-selected)
+		// channel, and a full teardown/rebuild of the very label element
+		// between the two clicks silently breaks the browser's dblclick
+		// detection on it — same "torn down mid-interaction" bug class as
+		// the drag-continuous controls elsewhere in this file, just
+		// triggered by a click instead of a drag. Same idea as
+		// wa-xml-tree.js's own selection fast path.
+		if (xmlStore.root === this._lastRenderedRoot && this._activeMixerId === this._lastRenderedMixerId) {
+			this._updateSelectionHighlight();
+			return;
+		}
 		this._render(mixerNode);
+	}
+
+	_updateSelectionHighlight() {
+		this._channels.querySelectorAll(".channel-strip[data-node-id]").forEach((strip) => {
+			strip.classList.toggle("selected", strip.dataset.nodeId === xmlStore.selectedNodeId);
+		});
 	}
 
 	// Backspace/Delete removes whatever's currently selected, as long as it's
@@ -1640,6 +1671,8 @@ export class WaMixerView extends HTMLElement {
 		if (playerStore.isDocumentLoaded) this._wireMixerUpdateListener(mixerNode);
 		this._attachMeterElements();
 		this._updateSoloSliderGeometry();
+		this._lastRenderedRoot = xmlStore.root;
+		this._lastRenderedMixerId = this._activeMixerId;
 	}
 
 	// --- "+" channel-type picker ---
@@ -1946,6 +1979,7 @@ export class WaMixerView extends HTMLElement {
 	_buildVuOnlyStrip(child, index, totalCount, sectionHeights) {
 		const strip = document.createElement("div");
 		strip.className = "channel-strip";
+		strip.dataset.nodeId = child.id;
 		if (xmlStore.selectedNodeId === child.id) strip.classList.add("selected");
 		this._wireStripSelect(strip, child);
 		strip.appendChild(this._buildSectionSpacers(sectionHeights));
@@ -1990,6 +2024,7 @@ export class WaMixerView extends HTMLElement {
 
 		const strip = document.createElement("div");
 		strip.className = "channel-strip";
+		strip.dataset.nodeId = child.id;
 		if (xmlStore.selectedNodeId === child.id) strip.classList.add("selected");
 		this._wireStripSelect(strip, child);
 
