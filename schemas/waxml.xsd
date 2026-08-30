@@ -1254,7 +1254,7 @@
       <!-- Native elements -->
       <xs:element name="AudioBufferSourceNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
           <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="src" type="src"/>
           <xs:attribute name="detune" type="detune"/>
@@ -1283,7 +1283,7 @@
 
       <xs:element name="MediaStreamAudioSourceNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
         </xs:complexType>
       </xs:element>
 
@@ -1319,7 +1319,7 @@
 
       <xs:element name="OscillatorNode">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
           <xs:attribute name="transitionTime" type="transitionTime"/>
           <xs:attribute name="frequency" type="frequency"/>
           <xs:attribute name="detune" type="detune"/>
@@ -1397,7 +1397,7 @@
       <!-- logic -->
       <xs:element name="Var">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
           <xs:attribute name="name" type="name"/>
           <xs:attribute name="mapin" type="mapin"/>
           <xs:attribute name="mapout" type="mapout"/>
@@ -1413,7 +1413,7 @@
 
       <xs:element name="Envelope">
         <xs:complexType>
-          <xs:attributeGroup ref="waxml"/>
+          <xs:attributeGroup ref="waxmlNoInput"/>
         </xs:complexType>
       </xs:element>
       
@@ -1538,7 +1538,7 @@
       <xs:element name="Snapshot">
         <xs:complexType>
           <xs:group ref="snapshot" minOccurs="1" maxOccurs="unbounded"/>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
         </xs:complexType>
       </xs:element>
 
@@ -1568,15 +1568,28 @@
 
   <!-- Attribute groups -->
 
-  <!-- The four attributes every native Web Audio API node gets, beyond its
+  <!-- The five attributes every native Web Audio API node gets, beyond its
        own spec-defined properties: id/class for reference and styling,
-       label for GUI display, output for routing to another node. -->
+       label for GUI display, output/input for routing to/from another
+       node. -->
   <xs:attributeGroup name="commonNodeAttributes">
     <xs:attribute name="id" type="id"/>
     <xs:attribute name="class" type="class"/>
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="output" type="ioSelector"/>
     <xs:attribute name="input" type="ioSelector"/>
+  </xs:attributeGroup>
+
+  <!-- Same as commonNodeAttributes, minus "input" — for element types that
+       can only ever be a routing *source* (an audio generator with nothing
+       upstream of it), never a destination something else routes into:
+       AudioBufferSourceNode, MediaStreamAudioSourceNode, OscillatorNode,
+       Snapshot, Var, Envelope, Stinger, per Hans. -->
+  <xs:attributeGroup name="commonNodeAttributesNoInput">
+    <xs:attribute name="id" type="id"/>
+    <xs:attribute name="class" type="class"/>
+    <xs:attribute name="label" type="label"/>
+    <xs:attribute name="output" type="ioSelector"/>
   </xs:attributeGroup>
 
   <xs:attributeGroup name="waxml">
@@ -1696,6 +1709,132 @@
     <xs:anyAttribute processContents="lax"/>
   </xs:attributeGroup>
 
+  <!-- Same as waxml, minus "input" — used by Envelope, per Hans. Note the
+       xs:anyAttribute wildcard below is unchanged (removing it would also
+       stop validating/permitting every OTHER attribute this group doesn't
+       explicitly list, which wasn't asked for): under "lax" processing an
+       unrecognized attribute name is still schema-valid, so this stops
+       "input" being a formally recognized/typed attribute on Envelope but
+       can't make the schema outright reject an `input="..."` someone
+       writes by hand — a real XSD 1.0 limitation (no "any attribute except
+       this one" wildcard), not the case for the plain commonNodeAttributes-
+       based elements below or for Stinger, neither of which have this
+       wildcard. -->
+  <xs:attributeGroup name="waxmlNoInput">
+    <xs:attribute name="version" type="version"/>
+    <xs:attribute name="timeUnit" type="timeUnit"/>
+    <xs:attribute name="midi" type="xs:boolean"/>
+
+    <xs:attribute name="id" type="id"/>
+    <xs:attribute name="label" type="label"/>
+    <xs:attribute name="class" type="class"/>
+    <xs:attribute name="name" type="name"/>
+
+    <xs:attribute name="src" type="src"/>
+    <xs:attribute name="href" type="href"/>
+
+    <xs:attribute name="gain" type="gain"/>
+    <xs:attribute name="controls" type="controls"/>
+
+    <xs:attribute name="frequency" type="frequency"/>
+    <xs:attribute name="outputBus" type="outputBus"/>
+    <xs:attribute name="pan" type="pan"/>
+
+    <xs:attribute name="volume" type="volume"/>
+    <xs:attribute name="normalize" type="normalize"/>
+    <xs:attribute name="loop" type="loop"/>
+
+    <xs:attribute name="detune" type="detune"/>
+    <xs:attribute name="Q" type="Q"/>
+    <xs:attribute name="delayTime" type="delayTime"/>
+    <xs:attribute name="maxDelayTime" type="maxDelayTime"/>
+
+    <!-- // compressor -->
+    <xs:attribute name="ratio" type="ratio"></xs:attribute>
+    <xs:attribute name="threshold" type="threshold"/>
+    <xs:attribute name="knee" type="knee"/>
+    <xs:attribute name="attack" type="attack"/>
+    <xs:attribute name="release" type="release"/>
+
+    <!-- // AudioBufferSourceNode -->
+    <xs:attribute name="playbackRate" type="playbackRate"/>
+    <xs:attribute name="loopStart" type="loopStart"/>
+    <xs:attribute name="loopEnd" type="loopEnd"/>
+
+    <!-- // waxml -->
+    <xs:attribute name="transitionTime" type="transitionTime"/>
+    <xs:attribute name="ADSR" type="ADSR"/>
+    <xs:attribute name="max" type="max"/>
+    <xs:attribute name="delay" type="delay"/>
+    <xs:attribute name="voices" type="voices"/>
+    <xs:attribute name="crossFade" type="crossFade"/>
+
+    <!-- // parameter mapping -->
+    <xs:attribute name="value" type="value"/>
+    <xs:attribute name="default" type="default"/>
+    <xs:attribute name="level" type="level"/>
+    <xs:attribute name="range" type="range"/>
+    <xs:attribute name="curve" type="curve"/>
+    <xs:attribute name="follow" type="follow"/>
+    <xs:attribute name="mapin" type="mapin"/>
+    <xs:attribute name="mapout" type="mapout"/>
+    <xs:attribute name="times" type="times"/>
+    <xs:attribute name="values" type="values"/>
+    <xs:attribute name="channel" type="channel"/>
+    <xs:attribute name="dynamictimes" type="dynamictimes"/>
+    <xs:attribute name="dynamicvalues" type="dynamicvalues"/>
+    <xs:attribute name="targetvariables" type="targetvariables"/>
+    <xs:attribute name="convert" type="convert"/>
+    <xs:attribute name="steps" type="steps"/>
+    <xs:attribute name="fadeTime" type="fadeTime"/>
+
+    <!-- Objective Audio -->
+    <xs:attribute name="coneInnerAngle" type="coneInnerAngle"/>
+    <xs:attribute name="coneOuterAngle" type="coneOuterAngle"/>
+    <xs:attribute name="coneOuterGain" type="coneOuterGain"/>
+    <xs:attribute name="distanceModel" type="distanceModel"/>
+    <xs:attribute name="maxDistance" type="maxDistance"/>
+    <xs:attribute name="orientationX" type="orientationX"/>
+    <xs:attribute name="orientationY" type="orientationY"/>
+    <xs:attribute name="orientationZ" type="orientationZ"/>
+    <xs:attribute name="panningModel" type="panningModel"/>
+    <xs:attribute name="positionX" type="positionX"/>
+    <xs:attribute name="positionY" type="positionY"/>
+    <xs:attribute name="positionZ" type="positionZ"/>
+    <xs:attribute name="refDistance" type="refDistance"/>
+    <xs:attribute name="rolloffFactor" type="rolloffFactor"/>
+
+    <!-- // Ambient Audio / Granular -->
+    <xs:attribute name="loopLength" type="loopLength"/>
+    <xs:attribute name="randomPosition" type="randomPosition"/>
+    <xs:attribute name="randomDuration" type="randomDuration"/>
+    <xs:attribute name="randomDetune" type="randomDetune"/>
+    <xs:attribute name="frameRate" type="frameRate"/>
+    <xs:attribute name="fallOffRatio" type="fallOffRatio"/>
+    <xs:attribute name="smoothDerivative" type="smoothDerivative"/>
+    <xs:attribute name="output" type="ioSelector"/>
+    <xs:attribute name="convolution" type="convolution"/>
+
+    <!-- Send -->
+    <xs:attribute name="bus" type="bus"/>
+
+    <!-- Mixer (solo/blend were named mix/crossFadeRange before) -->
+    <xs:attribute name="solo" type="mix"/>
+    <xs:attribute name="blend" type="crossFadeRange"/>
+    <xs:attribute name="peak" type="peak"/>
+    <xs:attribute name="selectIndex" type="selectIndex"/>
+
+    <!-- Envelope -->
+    <xs:attribute name="legato" type="xs:boolean"/>
+
+    <!-- Triggers -->
+    <xs:attribute name="start" type="xs:string"/>
+    <xs:attribute name="trig" type="xs:string"/>
+    <xs:attribute name="stop" type="xs:string"/>
+
+    <xs:anyAttribute processContents="lax"/>
+  </xs:attributeGroup>
+
 
   <!-- Elements -->
 
@@ -1787,7 +1926,6 @@
     <xs:attribute name="id" type="xs:string"/>
     <xs:attribute name="voice" type="voice"/>
     <xs:attribute name="output" type="ioSelector"/>
-    <xs:attribute name="input" type="ioSelector"/>
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="quantize" type="quantize"/>
     <xs:attribute name="changeOnNext" type="length"/>
