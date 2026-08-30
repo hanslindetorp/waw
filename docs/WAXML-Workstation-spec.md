@@ -55,7 +55,31 @@ Varje fil i VFS:en har två adresser:
 1. **Session-URL** (för live-preview i demot): `URL.createObjectURL(file)` — en riktig `blob:`-URL som WAXML kan spela upp direkt.
 2. **Export-URL** (för WAXML-koden studenten kopierar ut): en relativ sökväg byggd genom att gå från filen till roten i VFS-trädet och slå ihop mappnamnen, t.ex. `drums/kick.wav`. Detta matchar hur WAXML redan tolkar relativa sökvägar (relativt `wa.xml`-filens plats), så en exporterad `wa.xml` blir direkt användbar när studenten senare hostar filerna på riktigt.
 
-Valfri utökning: en "Exportera projekt som ZIP"-knapp som buntar ihop de riktiga `File`-objekten tillsammans med den genererade `wa.xml`, i exakt samma mappstruktur — ett komplett, redo-att-hosta-paket.
+Valfri utökning: en "Exportera projekt som ZIP"-knapp som buntar ihop de riktiga `File`-objekten tillsammans med den genererade `wa.xml`, i exakt samma mappstruktur — ett komplett, redo-att-hosta-paket. **Implementerad** (se 1.6 för vad den numera också bäddar in).
+
+### 1.6 Workstation-state — separat editor-tillstånd (implementerad 2026-08-30)
+
+GUI-tillstånd (öppna paneler, markerat element) sparas i en egen fil,
+`workstation-state.json`, bredvid `wa.xml` i samma projekt/zip — **aldrig**
+inuti `wa.xml` själv. Grundprincipen: `wa.xml` är "leverans"-XML och ska gå
+att dela/embedda utan att UI-skräp från arbetsytan följer med.
+
+- Samma live-synk-mönster som `wa.xml` självt (avsnitt 1.3): en riktig VFS-fil,
+  hålls kontinuerligt uppdaterad, fångas av export-ZIP:ens vanliga
+  mapp-vandring utan specialkod.
+- Gömd i filhanteraren (användarna ska inte se eller redigera den direkt),
+  men följer alltid med vid export.
+- `selectedElementId` refererar elementets XML-`id`-**attribut**, aldrig ett
+  internt/sessionslokalt träd-id — det senare är inte stabilt över en
+  spara/ladda-cykel.
+- Best-effort vid inläsning: en trasig fil, en okänd panel, eller ett
+  `selectedElementId` som inte längre finns i dokumentet ignoreras tyst.
+  Ska aldrig få hela projektet att krascha vid öppning.
+- Valfri, ej implementerad utökning: en `<?workstation-state src="..."?>`
+  processing instruction i `wa.xml` för att peka ut filen explicit (t.ex.
+  om flera `wa.xml`-liknande filer någon gång behöver särskiljas) — enkel
+  filnamnskonvention (`workstation-state.json` i projektroten) räcker för
+  nu.
 
 ---
 
@@ -93,6 +117,27 @@ Fungerar över både vanliga ljudnoder (`AudioBufferSourceNode`) och `<Compositi
 - `Loader.loadAudio()` använder `fetch()`, som stödjer `blob:`-scheman transparent.
 - Riktiga relativa filer (t.ex. `Aa.mp3`) ska **inte** kombineras med en trasig `localpath` i produktion — värt att komma ihåg om test-XML återanvänds med skarpa mappstrukturer.
 
+### 2.6 Proaktiv graf-laddning, frikopplad från Play (implementerad 2026-08-30)
+
+Ursprungligen laddades den levande grafen (`updateFromString`) lazy, först
+vid första tryck på PLAY — vilket i praktiken gjorde grafens existens
+beroende av att det fanns en `<Composition>/<Section>` att trigga.
+Omvärderat: ett dokument behöver inte kunna "starta" för att grafen ska
+vara meningsfull (en Mixers egen routing, live rattnudge, VU-metrar,
+sololampor är lika verkliga utan en Composition).
+
+- Grafen (om)laddas nu proaktivt vid **varje strukturell ändring** (element
+  skapas/tas bort/flyttas) — debouncad 400ms så en serie strukturella
+  ändringar i rad blir en enda omladdning. Attributändringar bygger
+  fortfarande aldrig om (samma distinktion som redan fanns).
+- `isPlaying` (transporten aktivt triggar något) och `isDocumentLoaded`
+  (finns en levande graf att läsa/skriva mot) är nu separata flaggor —
+  all live-integration (Mixerns metrar/lampor/rattnudge) gate:ar på den
+  senare, inte på om PLAY någonsin tryckts.
+- Säkerhetstimeout (8s) runt själva laddningsanropet: en `updateFromString()`
+  som aldrig löser sig (bekräftat möjligt, se buggtabellen nedan) kärvar
+  inte längre fast hela mekanismen för resten av sessionen.
+
 ---
 
 ## 3. Buggar i WebAudioXML.js — identifierade och åtgärdade under detta arbete
@@ -103,6 +148,9 @@ Fungerar över både vanliga ljudnoder (`AudioBufferSourceNode`) och `<Compositi
 | 2 | `musical-structure/Wave.js`, `set src()` | Samma mönster som #1 | ✅ Patchad |
 | 3 | `Music.js`, `addSuffix()` | La på en felaktig filändelse (`.mp3` etc.) på `blob:`/`data:`-URI:er baserat på en naiv koll av de fyra sista tecknen | ✅ Patchad |
 | 4 | `Parser.js`, `loadXML()` | Embedded-XML-grenen (`if(this._xml){...}`) anropade aldrig `resolve()` — `parser.init()` hängde sig för evigt vid inbäddad XML. Rest av en pre-Promise-implementation (`//Loader.checkLoadComplete()`) | ✅ Patchad |
+| 5 | `WebAudio`, `updateFromString()` | Den inre `parser.initFromString(str).then(xml => {...})`-kedjan hade ingen `.catch()` kopplad tillbaka till den yttre Promise:ns `reject()` — kastade något inuti `.then()` (t.ex. bugg #7 nedan) blev en egen, okopplad "unhandled rejection", och den yttre Promise:n som `updateFromString()` faktiskt returnerar löste sig aldrig. Gjorde att en enda trasig/minimal dokumentstruktur kunde hänga hela laddningen för evigt, tyst | ✅ Patchad (`.catch(reject)` tillagd) |
+| 6 | `Connector`, konstruktor | `setTimeout(() => xml.obj.fade(...), 1000)` antog att `xml.obj` fortfarande fanns kvar när timeouten körde — kraschade om grafen hann laddas om (t.ex. via #5/proaktiv laddning, avsnitt 2.6) inom den sekunden | ✅ Patchad (null-koll före `.fade()`-anropet) |
+| 7 | `Parser.js`, `initFromString()` | Parser-error-kollen läste `this._xml.firstElementChild.tagName` — kraschade (`Cannot read properties of null`) för varje giltigt dokument vars rot-element saknar barn-element (t.ex. ett helt tomt nyskapat projekt), eftersom `firstElementChild` då är `null`. Maskerades tidigare av bugg #5 (kraschen hängde bara laddningen tyst istället för att synas) | ✅ Patchad (bytt till `xml.querySelector("parsererror")`, oberoende av dokumentets struktur) |
 
 **Känt, ej åtgärdat (medvetet nedprioriterat):**
 - `addSuffix()`/`loadFile()` i `Music.js` använder fortfarande den äldre, separata path-resolution-vägen (inte `Loader.getPath()`). Fungerar idag, men är en dubblerad kodväg. Hans har en pågående, större omskrivning av hela paketet planerad — lämnas orört tills dess, med en note-to-self-kommentar i koden.
@@ -235,3 +283,58 @@ CREATE TABLE files (
 - Delade länkar: publika utan auth, eller signerade/tidsbegränsade?
 - Nedgradering (Stripe): blockera uppladdning automatiskt vid överskriden lagring, eller bara flaggning?
 - Autosave: periodisk, per-interaktion, eller explicit spara-knapp?
+
+---
+
+## 11. `<Mixer>` — kanalmix, solo/blend/quantize (implementerad 2026-08-30)
+
+Tillkommen efter det att denna spec ursprungligen skrevs — inte en del av
+den initiala arkitekturgenomgången, men en tillräckligt central ny
+byggsten (eget GUI-fönster, eget litet API mot WAXML.js) för att höra
+hemma här. Se `docs/components-reference.md` (avsnittet om
+`wa-mixer-view.js`) för själva GUI-implementationen i detalj — det här
+avsnittet dokumenterar kontraktet mot WAXML.js.
+
+### 11.1 Attribut (schema)
+
+`<Mixer>` kan ha, utöver de vanliga noduttributen:
+
+| Attribut | Typ | Betydelse |
+|---|---|---|
+| `solo` | tal 0–1 (var `mix`) | Kontinuerlig kanal-väljar-position bland barnen — 0 väljer första barnet, 1 sista, jämnt fördelat däremellan |
+| `blend` | tal 0–1 (var `crossFadeRange`) | Hur brett crossfadet är runt `solo`-positionen när den hamnar mellan två barn istället för exakt på ett |
+| `transitionTime` | ms, 0–2000 | Hur snabbt/mjukt en solo/blend-ändring rampar in |
+| `quantize` | sträng (`off`/`bar`/`beat`/taktantal/taktart/tidsvärde) | Fördröjer en solo-ändring till nästa musikaliska gräns istället för att applicera direkt |
+| `selectIndex` | heltal ≥ 0 | Alternativ till `solo` — väljer ett barn exakt via index istället för en kontinuerlig position |
+
+### 11.2 Live-API mot `<Mixer>`s waxml-objekt
+
+Varje `<Mixer>`s barn får en egen intern `GainNode` (`obj.inputs[]`) —
+crossfadet mellan dem styrs helt via detta API, kallat direkt av GUI:t när
+grafen är laddad (`playerStore.isDocumentLoaded`, se avsnitt 2.6 — kräver
+inte att transporten spelar):
+
+```js
+obj.solo = value          // sätter/flyttar solo-positionen (0-1); respekterar quantize internt
+obj.blend = value         // sätter crossfade-bredden (0-1)
+obj.transitionTime = ms   // sätter ramptiden
+obj.clearSolo()           // rampar alla kanaler till unity gain omedelbart — respekterar INTE quantize, skickar aldrig "update"
+obj.getChannelGain(index) // live-avläsning, 0-1, linjär amplitud (samma domän som GainNode.gain överallt annars)
+```
+
+`obj` dispatchar ett `"update"`-event när en `quantize`-fördröjd
+`solo`-ändring faktiskt har applicerats — GUI:t använder detta för att
+släcka sin egen "väntar på quantize"-indikator (en blinkande kant), som
+annars aldrig skulle veta när det verkliga läget landat.
+
+### 11.3 Equal-power crossfade — visuell mappning
+
+Crossfadet mellan två kanaler är **equal-power**: vid exakt mittpunkten
+mellan två kanaler har båda `gain ≈ 0.7071` (cos/sin av 45°), inte 0.5 —
+det är kvadraten (**power** = amplitud²) som summerar till 1 mellan de två
+inblandade kanalerna. GUI:t använder därför `gain²` (inte `gain` rakt av,
+och inte en dB-omräkning) direkt som CSS-opacitet på respektive
+kanals sololampa — en kanal exakt mitt i ett crossfade läses då som
+exakt halvtänd (opacitet 0.5), och de två lampornas opacitet summerar
+visuellt till "en lampas värde ljus" i varje position, matchande
+crossfade-lagen istället för en godtycklig display-kurva.
