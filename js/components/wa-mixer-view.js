@@ -1040,6 +1040,14 @@ export class WaMixerView extends HTMLElement {
 		// by _buildSoloButton on every render instead, so it survives that
 		// rebuild until the live "update" event clears it.
 		this._pendingSoloChannelIndex = null;
+		// Set around every xmlStore.updateAttributes call fired from a knob/
+		// fader's own continuous drag (see _commitAttributes) — xmlStore's
+		// "change" event fires synchronously, and without this guard the
+		// resulting _render() would tear down and rebuild the very element
+		// mid-drag, breaking the browser's pointer-capture routing to it
+		// partway through the gesture (confirmed via a real drag test).
+		// Mirrors the same pattern already used in wa-node-inspector.js.
+		this._isLocalEdit = false;
 		this._meterState = new Map(); // chainId (internal tree id) -> {analyser, dataArray, vuFillEl, smoothedT}
 		this._meterRafId = null;
 		this._onStoreChange = this._onStoreChange.bind(this);
@@ -1277,6 +1285,7 @@ export class WaMixerView extends HTMLElement {
 	// re-rendering (and would also hide it entirely, via wa-preview.js's own
 	// matching MIXER_CONTEXT_TAGS carve-out).
 	_onStoreChange() {
+		if (this._isLocalEdit) return;
 		const selected = xmlStore.getSelectedNode();
 		if (selected && selected.tagName === "Mixer") {
 			this._activeMixerId = selected.id;
@@ -2046,12 +2055,10 @@ export class WaMixerView extends HTMLElement {
 			(db) => {
 				applyVisual(db);
 				applyLiveGainDb(node.attributes.id, db, false); // BiquadFilterNode.gain is native dB
-			},
-			(db) => {
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (!nodeNow) return;
-				xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, gain: dbToGainAttr(db) });
-			}
+				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, gain: dbToGainAttr(db) });
+			},
+			() => {}
 		);
 
 		return wrap;
@@ -2077,12 +2084,10 @@ export class WaMixerView extends HTMLElement {
 				applyVisual(t);
 				knob.title = `Freq ${Math.round(knobTToFreq(t))} Hz`;
 				applyLiveProperty(node.attributes.id, "frequency", knobTToFreq(t));
-			},
-			(t) => {
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (!nodeNow) return;
-				xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, frequency: String(Math.round(knobTToFreq(t))) });
-			}
+				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, frequency: String(Math.round(knobTToFreq(t))) });
+			},
+			() => {}
 		);
 
 		return wrap;
@@ -2104,12 +2109,10 @@ export class WaMixerView extends HTMLElement {
 				applyVisual(q);
 				knob.title = `Q ${q.toFixed(1)}`;
 				applyLiveProperty(node.attributes.id, "Q", q);
-			},
-			(q) => {
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (!nodeNow) return;
-				xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, Q: String(Math.round(q * 10) / 10) });
-			}
+				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, Q: String(Math.round(q * 10) / 10) });
+			},
+			() => {}
 		);
 
 		return wrap;
@@ -2132,12 +2135,10 @@ export class WaMixerView extends HTMLElement {
 			(pan) => {
 				applyVisual(pan);
 				applyLiveProperty(node.attributes.id, "pan", pan);
-			},
-			(pan) => {
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (!nodeNow) return;
-				xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, pan: String(Math.round(pan * 100) / 100) });
-			}
+				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, pan: String(Math.round(pan * 100) / 100) });
+			},
+			() => {}
 		);
 
 		return wrap;
@@ -2195,6 +2196,22 @@ export class WaMixerView extends HTMLElement {
 	_applyKnobRotation(dial, value, min, max) {
 		const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
 		dial.style.transform = `rotate(${-135 + t * 270}deg)`;
+	}
+
+	// Commits on every drag tick (not just on release), per Hans — same
+	// wiring as wa-node-inspector.js's own "input"-vs-"change" fix, using
+	// the same _isLocalEdit guard so this component's own re-render doesn't
+	// tear down the element being dragged mid-gesture. Other listeners
+	// (code panel, tree, live audio via applyLive*) still see every
+	// intermediate value normally, since xmlStore's "change" event still
+	// fires — only *this* component's own rebuild is skipped.
+	_commitAttributes(nodeId, attributes) {
+		this._isLocalEdit = true;
+		try {
+			xmlStore.updateAttributes(nodeId, attributes);
+		} finally {
+			this._isLocalEdit = false;
+		}
 	}
 
 	// Shared vertical-drag-to-adjust-a-value interaction for knobs (rotary,
@@ -2297,27 +2314,22 @@ export class WaMixerView extends HTMLElement {
 			e.preventDefault();
 			e.stopPropagation();
 			const trackRect = track.getBoundingClientRect();
-			let dragging = false;
-			let committedDb = currentDb;
 			try {
 				handle.setPointerCapture(e.pointerId);
 			} catch {}
 
 			const onMove = (moveEvt) => {
-				dragging = true;
 				const relY = moveEvt.clientY - trackRect.top;
 				const t = Math.max(0, Math.min(1, 1 - relY / trackRect.height));
-				committedDb = faderPositionToDb(t);
+				const committedDb = faderPositionToDb(t);
 				applyVisual(committedDb);
 				applyLiveGainDb(gainNode.attributes.id, committedDb, true); // GainNode.gain is linear
+				const nodeNow = ops.findNodeById(xmlStore.root, gainNode.id);
+				if (nodeNow) this._commitAttributes(gainNode.id, { ...nodeNow.attributes, gain: dbToGainAttr(committedDb) });
 			};
 			const onUp = () => {
 				handle.removeEventListener("pointermove", onMove);
 				handle.removeEventListener("pointerup", onUp);
-				if (!dragging) return;
-				const nodeNow = ops.findNodeById(xmlStore.root, gainNode.id);
-				if (!nodeNow) return;
-				xmlStore.updateAttributes(gainNode.id, { ...nodeNow.attributes, gain: dbToGainAttr(committedDb) });
 			};
 			handle.addEventListener("pointermove", onMove);
 			handle.addEventListener("pointerup", onUp);
@@ -2397,12 +2409,10 @@ export class WaMixerView extends HTMLElement {
 			(db) => {
 				applyVisual(db);
 				applyLiveGainDb(send.attributes.id, db, true); // Send routes through a GainNode-based bus, linear like GainNode
-			},
-			(db) => {
 				const nodeNow = ops.findNodeById(xmlStore.root, send.id);
-				if (!nodeNow) return;
-				xmlStore.updateAttributes(send.id, { ...nodeNow.attributes, gain: dbToGainAttr(db) });
-			}
+				if (nodeNow) this._commitAttributes(send.id, { ...nodeNow.attributes, gain: dbToGainAttr(db) });
+			},
+			() => {}
 		);
 		row.appendChild(knobWrap);
 

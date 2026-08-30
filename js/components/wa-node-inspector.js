@@ -785,17 +785,14 @@ export class WaNodeInspector extends HTMLElement {
 		numberInput.step = range.step;
 		numberInput.value = value ?? "";
 
-		// "input" fires continuously while the thumb is being dragged — only
-		// mirror it into the paired number field locally. Committing via
-		// onChange on every tick would still work (it no longer forces a
-		// re-render, see _renderAttributeRow), but it'd also fire xmlStore's
-		// "change" event dozens of times per drag for every *other* listener
-		// (code view, preview, ...). "change" fires once, at release — commit
-		// there instead, same as a text field committing on blur.
+		// Commits on every "input" tick (not just "change" at release), per
+		// Hans — safe here specifically because onChange sets _isLocalEdit
+		// around its xmlStore.updateAttributes call (see below), which skips
+		// this component's own re-render; other listeners (code view,
+		// preview, ...) still see every intermediate value via xmlStore's
+		// own "change" event, same as before.
 		slider.addEventListener("input", () => {
 			numberInput.value = slider.value;
-		});
-		slider.addEventListener("change", () => {
 			onChange(slider.value);
 		});
 		numberInput.addEventListener("input", () => {
