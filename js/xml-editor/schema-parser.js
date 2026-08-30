@@ -311,8 +311,13 @@ function parseAttributeDecl(attr, namedSimpleTypes) {
 function applyBaseKeyword(schemaAttr, type) {
 	if (type.includes("integer") || type.includes("int") || type.includes("decimal") || type.includes("float") || type.includes("double")) {
 		schemaAttr.type = "number";
-		schemaAttr.minValue = 0;
-		schemaAttr.maxValue = 100;
+		// minValue/maxValue deliberately left undefined here — applyFacets
+		// (below) fills them in from the type's own minInclusive/maxInclusive
+		// if it has any (e.g. "gain"'s 0-1), and getSmartRange falls back to
+		// a sensible default (attribute-name heuristics, else 0-100) when a
+		// type has no explicit facet at all. Presetting 0-100 here used to
+		// silently win over a real, narrower facet like gain's 0-1, since
+		// applyFacets only fills in a value that's still undefined.
 	} else if (type.includes("boolean")) {
 		schemaAttr.type = "boolean";
 	}

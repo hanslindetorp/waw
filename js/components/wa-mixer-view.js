@@ -1,6 +1,8 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
+import { applyLiveProperty } from "../waxml-integration/live-property.js";
+import { linearRatioToDb } from "../waxml-integration/gain-units.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
@@ -24,7 +26,7 @@ function gainToDb(rawValue) {
 	const dbMatch = /^(-?\d+(\.\d+)?)dB$/i.exec(str);
 	if (dbMatch) return parseFloat(dbMatch[1]);
 	const num = parseFloat(str);
-	if (Number.isFinite(num)) return num <= 0 ? -Infinity : 20 * Math.log10(num);
+	if (Number.isFinite(num)) return linearRatioToDb(num);
 	return 0; // a mathExpression or unparseable value — fall back to unity for display
 }
 
@@ -33,36 +35,14 @@ function dbToGainAttr(db) {
 	return `${Math.round(db * 10) / 10}dB`;
 }
 
+// Mixer-specific floor on top of the shared, pure linearRatioToDb/its
+// inverse: below the fader's own -60dB convention-for-silence, snap to
+// exactly 0 rather than the tiny-but-nonzero value the raw log-taper math
+// would otherwise give (Math.pow(10, -60/20) = 0.001, not 0) — matches the
+// fader track's own "all the way down = true silence" semantics.
 function dbToLinear(db) {
 	if (!(db > FADER_MIN_DB)) return 0;
 	return Math.pow(10, db / 20);
-}
-
-// Applies a value directly to a node's *live* waxml object, if one exists
-// right now (i.e. playback is running and this node survived into the
-// currently-loaded engine graph) — no engine reload, an immediate,
-// click-free change via waxml's own setTargetAtTime-backed property
-// setters (confirmed in waxml.js: `set gain(val){ this.setTargetAtTime(...) }`
-// etc.), per the design discussed with Hans. A no-op whenever nothing's
-// playing — xmlStore is always the source of truth; this is purely a
-// "also nudge the currently-sounding audio to match" side channel.
-function applyLiveProperty(nodeId, propName, value) {
-	if (!playerStore.isPlaying || !nodeId) return;
-	let liveObj;
-	try {
-		const matches = playerStore.getLiveObjects(`[id='${nodeId}']`);
-		liveObj = matches && matches[0];
-	} catch {
-		liveObj = null;
-	}
-	if (!liveObj) return;
-	try {
-		liveObj[propName] = value;
-	} catch {
-		// A property this node type doesn't actually support (e.g. the node
-		// wasn't the shape we expected) — not worth surfacing, the XML
-		// attribute is still the source of truth and already updated.
-	}
 }
 
 // gain is special-cased: GainNode.gain is a linear multiplier, but
@@ -237,6 +217,17 @@ const BIQUAD_TYPE_FALLBACK = ["lowpass", "highpass", "bandpass", "lowshelf", "hi
 function getBiquadTypeOptions() {
 	const attr = xmlStore.schema?.elements?.BiquadFilterNode?.allowedAttributes?.find((a) => a.name === "type");
 	return attr?.enumValues?.length ? attr.enumValues : BIQUAD_TYPE_FALLBACK;
+}
+
+// Same per-type frequency starting points Hans specified for a fresh "Full
+// Channel Strip"'s three built-in filters (_addChannelFull) — reused here so
+// a filter added one at a time via the Filter section's own "+" menu starts
+// in the same sensible spot; any type without its own tuned default falls
+// back to a plain midrange frequency.
+const FILTER_TYPE_DEFAULT_FREQUENCY = { highshelf: 4000, peaking: 400, lowshelf: 150 };
+
+function defaultFilterAttributes(type) {
+	return { type, gain: "0", Q: "0", frequency: String(FILTER_TYPE_DEFAULT_FREQUENCY[type] ?? 300) };
 }
 
 const template = document.createElement("template");
@@ -773,6 +764,11 @@ template.innerHTML = `
 		}
 		.add-channel-wrap {
 			position: relative;
+			flex: 0 0 auto;
+		}
+		.add-filter-wrap {
+			position: relative;
+			width: 100%;
 			flex: 0 0 auto;
 		}
 		.channel-type-menu {
@@ -1990,32 +1986,78 @@ export class WaMixerView extends HTMLElement {
 
 	// Same look as the Insert section's own "+" (.insert-slot empty), per
 	// Hans — sits right after the last filter row, or right at the top if
-	// this Chain has none yet. New filters default to a gentle, easy-to-hear
-	// starting point (peaking, unity gain, narrow-ish Q, midrange frequency)
-	// rather than a silent/no-op one, so the new band is obviously there to
-	// tweak.
+	// this Chain has none yet. Click opens a small menu of BiquadFilterNode's
+	// own `type` enum (same list, same source, as the per-filter type
+	// select — see getBiquadTypeOptions) instead of always adding the same
+	// hardcoded type, per Hans.
 	_buildAddFilterSlot(chainNode, roles) {
+		const wrap = document.createElement("div");
+		wrap.className = "add-filter-wrap";
+		wrap.style.marginTop = `${SECTION_ROW_GAP}px`;
+
 		const slot = document.createElement("div");
 		slot.className = "insert-slot empty";
-		slot.style.marginTop = `${SECTION_ROW_GAP}px`;
 		slot.textContent = "+";
 		slot.title = "Add filter";
-		slot.addEventListener("click", () => {
-			const chainNow = ops.findNodeById(xmlStore.root, chainNode.id);
-			if (!chainNow) return;
-			const rolesNow = this._classifyChain(chainNow);
-			const lastFilter = rolesNow.filters[rolesNow.filters.length - 1];
-			let index;
-			if (lastFilter) {
-				index = chainNow.children.findIndex((c) => c.id === lastFilter.id) + 1;
-			} else if (rolesNow.muteGainNode) {
-				index = chainNow.children.findIndex((c) => c.id === rolesNow.muteGainNode.id) + 1;
-			} else {
-				index = 0;
-			}
-			xmlStore.insertNewChild(chainNow.id, "BiquadFilterNode", { type: "peaking", gain: "0", Q: "0", frequency: "300" }, index);
+		slot.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._toggleFilterTypeMenu(wrap, chainNode);
 		});
-		return slot;
+		wrap.appendChild(slot);
+		return wrap;
+	}
+
+	// Same menu shape/behavior (position, hover, click-outside-to-close) as
+	// _toggleChannelTypeMenu — a flat list of BiquadFilterNode's own `type`
+	// enum values rather than a fixed set of named options.
+	_toggleFilterTypeMenu(wrap, chainNode) {
+		const existing = wrap.querySelector(".channel-type-menu");
+		if (existing) {
+			existing.remove();
+			return;
+		}
+		const menu = document.createElement("div");
+		menu.className = "channel-type-menu";
+		getBiquadTypeOptions().forEach((type) => {
+			const btn = document.createElement("button");
+			btn.type = "button";
+			btn.className = "channel-type-option";
+			btn.textContent = type;
+			btn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				menu.remove();
+				this._addFilter(chainNode, type);
+			});
+			menu.appendChild(btn);
+		});
+		wrap.appendChild(menu);
+		const closeOnOutside = (e) => {
+			if (!e.composedPath().includes(wrap)) {
+				menu.remove();
+				document.removeEventListener("pointerdown", closeOnOutside, true);
+			}
+		};
+		setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
+	}
+
+	// New filters default to the same per-type starting point a fresh "Full
+	// Channel Strip"'s three built-in filters get (defaultFilterAttributes) —
+	// a gentle, easy-to-hear starting point rather than a silent/no-op one,
+	// so the new band is obviously there to tweak.
+	_addFilter(chainNode, type) {
+		const chainNow = ops.findNodeById(xmlStore.root, chainNode.id);
+		if (!chainNow) return;
+		const rolesNow = this._classifyChain(chainNow);
+		const lastFilter = rolesNow.filters[rolesNow.filters.length - 1];
+		let index;
+		if (lastFilter) {
+			index = chainNow.children.findIndex((c) => c.id === lastFilter.id) + 1;
+		} else if (rolesNow.muteGainNode) {
+			index = chainNow.children.findIndex((c) => c.id === rolesNow.muteGainNode.id) + 1;
+		} else {
+			index = 0;
+		}
+		xmlStore.insertNewChild(chainNow.id, "BiquadFilterNode", defaultFilterAttributes(type), index);
 	}
 
 	// Same option list the XML editor's own Inspector uses for this

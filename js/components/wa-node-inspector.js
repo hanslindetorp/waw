@@ -1,5 +1,28 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { getSmartRange, testPattern } from "../xml-editor/attribute-controls.js";
+import { applyLiveProperty } from "../waxml-integration/live-property.js";
+import { linearRatioToDb } from "../waxml-integration/gain-units.js";
+
+// Nudges the live audio graph (if currently playing and this node survived
+// into it) to match a value just edited here — same "also move the
+// currently-sounding audio, xmlStore stays the source of truth" side
+// channel wa-mixer-view's own knobs/faders already use for their own edits
+// (see applyLiveProperty), so dragging *this* slider is just as live, per
+// Hans. Most attributes share their unit with the live Web Audio param
+// they drive, so the raw parsed number just passes straight through —
+// `gain` is the one that needs converting first: this attribute (and its
+// slider) is always the 0-1 linear-ratio form, but only some node types'
+// live gain param is natively linear (GainNode/Send) — a BiquadFilterNode's
+// is natively dB (see wa-mixer-view.js's own applyLiveGainDb, same rule).
+function applyLiveAttributeNudge(node, attrName, rawValue) {
+	const num = parseFloat(rawValue);
+	if (!Number.isFinite(num)) return; // a "-40dB"/mathExpression form, or non-numeric — no live nudge, XML stays authoritative
+	if (attrName === "gain" && node.tagName === "BiquadFilterNode") {
+		applyLiveProperty(node.attributes.id, "gain", linearRatioToDb(num));
+		return;
+	}
+	applyLiveProperty(node.attributes.id, attrName, num);
+}
 
 // When present, these always lead the attribute list, in this exact order,
 // ahead of everything else (which stays alphabetical) — separated by a
@@ -450,6 +473,7 @@ export class WaNodeInspector extends HTMLElement {
 			xmlStore.updateAttributes(node.id, { ...node.attributes, [attrName]: v });
 			this._isLocalEdit = false;
 			removeBtn.disabled = false;
+			applyLiveAttributeNudge(node, attrName, v);
 		};
 
 		if (attrSchema?.type === "boolean") {
