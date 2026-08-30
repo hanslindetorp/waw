@@ -146,9 +146,10 @@ const EQ_MIN_DB = -15;
 const EQ_MAX_DB = 15;
 const FADER_TRACK_HEIGHT = 150;
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range
-// Fixed, shared-across-all-channels section heights — the filter section's
-// height is dynamic (tallest channel's filter count sets it for everyone),
-// insert/send are simply fixed and scroll internally if content overflows.
+// Fixed, shared-across-all-channels section heights — each is set by
+// whichever channel has the *most* of that section's own content (filter
+// count / insert count / send count), so all channels' rows line up
+// regardless of how much any one of them has, per Hans.
 // Filter rows got taller here specifically to fit the gain+freq+Q knob
 // cluster plus the type dropdown below it without spilling into the row
 // below (the "knobsen ligger på varandra" bug Hans reported) — 2 stacked
@@ -159,12 +160,37 @@ const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full ran
 // the next filter's gain knob the moment anything renders half a pixel
 // taller than expected).
 const FILTER_ROW_HEIGHT = 104;
-// Insert/Send sections reserve room for exactly one real row (an insert
-// slot, or one send's knob+bus+pre/post-button) — not several — per Hans:
-// vertical space in a channel strip is scarce, and both already scroll
-// internally (see their overflow-y:auto) for anything beyond that one slot.
-const INSERT_SECTION_HEIGHT = 30;
-const SEND_SECTION_HEIGHT = 82;
+// Insert/Send are sized to their *actual* content (no fixed minimum) — an
+// empty channel's Insert section is just tall enough for the "+" row, per
+// Hans — computed from these measured per-row heights rather than reserving
+// a flat constant. Both sections also get flex-grow (see their CSS), so any
+// leftover room in a channel strip that's shorter than the panel is shared
+// between them instead of sitting empty below Send.
+const INSERT_SLOT_HEIGHT = 22; // .insert-slot's real rendered height (an empty "+" slot is the same height as a filled one)
+const INSERT_SECTION_PADDING = 8; // .insert-section's own top+bottom padding
+const SEND_ROW_HEIGHT = 74; // one real .send-row (knob + bus input + pre/post button)
+// The add-send row now reuses .insert-slot's own styling (per Hans, so it
+// matches the Insert section's "+" exactly) instead of its own bespoke
+// .send-row.add-send look, so its real height matches INSERT_SLOT_HEIGHT too.
+const ADD_SEND_ROW_HEIGHT = INSERT_SLOT_HEIGHT;
+const SEND_SECTION_PADDING = 8;
+const SECTION_ROW_GAP = 4; // gap between rows within .insert-section/.sends-section
+// The Filter section's own "+" (same .insert-slot look) sits right after the
+// last filter row — or right at the top if there are none, per Hans — with a
+// small top margin of its own (not a section-wide gap, which would also
+// space out the filter rows themselves and break their tuned FILTER_ROW_HEIGHT
+// math).
+const ADD_FILTER_ROW_HEIGHT = INSERT_SLOT_HEIGHT + SECTION_ROW_GAP;
+
+function insertSectionHeightFor(insertCount) {
+	const rows = insertCount + 1; // always includes the trailing "+" add-slot
+	return INSERT_SECTION_PADDING + INSERT_SLOT_HEIGHT * rows + SECTION_ROW_GAP * (rows - 1);
+}
+
+function sendSectionHeightFor(sendCount) {
+	const gaps = sendCount; // sendCount real rows + 1 add-row = sendCount gaps between them
+	return SEND_SECTION_PADDING + SEND_ROW_HEIGHT * sendCount + ADD_SEND_ROW_HEIGHT + SECTION_ROW_GAP * gaps;
+}
 // Fixed heights for the bottom-group's own rows (on/solo/pan/fader) — every
 // channel type (VU-only, Pan+Vol+VU, full) reserves the exact same space
 // for each row via a spacer when it doesn't have a real control there, so
@@ -284,13 +310,21 @@ template.innerHTML = `
 			flex: 0 0 auto;
 			box-sizing: border-box;
 		}
+		/* Mirrors .insert-section/.sends-section's own flex-grow: since both
+		   columns start from the exact same total content height and live in
+		   the same-height container, growing each side's Insert/Send label by
+		   the same rule (independently, no cross-column JS needed) keeps them
+		   landing at the same final height as the real sections. */
+		.ins-label,
+		.send-label {
+			flex: 1 0 auto;
+		}
 		.row-label-divider {
 			width: 100%;
 			height: 1px;
 			flex: 0 0 auto;
 		}
 		.row-label-bottom {
-			margin-top: auto;
 			display: flex;
 			flex-direction: column;
 			align-items: center;
@@ -379,6 +413,18 @@ template.innerHTML = `
 		.on-btn.active .lamp {
 			background: radial-gradient(circle at 35% 30%, #7cf29a, #1f7a3a 72%);
 			box-shadow: 0 0 6px rgba(80, 220, 130, 0.9);
+		}
+		/* "You clicked me, waiting for my real status" — the lamp itself
+		   deliberately does NOT jump to lit on click (see _buildSoloButton):
+		   it only ever reflects the live getChannelGain readout, since the
+		   real transition can be delayed (quantize) or gradual
+		   (transitionTime) and jumping ahead of that would lie. This is a
+		   separate, blinking border on the button itself, only shown when
+		   quantize is set (transitionTime alone already self-visualizes via
+		   the lamp's own gradual brightening) — same blink as the big
+		   slider's own .standby, cleared by the same live "update" event. */
+		.solo-btn.standby {
+			animation: solo-standby-blink 0.6s ease-in-out infinite;
 		}
 		.other-node {
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
@@ -505,11 +551,18 @@ template.innerHTML = `
 		.sends-section {
 			display: flex;
 			flex-direction: column;
-			gap: 0.2rem;
+			gap: ${SECTION_ROW_GAP}px;
 			width: 100%;
-			padding: 0.25rem 0;
+			padding: ${INSERT_SECTION_PADDING / 2}px 0;
 			overflow-y: auto;
-			flex: 0 0 auto;
+			/* grow (not 0 0 auto) so leftover vertical space in a channel strip
+			   shorter than the panel gets shared between Insert and Send
+			   instead of sitting empty below Send, per Hans; shrink:0 keeps
+			   them from ever compressing below the content-fit height set in
+			   JS (see insertSectionHeightFor/sendSectionHeightFor) even though
+			   that should never actually be under pressure, now that
+			   .channel-strip's own height is min-height:100%, not a hard cap. */
+			flex: 1 0 auto;
 			box-sizing: border-box;
 		}
 		.section-divider {
@@ -556,17 +609,6 @@ template.innerHTML = `
 		.send-row:last-child {
 			border-bottom: none;
 		}
-		.send-row.add-send {
-			cursor: pointer;
-			color: #aab2ba;
-			font-size: 0.85rem;
-			border: 1px dashed #5a636d;
-			border-radius: 3px;
-		}
-		.send-row.add-send:hover {
-			border-color: var(--waw-accent, #4fa3ff);
-			color: var(--waw-accent, #4fa3ff);
-		}
 		.send-bus-input {
 			width: 100%;
 			box-sizing: border-box;
@@ -593,7 +635,6 @@ template.innerHTML = `
 			color: var(--waw-accent, #4fa3ff);
 		}
 		.bottom-group {
-			margin-top: auto;
 			display: flex;
 			flex-direction: column;
 			align-items: center;
@@ -929,9 +970,9 @@ template.innerHTML = `
 	<div class="mixer">
 		<div class="mixer-body">
 			<div class="row-labels">
-				<div class="row-label eq-label">EQ</div>
+				<div class="row-label eq-label">Filter</div>
 				<div class="row-label-divider"></div>
-				<div class="row-label ins-label">Ins</div>
+				<div class="row-label ins-label">Insert</div>
 				<div class="row-label-divider"></div>
 				<div class="row-label send-label">Send</div>
 				<div class="row-label-bottom">
@@ -947,7 +988,7 @@ template.innerHTML = `
 						</div>
 					</div>
 					<div class="row-label pan-label">Pan</div>
-					<div class="row-label vol-label">Vol</div>
+					<div class="row-label vol-label">Volume</div>
 					<div class="channel-label-row-spacer"></div>
 				</div>
 			</div>
@@ -991,6 +1032,14 @@ export class WaMixerView extends HTMLElement {
 		this._activeMixerId = null;
 		this._liveMixerObj = null; // the live waxml Mixer object currently wired for "update"-event standby-clearing, per Hans's addEventListener("update") proposal
 		this._liveMixerUpdateHandler = null;
+		// Which channel index's Solo button is showing the "waiting for real
+		// status" blink — instance state, not just a DOM class, because
+		// _setSoloValue/_clearSoloValue trigger a synchronous re-render
+		// (xmlStore.updateAttributes) that rebuilds every .solo-btn from
+		// scratch, detaching the very button a click just marked. Read back
+		// by _buildSoloButton on every render instead, so it survives that
+		// rebuild until the live "update" event clears it.
+		this._pendingSoloChannelIndex = null;
 		this._meterState = new Map(); // chainId (internal tree id) -> {analyser, dataArray, vuFillEl, smoothedT}
 		this._meterRafId = null;
 		this._onStoreChange = this._onStoreChange.bind(this);
@@ -1060,6 +1109,11 @@ export class WaMixerView extends HTMLElement {
 				lamp.style.filter = "";
 				lamp.style.boxShadow = "";
 			});
+			// Nothing will ever confirm a quantize-gated change once playback
+			// stops (no more live object to fire "update") — leaving the flag
+			// set would blink a stale button on the next unrelated render.
+			this._pendingSoloChannelIndex = null;
+			this.shadowRoot.querySelectorAll(".solo-btn.standby").forEach((btn) => btn.classList.remove("standby"));
 		}
 	}
 
@@ -1083,7 +1137,11 @@ export class WaMixerView extends HTMLElement {
 		if (this._liveMixerObj === liveObj) return;
 		this._unwireMixerUpdateListener();
 		this._liveMixerObj = liveObj;
-		this._liveMixerUpdateHandler = () => this._soloHandle.classList.remove("standby");
+		this._liveMixerUpdateHandler = () => {
+			this._soloHandle.classList.remove("standby");
+			this._pendingSoloChannelIndex = null;
+			this.shadowRoot.querySelectorAll(".solo-btn.standby").forEach((btn) => btn.classList.remove("standby"));
+		};
 		liveObj.addEventListener("update", this._liveMixerUpdateHandler);
 	}
 
@@ -1391,6 +1449,25 @@ export class WaMixerView extends HTMLElement {
 		this._commitSoloValue(value);
 	}
 
+	// Clicking a Solo button that's already the active one turns solo back
+	// off entirely, per Hans — removes the attribute rather than writing 0
+	// (0 is itself a valid solo *position*, the first channel's, not "no
+	// solo"). No live-apply call here: unlike a value change, there's no
+	// confirmed engine API for "clear solo" to guess at (Hans is building
+	// that engine side in parallel) — the XML attribute removal, which
+	// applies live without a graph rebuild since it's a non-structural
+	// update, is the only side effect until that's confirmed.
+	_clearSoloValue() {
+		this._applySoloSliderVisual(0.5, false);
+		if (!this._activeMixerId) return;
+		const node = ops.findNodeById(xmlStore.root, this._activeMixerId);
+		if (!node) return;
+		const attrs = { ...node.attributes };
+		delete attrs.solo;
+		xmlStore.updateAttributes(node.id, attrs);
+		if (node.attributes.quantize) this._soloHandle.classList.add("standby");
+	}
+
 	_handleQuantizeChange() {
 		if (!this._activeMixerId) return;
 		const node = ops.findNodeById(xmlStore.root, this._activeMixerId);
@@ -1418,22 +1495,32 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	_render(mixerNode) {
-		// The filter section's height is shared across every channel — set
-		// by whichever channel has the most BiquadFilterNodes — so all
-		// channels' Ins/Send/Pan/Vol rows line up horizontally regardless of
-		// how many EQ bands any one of them has, per Hans.
+		// Filter/Insert/Send section heights are each shared across every
+		// channel — set by whichever channel has the most of that section's
+		// own row type — so all channels' rows line up regardless of how
+		// much EQ/insert/send content any one of them has, per Hans. Insert
+		// and Send are exactly as tall as their content (no fixed minimum
+		// anymore) and both get flex-grow (see their CSS) so that if a
+		// channel strip has room to spare — its content is shorter than the
+		// panel — the leftover space is shared between them instead of
+		// sitting empty below Send.
 		const chainChildren = mixerNode.children.filter((c) => c.tagName === "Chain");
 		const maxFilterCount = Math.max(1, ...chainChildren.map((c) => c.children.filter((cc) => cc.tagName === "BiquadFilterNode").length));
-		const filterSectionHeight = maxFilterCount * FILTER_ROW_HEIGHT;
+		const maxInsertCount = Math.max(0, ...chainChildren.map((c) => c.children.filter((cc) => cc.tagName === "Wam").length));
+		const maxSendCount = Math.max(0, ...chainChildren.map((c) => c.children.filter((cc) => cc.tagName === "Send").length));
+		const filterSectionHeight = maxFilterCount * FILTER_ROW_HEIGHT + ADD_FILTER_ROW_HEIGHT;
+		const insertSectionHeight = insertSectionHeightFor(maxInsertCount);
+		const sendSectionHeight = sendSectionHeightFor(maxSendCount);
+		const sectionHeights = { filter: filterSectionHeight, insert: insertSectionHeight, send: sendSectionHeight };
 
 		this._eqLabel.style.height = `${filterSectionHeight}px`;
-		this._insLabel.style.height = `${INSERT_SECTION_HEIGHT}px`;
-		this._sendLabel.style.height = `${SEND_SECTION_HEIGHT}px`;
+		this._insLabel.style.height = `${insertSectionHeight}px`;
+		this._sendLabel.style.height = `${sendSectionHeight}px`;
 
 		this._channels.innerHTML = "";
 		const totalCount = mixerNode.children.length;
 		mixerNode.children.forEach((child, index) => {
-			this._channels.appendChild(this._buildChannelStrip(child, index, totalCount, filterSectionHeight));
+			this._channels.appendChild(this._buildChannelStrip(child, index, totalCount, sectionHeights));
 		});
 		this._channels.appendChild(this._buildAddChannelStrip(mixerNode));
 
@@ -1540,9 +1627,9 @@ export class WaMixerView extends HTMLElement {
 		const nextNum = this._nextChannelId(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: `MixChan-${nextNum}` });
 		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first in the signal chain, per Hans
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf" });
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking" });
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "lowshelf" });
+		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf", frequency: "4000" });
+		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking", frequency: "400" });
+		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "lowshelf", frequency: "150" });
 		xmlStore.insertNewChild(chain.id, "StereoPannerNode", {});
 		xmlStore.insertNewChild(chain.id, "GainNode", {});
 	}
@@ -1569,21 +1656,21 @@ export class WaMixerView extends HTMLElement {
 	// (including the dividers between them), so a VU-only or "other" strip's
 	// Pan/Vol/Solo rows still line up with a full channel strip's, per
 	// Hans's "alla channel-typer ska vara i linje".
-	_buildSectionSpacers(filterSectionHeight) {
+	_buildSectionSpacers(sectionHeights) {
 		const frag = document.createDocumentFragment();
 		const filterSpacer = document.createElement("div");
 		filterSpacer.className = "filter-section";
-		filterSpacer.style.height = `${filterSectionHeight}px`;
+		filterSpacer.style.height = `${sectionHeights.filter}px`;
 		frag.appendChild(filterSpacer);
 		frag.appendChild(this._buildDivider());
 		const insertSpacer = document.createElement("div");
 		insertSpacer.className = "insert-section";
-		insertSpacer.style.height = `${INSERT_SECTION_HEIGHT}px`;
+		insertSpacer.style.height = `${sectionHeights.insert}px`;
 		frag.appendChild(insertSpacer);
 		frag.appendChild(this._buildDivider());
 		const sendSpacer = document.createElement("div");
 		sendSpacer.className = "sends-section";
-		sendSpacer.style.height = `${SEND_SECTION_HEIGHT}px`;
+		sendSpacer.style.height = `${sectionHeights.send}px`;
 		frag.appendChild(sendSpacer);
 		return frag;
 	}
@@ -1612,9 +1699,35 @@ export class WaMixerView extends HTMLElement {
 		lamp.className = "lamp";
 		btn.appendChild(lamp);
 		const targetValue = totalCount > 1 ? index / (totalCount - 1) : 0;
+
+		// This button's own position matching the Mixer's current solo
+		// value decides what a click *does* (toggle off vs. re-target) —
+		// but deliberately isn't shown on the lamp itself. The lamp only
+		// ever reflects the live getChannelGain readout (_updateSoloButtonGains),
+		// which can lag behind — a quantized or gradually-transitioning
+		// change means the "real" channel hasn't actually gotten there yet,
+		// and lighting the lamp immediately would lie about that. The
+		// pending state itself gets a separate, blinking-border cue instead
+		// (.standby, below) — same idea and same visual language as the big
+		// slider's own standby blink, per Hans.
+		const mixerNode = this._activeMixerId ? ops.findNodeById(xmlStore.root, this._activeMixerId) : null;
+		const currentSolo = mixerNode?.attributes.solo !== undefined ? parseFloat(mixerNode.attributes.solo) : NaN;
+		const isActive = Number.isFinite(currentSolo) && Math.abs(currentSolo - targetValue) < 0.001;
+		if (this._pendingSoloChannelIndex === index) btn.classList.add("standby");
+
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
-			this._setSoloValue(targetValue);
+			// Set the pending flag (instance state, not just this DOM node —
+			// see its own comment) *before* committing, since
+			// _setSoloValue/_clearSoloValue trigger a synchronous re-render
+			// that replaces this very button; _buildSoloButton reads the flag
+			// back above on the next build. Only quantize actually delays
+			// anything (transitionTime alone already self-visualizes via the
+			// lamp's own live brightness ramping), so only quantize earns the
+			// blink.
+			this._pendingSoloChannelIndex = mixerNode?.attributes.quantize ? index : null;
+			if (isActive) this._clearSoloValue();
+			else this._setSoloValue(targetValue);
 		});
 		return btn;
 	}
@@ -1668,12 +1781,12 @@ export class WaMixerView extends HTMLElement {
 
 	// Bare <GainNode> direct child of <Mixer> — the "VU" channel type: shows
 	// only the VU meter, no fader handle, no pan, no EQ/insert/send.
-	_buildVuOnlyStrip(child, index, totalCount, filterSectionHeight) {
+	_buildVuOnlyStrip(child, index, totalCount, sectionHeights) {
 		const strip = document.createElement("div");
 		strip.className = "channel-strip";
 		if (xmlStore.selectedNodeId === child.id) strip.classList.add("selected");
 		this._wireStripSelect(strip, child);
-		strip.appendChild(this._buildSectionSpacers(filterSectionHeight));
+		strip.appendChild(this._buildSectionSpacers(sectionHeights));
 
 		const bottomGroup = document.createElement("div");
 		bottomGroup.className = "bottom-group";
@@ -1712,9 +1825,9 @@ export class WaMixerView extends HTMLElement {
 		return strip;
 	}
 
-	_buildChannelStrip(child, index, totalCount, filterSectionHeight) {
+	_buildChannelStrip(child, index, totalCount, sectionHeights) {
 		if (child.tagName === "GainNode") {
-			return this._buildVuOnlyStrip(child, index, totalCount, filterSectionHeight);
+			return this._buildVuOnlyStrip(child, index, totalCount, sectionHeights);
 		}
 
 		const strip = document.createElement("div");
@@ -1729,7 +1842,7 @@ export class WaMixerView extends HTMLElement {
 			// send/pan/fader layout below, which is specifically a <Chain>'s
 			// shape. Still reserves the same row heights so its Solo button
 			// lines up with every other channel's.
-			strip.appendChild(this._buildSectionSpacers(filterSectionHeight));
+			strip.appendChild(this._buildSectionSpacers(sectionHeights));
 
 			const bottomGroup = document.createElement("div");
 			bottomGroup.className = "bottom-group";
@@ -1764,14 +1877,15 @@ export class WaMixerView extends HTMLElement {
 
 		const filterSection = document.createElement("div");
 		filterSection.className = "filter-section";
-		filterSection.style.height = `${filterSectionHeight}px`;
+		filterSection.style.height = `${sectionHeights.filter}px`;
 		roles.filters.forEach((f) => filterSection.appendChild(this._buildFilterRow(f)));
+		filterSection.appendChild(this._buildAddFilterSlot(child, roles));
 		strip.appendChild(filterSection);
 
 		strip.appendChild(this._buildDivider());
-		strip.appendChild(this._buildInsertSection(child, roles));
+		strip.appendChild(this._buildInsertSection(child, roles, sectionHeights.insert));
 		strip.appendChild(this._buildDivider());
-		strip.appendChild(this._buildSendsSection(child, roles));
+		strip.appendChild(this._buildSendsSection(child, roles, sectionHeights.send));
 
 		const bottomGroup = document.createElement("div");
 		bottomGroup.className = "bottom-group";
@@ -1863,6 +1977,36 @@ export class WaMixerView extends HTMLElement {
 		row.appendChild(this._buildFilterTypeSelect(node));
 
 		return row;
+	}
+
+	// Same look as the Insert section's own "+" (.insert-slot empty), per
+	// Hans — sits right after the last filter row, or right at the top if
+	// this Chain has none yet. New filters default to a gentle, easy-to-hear
+	// starting point (peaking, unity gain, narrow-ish Q, midrange frequency)
+	// rather than a silent/no-op one, so the new band is obviously there to
+	// tweak.
+	_buildAddFilterSlot(chainNode, roles) {
+		const slot = document.createElement("div");
+		slot.className = "insert-slot empty";
+		slot.style.marginTop = `${SECTION_ROW_GAP}px`;
+		slot.textContent = "+";
+		slot.title = "Add filter";
+		slot.addEventListener("click", () => {
+			const chainNow = ops.findNodeById(xmlStore.root, chainNode.id);
+			if (!chainNow) return;
+			const rolesNow = this._classifyChain(chainNow);
+			const lastFilter = rolesNow.filters[rolesNow.filters.length - 1];
+			let index;
+			if (lastFilter) {
+				index = chainNow.children.findIndex((c) => c.id === lastFilter.id) + 1;
+			} else if (rolesNow.muteGainNode) {
+				index = chainNow.children.findIndex((c) => c.id === rolesNow.muteGainNode.id) + 1;
+			} else {
+				index = 0;
+			}
+			xmlStore.insertNewChild(chainNow.id, "BiquadFilterNode", { type: "peaking", gain: "0", Q: "0", frequency: "300" }, index);
+		});
+		return slot;
 	}
 
 	// Same option list the XML editor's own Inspector uses for this
@@ -2186,10 +2330,10 @@ export class WaMixerView extends HTMLElement {
 	// A real "pick a WAM from a list + live GUI preview" flow is a later
 	// step, per Hans — for now, an empty slot just adds a bare <Wam/>.
 
-	_buildInsertSection(chainNode, roles) {
+	_buildInsertSection(chainNode, roles, height) {
 		const section = document.createElement("div");
 		section.className = "insert-section";
-		section.style.height = `${INSERT_SECTION_HEIGHT}px`;
+		section.style.height = `${height}px`;
 		roles.wams.forEach((wam) => section.appendChild(this._buildInsertSlot(wam)));
 		section.appendChild(this._buildAddInsertSlot(chainNode, roles));
 		return section;
@@ -2227,10 +2371,10 @@ export class WaMixerView extends HTMLElement {
 
 	// --- sends section — fixed height, scrolls if it overflows ---
 
-	_buildSendsSection(chainNode, roles) {
+	_buildSendsSection(chainNode, roles, height) {
 		const section = document.createElement("div");
 		section.className = "sends-section";
-		section.style.height = `${SEND_SECTION_HEIGHT}px`;
+		section.style.height = `${height}px`;
 		roles.preSends.forEach((send) => section.appendChild(this._buildSendRow(send, false, chainNode)));
 		roles.postSends.forEach((send) => section.appendChild(this._buildSendRow(send, true, chainNode)));
 		section.appendChild(this._buildAddSendSlot(chainNode, roles));
@@ -2306,7 +2450,7 @@ export class WaMixerView extends HTMLElement {
 
 	_buildAddSendSlot(chainNode, roles) {
 		const slot = document.createElement("div");
-		slot.className = "send-row add-send";
+		slot.className = "insert-slot empty";
 		slot.textContent = "+";
 		slot.title = "Add send";
 		slot.addEventListener("click", () => {
