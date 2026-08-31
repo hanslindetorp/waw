@@ -3,6 +3,8 @@ import { testPattern } from "../xml-editor/attribute-controls.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
 import { parseGainAttributeToDb, isDbNativeGain, dbToLinearRatio } from "../waxml-integration/gain-units.js";
 import { getAttributeCurve } from "../xml-editor/attribute-curves.js";
+import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
+import { openIoPicker } from "./wa-io-picker.js";
 
 // Nudges the live audio graph (if currently playing and this node survived
 // into it) to match a value just edited here — same "also move the
@@ -566,7 +568,9 @@ export class WaNodeInspector extends HTMLElement {
 			applyLiveAttributeNudge(node, attrName, v);
 		};
 
-		if (attrSchema?.type === "boolean") {
+		if (attrName === "output" || attrName === "input" || attrName === "bus") {
+			control.appendChild(this._renderIoSelectorControl(node, attrName, value, attrSchema, onChange));
+		} else if (attrSchema?.type === "boolean") {
 			control.appendChild(this._renderBooleanControl(value, onChange));
 		} else if (attrSchema?.type === "union") {
 			control.appendChild(this._renderUnionControl(attrName, attrSchema, onChange));
@@ -942,6 +946,43 @@ export class WaNodeInspector extends HTMLElement {
 			unitLabel.textContent = curve.unit;
 			frag.appendChild(unitLabel);
 		}
+		return frag;
+	}
+
+	// "output"/"input" both hold a routing-target selector (either "#id" or a
+	// $variable-concatenation expression, per the ioSelector schema type) —
+	// still a free-editable text field (so a hand-typed expression stays
+	// possible), but with a 🔌 button that opens wa-io-picker.js's popup tree
+	// of every OTHER element currently offering the complementary attribute
+	// ("output"'s picker lists "input" targets and vice versa — see
+	// io-routing.js), writing "#thatId" straight into this field on pick.
+	_renderIoSelectorControl(node, attrName, value, attrSchema, onChange) {
+		const pattern = attrSchema?.type === "union" ? combineUnionPattern(attrSchema.unionMembers) : attrSchema?.pattern;
+		const frag = this._renderStringControl(value, { ...attrSchema, pattern }, onChange);
+
+		const pickBtn = document.createElement("button");
+		pickBtn.type = "button";
+		pickBtn.className = "toggle-btn pencil-btn";
+		pickBtn.textContent = "🔌";
+		pickBtn.title = `Pick a target from available ${complementNoun(attrName)}`;
+		pickBtn.addEventListener("click", () => {
+			// Re-read the current node fresh — same reasoning as every other
+			// button handler in this file (see e.g. _renderUnionControl): this
+			// closure is captured at render time, but xmlStore.root may have
+			// moved on by the time the user actually clicks.
+			const nodeNow = xmlStore.getSelectedNode();
+			if (!nodeNow) return;
+			const tree = buildRoutingTree(xmlStore.schema, xmlStore.root, attrName, nodeNow.id);
+			const rect = pickBtn.getBoundingClientRect();
+			openIoPicker(tree, rect).then((picked) => {
+				if (!picked) return;
+				const input = frag.querySelector("input");
+				input.value = picked;
+				input.dispatchEvent(new Event("input"));
+			});
+		});
+		frag.appendChild(pickBtn);
+
 		return frag;
 	}
 

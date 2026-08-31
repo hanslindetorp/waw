@@ -5,6 +5,8 @@ import { applyLiveProperty, applyLiveMethodCall } from "../waxml-integration/liv
 import { openWamPicker } from "./wa-wam-picker.js";
 import { openWamStack } from "./wa-wam-stack.js";
 import { getInsertEffects } from "../wam/wam-catalog.js";
+import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
+import { openIoPicker } from "./wa-io-picker.js";
 import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
@@ -607,8 +609,16 @@ template.innerHTML = `
 		.send-row:last-child {
 			border-bottom: none;
 		}
+		.send-bus-row {
+			display: flex;
+			align-items: center;
+			gap: 0.15rem;
+			width: 100%;
+		}
 		.send-bus-input {
 			width: 100%;
+			min-width: 0;
+			flex: 1 1 auto;
 			box-sizing: border-box;
 			background: #1a1c1f;
 			border: 1px solid #0b0c0d;
@@ -617,6 +627,19 @@ template.innerHTML = `
 			border-radius: 3px;
 			padding: 0.1rem 0.2rem;
 			text-align: center;
+		}
+		.send-bus-pick-btn {
+			flex: 0 0 auto;
+			background: #24272c;
+			border: 1px solid #0b0c0d;
+			border-radius: 3px;
+			font-size: 0.6rem;
+			line-height: 1;
+			padding: 0.1rem 0.2rem;
+			cursor: pointer;
+		}
+		.send-bus-pick-btn:hover {
+			border-color: var(--waw-accent, #4fa3ff);
 		}
 		.pre-post-btn {
 			background: #24272c;
@@ -2803,18 +2826,46 @@ export class WaMixerView extends HTMLElement {
 		);
 		row.appendChild(knobWrap);
 
+		const busRow = document.createElement("div");
+		busRow.className = "send-bus-row";
+
 		const busInput = document.createElement("input");
 		busInput.className = "send-bus-input";
 		busInput.type = "text";
 		busInput.placeholder = "output";
 		busInput.value = send.attributes.bus || "";
-		busInput.title = "Send output (bus selector) — picker UI coming in a later step";
+		busInput.title = "Send output (bus selector)";
 		busInput.addEventListener("change", () => {
 			const nodeNow = ops.findNodeById(xmlStore.root, send.id);
 			if (!nodeNow) return;
 			xmlStore.updateAttributes(send.id, { ...nodeNow.attributes, bus: busInput.value });
 		});
-		row.appendChild(busInput);
+		busRow.appendChild(busInput);
+
+		// Same routing-target picker as the Inspector's output/input/bus
+		// fields (see wa-node-inspector.js's _renderIoSelectorControl and
+		// io-routing.js) — "bus" shares "output"'s own complement direction
+		// (lists elements offering "input"), per Hans.
+		const busPickBtn = document.createElement("button");
+		busPickBtn.type = "button";
+		busPickBtn.className = "send-bus-pick-btn";
+		busPickBtn.textContent = "🔌";
+		busPickBtn.title = `Pick a target from available ${complementNoun("bus")}`;
+		busPickBtn.addEventListener("click", () => {
+			const nodeNow = ops.findNodeById(xmlStore.root, send.id);
+			if (!nodeNow) return;
+			const tree = buildRoutingTree(xmlStore.schema, xmlStore.root, "bus", nodeNow.id);
+			const rect = busPickBtn.getBoundingClientRect();
+			openIoPicker(tree, rect).then((picked) => {
+				if (!picked) return;
+				busInput.value = picked;
+				const nodeAtPick = ops.findNodeById(xmlStore.root, send.id);
+				if (nodeAtPick) xmlStore.updateAttributes(send.id, { ...nodeAtPick.attributes, bus: picked });
+			});
+		});
+		busRow.appendChild(busPickBtn);
+
+		row.appendChild(busRow);
 
 		const prePostBtn = document.createElement("button");
 		prePostBtn.type = "button";

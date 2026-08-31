@@ -161,16 +161,39 @@ copyNode(nodeId) {
 		this._syncCode();
 	}
 
-	// structural=false: an attribute value changing never adds/removes/
-	// reorders a node, so it can never change what a live waxml audio graph
-	// needs to look like — only *what value* a node's live setter should be
-	// given (see player-store.js, which listens for exactly this flag to
-	// decide whether a live edit can be applied via a direct setter, or
-	// needs the whole engine graph stopped and rebuilt).
+	// Most attribute changes are structural=false (see below) — but per Hans,
+	// a few specific ones don't have a working *live* equivalent at all:
+	// output/input/bus only take effect when waxml.js actually re-wires
+	// .connect() calls while building the graph, and an OscillatorNode's
+	// "type" governs which construction path it takes, not a property that
+	// can just be nudged after the fact. Changing any of these needs the
+	// whole graph rebuilt (player-store.js's normal structural-edit reload),
+	// same as adding/removing a node — a plain live-property nudge would
+	// silently do nothing.
+	static ROUTING_REBUILD_ATTRS = new Set(["output", "input", "bus"]);
+
+	// structural=false (the common case): an attribute value changing never
+	// adds/removes/reorders a node, so it can't change what a live waxml
+	// audio graph needs to look like — only *what value* a node's live
+	// setter should be given (see player-store.js, which listens for exactly
+	// this flag to decide whether a live edit can be applied via a direct
+	// setter, or needs the whole engine graph stopped and rebuilt). The
+	// routing/oscillator-type exception above is structural=true instead,
+	// for the same reason a tree-shape edit is.
 	updateAttributes(nodeId, attributes) {
 		if (!this.root) return;
+		const node = ops.findNodeById(this.root, nodeId);
+		const structural = this._attributeChangeNeedsRebuild(node, attributes);
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
-		this._syncCode(false);
+		this._syncCode(structural);
+	}
+
+	_attributeChangeNeedsRebuild(node, nextAttributes) {
+		if (!node) return false;
+		for (const name of XmlStore.ROUTING_REBUILD_ATTRS) {
+			if (nextAttributes[name] !== node.attributes[name]) return true;
+		}
+		return node.tagName === "OscillatorNode" && nextAttributes.type !== node.attributes.type;
 	}
 
 	renameSrcReferences(oldPath, newPath) {
