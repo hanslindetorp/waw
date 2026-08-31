@@ -5,6 +5,7 @@ import { createXmlNode } from "../xml-editor/xml-tree-ops.js";
 import { selection } from "../state/selection.js";
 import { bindCurrentFile, getCurrentFileId } from "./document-sync.js";
 import { initWorkstationState, flushWorkstationState } from "./workstation-state.js";
+import { resetEditHistory } from "./edit-history.js";
 
 // A "project" = the VFS's files/folders + the XML document currently open in
 // xmlStore. The schema (waxml.xsd) is an app-level constant, not project
@@ -21,6 +22,7 @@ export function createDefaultProject() {
 	bindCurrentFile(fileNode.id, xmlStore.codeValue);
 	selection.select(fileNode.id);
 	initWorkstationState();
+	resetEditHistory();
 }
 
 // The root tag name comes from the active schema (its own root element
@@ -64,6 +66,7 @@ export async function openProjectFromFile(file) {
 		// workstation-state.json and applies it, or creates a fresh default
 		// one if this zip never had one (e.g. not authored by Workstation).
 		initWorkstationState();
+		resetEditHistory();
 		return;
 	}
 
@@ -73,6 +76,7 @@ export async function openProjectFromFile(file) {
 	bindCurrentFile(fileNode.id, text);
 	selection.select(fileNode.id);
 	initWorkstationState();
+	resetEditHistory();
 }
 
 // Breadth-first search for a file literally named wa.xml (case-insensitive),

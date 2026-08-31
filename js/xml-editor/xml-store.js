@@ -92,6 +92,19 @@ class XmlStore extends EventTarget {
 		this._syncCode();
 	}
 
+	// Like setRoot, but for edit-history.js's undo/redo: restores a specific
+	// past selection along with the tree (setRoot always resets selection to
+	// the new root itself, which isn't what a mid-tree undo/redo should do).
+	// `root` here is a whole past `this.root` reference reused as-is — safe
+	// only because every xml-tree-ops.js mutator is non-mutating (each edit
+	// produces a *new* tree rather than touching an old one in place), so an
+	// old root snapshot can never have been corrupted by edits made since.
+	restoreSnapshot(root, selectedNodeId) {
+		this.root = root;
+		this.selectedNodeId = root && selectedNodeId && ops.findNodeById(root, selectedNodeId) ? selectedNodeId : root?.id ?? null;
+		this._syncCode(true);
+	}
+
 	createRoot(tagName) {
 		const trimmed = (tagName || "").trim();
 		if (!trimmed) return;

@@ -1,5 +1,6 @@
 import "./components/wa-panel.js";
 import "./components/wa-file-menu.js";
+import "./components/wa-edit-menu.js";
 import "./components/wa-player-bar.js";
 import "./components/wa-file-manager.js";
 import "./components/wa-preview.js";
@@ -10,11 +11,13 @@ import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
 import { createDefaultProject } from "./project/project-manager.js";
 import { registerPanels } from "./project/workstation-state.js";
+import { initEditHistory } from "./project/edit-history.js";
 
 const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
 const DEFAULT_SCHEMA_NAME = "waxml.xsd";
 
 registerPanels([...document.querySelectorAll("main.app-panels > wa-panel")]);
+initEditHistory();
 loadDefaultSchema().then(createDefaultProject);
 
 async function loadDefaultSchema() {

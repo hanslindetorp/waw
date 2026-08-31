@@ -117,6 +117,50 @@ export class VFS extends EventTarget {
 		[...this.listFolder(ROOT_ID)].forEach((node) => this.delete(node.id));
 	}
 
+	// A deep-enough snapshot for edit-history.js's undo/redo: every mutator
+	// above (rename, delete, moveFile, ...) edits node objects and their
+	// `children` arrays in place, so simply keeping a reference to `_nodes`
+	// would let *later* mutations silently corrupt an "old" snapshot. `file`
+	// itself (a Blob) is immutable and fine to share by reference;
+	// `sessionUrl` is deliberately dropped here — see restore().
+	snapshot() {
+		const nodes = new Map();
+		for (const [id, node] of this._nodes) {
+			nodes.set(
+				id,
+				node.type === "folder"
+					? { id: node.id, type: "folder", name: node.name, parentId: node.parentId, children: [...node.children] }
+					: { id: node.id, type: "file", name: node.name, parentId: node.parentId, file: node.file }
+			);
+		}
+		return nodes;
+	}
+
+	// Wholesale-replaces _nodes with a clone of a snapshot from snapshot()
+	// above. Every currently-live file's blob: URL is revoked first (an old
+	// snapshot's file might currently be deleted, meaning nothing else still
+	// holds a reference to revoke it later) and every file node in the
+	// restored snapshot gets a *freshly minted* sessionUrl — never trust a
+	// blob: URL string carried inside a snapshot itself, since the same file
+	// id's URL may have already been revoked and re-minted any number of
+	// times since that snapshot was taken.
+	restore(snapshotNodes) {
+		for (const node of this._nodes.values()) {
+			if (node.type === "file" && node.sessionUrl) URL.revokeObjectURL(node.sessionUrl);
+		}
+		const nodes = new Map();
+		for (const [id, node] of snapshotNodes) {
+			nodes.set(
+				id,
+				node.type === "folder"
+					? { id: node.id, type: "folder", name: node.name, parentId: node.parentId, children: [...node.children] }
+					: { id: node.id, type: "file", name: node.name, parentId: node.parentId, file: node.file, sessionUrl: URL.createObjectURL(node.file) }
+			);
+		}
+		this._nodes = nodes;
+		this._emitChange();
+	}
+
 	// Ordered list of ancestor nodes from (excluding) root down to id.
 	getPath(id) {
 		const parts = [];
