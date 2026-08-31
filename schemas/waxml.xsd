@@ -1553,7 +1553,7 @@
       <xs:element name="Wam">
         <xs:complexType>
           <xs:choice minOccurs="0" maxOccurs="unbounded">
-            <xs:element name="Property" type="propertyContentType"/>
+            <xs:element name="Parameter" type="parameterContentType"/>
           </xs:choice>
           <xs:attributeGroup ref="commonNodeAttributes"/>
           <xs:attribute name="src" type="src"/>
@@ -1871,7 +1871,7 @@
   <!-- is restricted to Composition/Section only)                      -->
   <!-- ============================================================= -->
 
-  <xs:complexType name="propertyContentType">
+  <xs:complexType name="parameterContentType">
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="name" type="name"/>
     <xs:attribute name="value" type="value"/>
