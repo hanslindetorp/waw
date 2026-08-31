@@ -193,7 +193,27 @@ copyNode(nodeId) {
 		for (const name of XmlStore.ROUTING_REBUILD_ATTRS) {
 			if (nextAttributes[name] !== node.attributes[name]) return true;
 		}
-		return node.tagName === "OscillatorNode" && nextAttributes.type !== node.attributes.type;
+		if (node.tagName === "OscillatorNode" && nextAttributes.type !== node.attributes.type) return true;
+		// Temporary, per Hans (2026-09-01): the <Composition>/iMus side of
+		// waxml.js doesn't have the Web Audio side's live-property-nudge
+		// wiring yet (e.g. changing loopLength live currently does nothing
+		// audible) — so ANY attribute change on a <Composition> itself, or on
+		// anything inside one, needs the whole graph rebuilt rather than a
+		// live nudge that would silently no-op. Remove this blanket rule once
+		// that live coupling exists on the iMus side.
+		return this._isInsideComposition(node);
+	}
+
+	// Walks up from `node` (inclusive) looking for a <Composition> ancestor —
+	// internal parent chain, same convention as every other tree walk here
+	// (node.parent is the internal tree id, not the XML id attribute).
+	_isInsideComposition(node) {
+		let current = node;
+		while (current) {
+			if (current.tagName === "Composition") return true;
+			current = current.parent ? ops.findNodeById(this.root, current.parent) : null;
+		}
+		return false;
 	}
 
 	renameSrcReferences(oldPath, newPath) {
