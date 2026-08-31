@@ -9380,17 +9380,20 @@ class Parser {
 				// console.log(`Parser.init done - ${xmlNode.localName}`);
 				
 				let xmlDoc = this.parseXML(xmlNode);
-				Promise.all(this.imports)
-				.then(wams => {
-					wams.forEach(wam => {
-						wam.init(this.waxml.WAMhostGroupID);
-					});
-				});
+				this.initWAMsWhenAllAreLoaded();
 				resolve(xmlDoc);
 				// return resolve(this.parseXML(xmlNode));
 			});
 		});
 
+	}
+	initWAMsWhenAllAreLoaded(){
+		Promise.all(this.imports)
+		.then(wams => {
+			wams.forEach(wam => {
+				wam.init(this.waxml.WAMhostGroupID);
+			});
+		});
 	}
 
 	initFromString(str){
@@ -9404,8 +9407,33 @@ class Parser {
 				reject(xml);
 			} else {
 				this._xml = xml.firstElementChild;
-				this.parseXML(this._xml);
-				resolve(this._xml);
+
+
+				// check if there are any WAMs involved
+				// and init WAM host if true
+				if(this._xml.querySelector("Wam")){
+
+					// need to be async...
+					this.waxml.setupWamHost()
+					.then(() => {
+						// quick fix to make WAM work
+						// this._xml.setAttribute("localpath", localPath);
+						// return resolve(this.appendXMLnode(parentXML, externalXML, localPath));
+						this.parseXML(this._xml);
+						this.initWAMsWhenAllAreLoaded();
+						resolve(this._xml);
+							
+					});
+
+				} else {
+					// externalXML.setAttribute("localpath", localPath);
+					// return resolve(this.appendXMLnode(parentXML, externalXML, localPath));
+					this.parseXML(this._xml);
+					this.initWAMsWhenAllAreLoaded();
+					resolve(this._xml);
+				
+				}
+
 			}
 			
 		});
@@ -9428,7 +9456,33 @@ class Parser {
 
 				if(this._xml){
 					// embedded <XML> element inside HTML or already initialized
-					this.parseXML(this._xml.firstElementChild);
+
+
+					// check if there are any WAMs involved
+					// and init WAM host if true
+					if(this._xml.firstElementChild.querySelector("Wam")){
+
+						// need to be async...
+						this.waxml.setupWamHost()
+						.then(() => {
+							// quick fix to make WAM work
+							// this._xml.setAttribute("localpath", localPath);
+							// return resolve(this.appendXMLnode(parentXML, externalXML, localPath));
+							this.parseXML(this._xml.firstElementChild);
+							resolve(this._xml.firstElementChild);
+								
+						});
+
+					} else {
+						// externalXML.setAttribute("localpath", localPath);
+						// return resolve(this.appendXMLnode(parentXML, externalXML, localPath));
+						this.parseXML(this._xml.firstElementChild);
+						resolve(this._xml.firstElementChild);
+					
+					}
+
+
+					// this.parseXML(this._xml.firstElementChild);
 					if(this._xml.style){
 						this._xml.style.display = "none";
 					}
@@ -9471,7 +9525,7 @@ class Parser {
 
 				// check if there are any WAMs involved
 				// and init WAM host if true
-				if(externalXML.querySelector("wam")){
+				if(externalXML.querySelector("Wam")){
 
 					// need to be async...
 					this.waxml.setupWamHost()
@@ -9535,7 +9589,7 @@ class Parser {
 					}
 					Loader.loadText(localPath + fileName)
 					.then(txt => {
-						switch(parentNode.tagName){
+						switch(parentNode.tagName.toLowerCase()){
 
 							case "wam":
 							// the wam object takes care of the import
@@ -11721,25 +11775,54 @@ class WAM extends BaseAudioObject{
 				.then(parameters => {
 					let params = [];
 					Object.entries(parameters).forEach(([key, obj]) => {
-						let attributeName = key.replaceAll("/", "_").toLowerCase();
-						info.parameters.push(attributeName);
-						// console.log(attributeName);
-						this.allWamParameterNames.push(attributeName);
+						info.parameters.push(key);
+						this.allWamParameterNames.push(key);
 
+						// this is not needed anymore since we rebuilt the WAM.xml with <Parameter> children, so no need to map parameter names with illegal attribute names anymore.
 						params.push({
 							id: key,
-							attributeName: attributeName
+							attributeName: key
 						});
+
 					});
 					// console.log(info);
 					this.addGettersAndSetters(instance, params);
 				});
+				// Rebuilt with <Parameter> children in WAM.xml, 
+				// so no need to map parameter names with illegal attribute names anymore.
 
+				// .then(parameters => {
+				// 	let params = [];
+				// 	Object.entries(parameters).forEach(([key, obj]) => {
+				// 		let attributeName = key.replaceAll("/", "_").toLowerCase();
+				// 		info.parameters.push(attributeName);
+				// 		// console.log(attributeName);
+				// 		this.allWamParameterNames.push(attributeName);
+
+				// 		params.push({
+				// 			id: key,
+				// 			attributeName: attributeName
+				// 		});
+				// 	});
+				// 	// console.log(info);
+				// 	this.addGettersAndSetters(instance, params);
+				// });
+
+				// Set Parameters from XML child elements
+				let paramElements = [...this._xml.children].filter(el => el.tagName.toLowerCase() == "parameter");
+				paramElements.forEach(paramEl => {
+					let name = paramEl.getAttribute("name");
+					let value = paramEl.getAttribute("value");
+					if(name && value){
+						this.wamParameters[name] = parseFloat(value);
+					}
+				});
 				
 				// GUI
 				this.instance.createGui()
 				.then(el => {
-					this.showWam(el);
+					// Don't show the GUI yet, let the user decide where to place it
+					// this.showWam(el);
 				});
 
 				resolve(this);
@@ -11770,26 +11853,33 @@ class WAM extends BaseAudioObject{
 			
 			let parameterName = parameter.id;
 			let attributeName = parameter.attributeName;
-	
-			Object.defineProperty(this.wamParameters, attributeName, {
-				async get() {
-					return await this.instance.audioNode.getParameterValues(parameterName).value;
-				},
-				set(val) {
-					let params = {};
-					params[parameterName] = {value: val};
-					wamInstance.audioNode.setParameterValues(params);
-				}
-			});
 
-			// init value
-			let p = Object.entries(this.params).find(([key, value]) => key == attributeName);
-			if(p){
-				let initVal = p[1].valueOf();
-				if(typeof initVal != "undefined"){
-					this.wamParameters[attributeName] = initVal;
+			if(this.wamParameters.hasOwnProperty(attributeName)){
+				// console.log(`WAM parameter ${attributeName} already exists, skipping`);
+				return;
+			} else {
+	
+				Object.defineProperty(this.wamParameters, attributeName, {
+					async get() {
+						return await this.instance.audioNode.getParameterValues(parameterName).value;
+					},
+					set(val) {
+						let params = {};
+						params[parameterName] = {value: val};
+						wamInstance.audioNode.setParameterValues(params);
+					}
+				});
+
+				// init value
+				let p = Object.entries(this.params).find(([key, value]) => key == attributeName);
+				if(p){
+					let initVal = p[1].valueOf();
+					if(typeof initVal != "undefined"){
+						this.wamParameters[attributeName] = initVal;
+					}
+					
 				}
-				
+
 			}
 
 		});
