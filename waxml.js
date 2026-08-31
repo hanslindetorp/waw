@@ -20028,7 +20028,12 @@ class Music extends EventTarget {
 		function getPosition(pos, flags){
 	
 			if(typeof pos == "undefined"){
-				pos = this.musicTime || audioContext.currentTime - this.sectionStart || audioContext.currentTime - myInstance.sectionStart;
+				// XXX Bad design. Make sure the different classes solid ways of relating to positions in time. This is a mess.
+				if(this.currentSection){
+					return this.currentSection.getPosition();
+				} else {
+					pos = this.musicTime || audioContext.currentTime - this.sectionStart || audioContext.currentTime - myInstance.sectionStart;
+				}
 			}
 	
 			let obj = {};
@@ -21632,7 +21637,7 @@ class Music extends EventTarget {
 	timeTo(val){
 		return defaultInstance.on(val);
 	}
-	
+
 }
 
 
