@@ -2,6 +2,9 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { applyLiveProperty, applyLiveMethodCall } from "../waxml-integration/live-property.js";
+import { openWamPicker } from "./wa-wam-picker.js";
+import { openWamStack } from "./wa-wam-stack.js";
+import { getInsertEffects } from "../wam/wam-catalog.js";
 import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
@@ -550,22 +553,39 @@ template.innerHTML = `
 			flex: 0 0 auto;
 		}
 		.insert-slot {
+			display: flex;
+			align-items: center;
+			gap: 0.25rem;
 			font-size: 0.65rem;
 			text-align: center;
-			padding: 0.2rem 0.1rem;
+			padding: 0.2rem 0.3rem;
 			border-radius: 3px;
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
 			cursor: pointer;
 			flex: 0 0 auto;
+			box-sizing: border-box;
 		}
 		.insert-slot.filled {
 			background: rgba(69, 181, 140, 0.14);
 			border: 1px solid var(--waw-teal, #45b58c);
 			color: var(--waw-teal, #45b58c);
-			cursor: default;
+			justify-content: flex-start;
+		}
+		.insert-slot.empty {
+			justify-content: center;
+		}
+		.insert-slot-thumb {
+			width: 1rem;
+			height: 1rem;
+			border-radius: 2px;
+			object-fit: cover;
+			flex: 0 0 auto;
+		}
+		.insert-slot-label {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
 		}
 		.insert-slot.empty {
 			border: 1px dashed #5a636d;
@@ -2672,23 +2692,50 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	// --- insert (Wam) section — fixed height, scrolls if it overflows ---
-	// A real "pick a WAM from a list + live GUI preview" flow is a later
-	// step, per Hans — for now, an empty slot just adds a bare <Wam/>.
 
 	_buildInsertSection(chainNode, roles, height) {
 		const section = document.createElement("div");
 		section.className = "insert-section";
 		section.style.height = `${height}px`;
-		roles.wams.forEach((wam) => section.appendChild(this._buildInsertSlot(wam)));
+		roles.wams.forEach((wam) => section.appendChild(this._buildInsertSlot(wam, chainNode)));
 		section.appendChild(this._buildAddInsertSlot(chainNode, roles));
 		return section;
 	}
 
-	_buildInsertSlot(wam) {
+	// A thumbnail (looked up from the WAM catalog by matching src — a hand-
+	// typed/unknown src just falls back to plain text) when filled, per
+	// wam-insert-effects-instructions.md point 5. Double-click opens every
+	// insert on this channel stacked in order; a single click selects the
+	// node itself (so the Inspector/Preview panel show it, same as clicking
+	// any other element).
+	_buildInsertSlot(wam, chainNode) {
 		const slot = document.createElement("div");
 		slot.className = "insert-slot filled";
-		slot.textContent = wam.attributes.src ? wam.attributes.src.split("/").pop() : "WAM";
-		slot.title = wam.attributes.src || "(no plugin selected yet)";
+		slot.title = wam.attributes.label || wam.attributes.src || "(no plugin selected yet)";
+
+		const label = document.createElement("span");
+		label.className = "insert-slot-label";
+		label.textContent = wam.attributes.label || (wam.attributes.src ? wam.attributes.src.split("/").pop() : "WAM");
+		slot.appendChild(label);
+
+		getInsertEffects()
+			.then((effects) => effects.find((e) => e.pluginSrc === wam.attributes.src))
+			.then((effect) => {
+				if (!effect?.thumbnailUrl || !slot.isConnected) return;
+				const img = document.createElement("img");
+				img.className = "insert-slot-thumb";
+				img.src = effect.thumbnailUrl;
+				img.alt = "";
+				img.onerror = () => img.remove();
+				slot.prepend(img);
+			})
+			.catch(() => {}); // catalog unavailable (offline, etc.) — plain text label is still fine
+
+		slot.addEventListener("click", () => xmlStore.selectNode(wam.id));
+		slot.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			openWamStack(chainNode.id);
+		});
 		return slot;
 	}
 
@@ -2697,11 +2744,13 @@ export class WaMixerView extends HTMLElement {
 		slot.className = "insert-slot empty";
 		slot.textContent = "+";
 		slot.title = "Add insert effect";
-		slot.addEventListener("click", () => {
+		slot.addEventListener("click", async () => {
+			const effect = await openWamPicker();
+			if (!effect) return;
 			const chainNow = ops.findNodeById(xmlStore.root, chainNode.id);
 			if (!chainNow) return;
 			const rolesNow = this._classifyChain(chainNow);
-			xmlStore.insertNewChild(chainNow.id, "Wam", {}, this._insertPositionAfterEq(chainNow, rolesNow));
+			xmlStore.insertNewChild(chainNow.id, "Wam", { src: effect.pluginSrc, label: effect.name }, this._insertPositionAfterEq(chainNow, rolesNow));
 		});
 		return slot;
 	}

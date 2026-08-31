@@ -5,6 +5,7 @@ import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 import "./wa-section-view.js";
 import "./wa-mixer-view.js";
+import "./wa-wam-view.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
 // (panel 2) / XML code (panel 4) — they all share xmlStore's selectedNodeId.
@@ -132,6 +133,10 @@ template.innerHTML = `
 		<wa-mixer-view></wa-mixer-view>
 	</div>
 
+	<div class="state" data-state="wam">
+		<wa-wam-view></wa-wam-view>
+	</div>
+
 	<div class="state padded" data-state="audio">
 		<p class="node-label"><span class="tag"></span></p>
 		<canvas class="waveform" width="600" height="100"></canvas>
@@ -200,6 +205,16 @@ export class WaPreview extends HTMLElement {
 			// Same "always mounted, listens to xmlStore itself" shape as
 			// wa-section-view — see wa-mixer-view.js.
 			this._showState("mixer");
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
+		if (node.tagName === "Wam") {
+			// Takes priority over the Mixer-descendant carve-out just below —
+			// per Hans, selecting a <Wam> shows its own interface even when
+			// it's sitting inside a <Mixer> channel strip's insert chain.
+			this._showState("wam");
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;
