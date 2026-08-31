@@ -730,16 +730,15 @@ export class WaSectionView extends HTMLElement {
 			this._selectedIds.clear();
 			this._lastSectionId = selected.id;
 			this._lastSelfSelectedId = null;
-			// Arms the global player's PLAY button to target this Section —
-			// and, if it's already playing, immediately trigs this one too
-			// (browsing to a different Section mid-playback previews it live
-			// without stopping anything else), per Hans. Playback itself is
-			// entirely global now (see player-store.js) — this view only
-			// ever *reads* whether it's the current target, in
+			// Arming the global player's PLAY button to target this Section
+			// (and, if already playing, immediately re-trig-ing it — browsing
+			// to a different Section mid-playback previews it live without
+			// stopping anything else, per Hans) is now handled centrally by
+			// player-store.js's own selection listener — see
+			// _maybeUpdateTriggerSelectorFromSelection there. Playback itself
+			// is entirely global (see player-store.js) — this view only ever
+			// *reads* whether it's the current target, in
 			// _onPlayerStoreChange, never starts/stops anything itself.
-			if (selected.attributes.id) {
-				playerStore.setTriggerSelector(`[id='${selected.attributes.id}']`, selected.id);
-			}
 		}
 
 		if (!this._lastSectionId) return;

@@ -53,6 +53,8 @@ class PlayerStore extends EventTarget {
 	}
 
 	_onXmlStoreChange(e) {
+		this._maybeUpdateTriggerSelectorFromSelection();
+
 		const structural = !e.detail || e.detail.structural !== false;
 		if (!structural) return; // an attribute-only edit never invalidates the live graph's shape
 		this._documentLoaded = false;
@@ -107,6 +109,24 @@ class PlayerStore extends EventTarget {
 				this._scheduleReload();
 			}
 		}
+	}
+
+	// Per Hans (2026-09-01): waxml.js's sectionStart only ends up set
+	// correctly when trig() is called with a *class* selector, not an
+	// [id='...'] one — so the PLAY/STOP field now auto-follows "the first
+	// class of the most recently selected element that actually had one",
+	// instead of the id of whatever <Section> was last viewed. An element
+	// with no class leaves the field exactly as it was (not cleared) —
+	// runs on every xmlStore change, not just a fresh selection, so editing
+	// the currently-armed element's own class attribute updates it too.
+	_maybeUpdateTriggerSelectorFromSelection() {
+		const node = xmlStore.getSelectedNode();
+		if (!node) return;
+		const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
+		if (!firstClass) return;
+		const selector = `.${firstClass}`;
+		if (selector === this.triggerSelector) return;
+		this.setTriggerSelector(selector, node.tagName === "Section" ? node.id : null);
 	}
 
 	// Sets what the main PLAY button targets — called both when the user
