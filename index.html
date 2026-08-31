@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>WAW — WAXML Workstation (Steg 0 Demo)</title>
+	<title>WAXML Workstation — BETA</title>
 	<link rel="stylesheet" href="css/main.css" />
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
 	<!-- data-source is a throwaway placeholder just to satisfy waxml.js's
@@ -14,24 +14,49 @@
 <body>
 	<header class="app-header">
 		<wa-file-menu></wa-file-menu>
+		<h1>WAXML Workstation — BETA</h1>
 		<wa-player-bar></wa-player-bar>
-		<h1>WAW <span class="app-header__subtitle">WAXML Workstation — Steg 0 Demo</span></h1>
 	</header>
 
 	<main class="app-panels">
-		<wa-panel id="fileManager" panel-title="File Manager" icon="📁" width="300px">
+		<wa-panel id="fileManager" panel-title="File Manager" width="15%">
+			<svg slot="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M3 6.5a1 1 0 0 1 1-1h4.5l2 2H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-11z" />
+			</svg>
 			<wa-file-manager></wa-file-manager>
 		</wa-panel>
 
-		<wa-panel id="xmlEditor" panel-title="XML Editor" icon="🌳" width="320px">
+		<wa-panel id="xmlEditor" panel-title="XML Editor" width="35%">
+			<!-- Outline/tree icon per Hans's reference: a solid parent bar up
+			     top, three child rows below hanging off one trunk line —
+			     hairline connectors and solid-filled child boxes (not
+			     outlined ones), which read much cleaner at icon size than
+			     an earlier stroked-box version did. slot="icon" must sit on
+			     the <svg> itself, not a wrapping <span> — ::slotted() in
+			     wa-panel.js only matches the directly-slotted element, not
+			     its descendants. -->
+			<svg slot="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round">
+				<rect x="2" y="2.5" width="20" height="3.6" fill="currentColor" stroke="none" />
+				<path d="M4 6.6V15.7" />
+				<path d="M4 8.9h5.5" />
+				<rect x="10" y="7.7" width="12" height="2.6" fill="currentColor" stroke="none" />
+				<path d="M4 12h5.5" />
+				<rect x="10" y="10.8" width="12" height="2.6" fill="currentColor" stroke="none" />
+				<path d="M4 15.1h5.5" />
+				<rect x="10" y="13.9" width="12" height="2.6" fill="currentColor" stroke="none" />
+			</svg>
 			<wa-xml-editor></wa-xml-editor>
 		</wa-panel>
 
-		<wa-panel id="preview" panel-title="Preview" icon="▶️" width="360px">
+		<wa-panel id="preview" panel-title="Preview" width="50%">
+			<svg slot="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12z" />
+				<circle cx="12" cy="12" r="2.6" />
+			</svg>
 			<wa-preview></wa-preview>
 		</wa-panel>
 
-		<wa-panel id="xmlCode" panel-title="XML Code" icon="💻" width="320px" fill>
+		<wa-panel id="xmlCode" panel-title="Code" icon="</>" width="320px" fill collapsed>
 			<wa-xml-code></wa-xml-code>
 		</wa-panel>
 	</main>

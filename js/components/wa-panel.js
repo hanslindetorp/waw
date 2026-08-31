@@ -9,7 +9,7 @@
 // — so collapsing e.g. Preview visibly widens XML Editor right next to it,
 // not XML Code three panels away.
 
-const COLLAPSED_FLEX = "0 0 2.4rem";
+const COLLAPSED_FLEX = "0 0 2.8rem";
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -54,11 +54,22 @@ template.innerHTML = `
 		}
 		.panel-icon {
 			display: none;
-			font-size: 1rem;
+			font-size: 1.2em;
 			line-height: 1;
 		}
 		:host(.collapsed) .panel-icon {
 			display: block;
+		}
+		/* A slotted <svg> icon (see the "icon" slot above) draws in the
+		   panel's own text color, flat/graphic rather than a pictorial
+		   emoji — per Hans, white-on-black line icons, matching the
+		   text fallback's visual size rather than whatever raw
+		   width/height it was authored at. */
+		.panel-icon ::slotted(svg) {
+			display: block;
+			width: 1.2em;
+			height: 1.2em;
+			color: inherit;
 		}
 		.panel-body {
 			flex: 1 1 auto;
@@ -91,7 +102,7 @@ template.innerHTML = `
 		}
 	</style>
 	<div class="panel-header">
-		<span class="panel-icon"></span>
+		<span class="panel-icon"><slot name="icon"><span class="panel-icon-text"></span></slot></span>
 		<span class="panel-title"></span>
 		<button class="collapse-btn" type="button" title="Show/hide panel">-</button>
 	</div>
@@ -109,7 +120,13 @@ export class WaPanel extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 		this._titleEl = this.shadowRoot.querySelector(".panel-title");
-		this._iconEl = this.shadowRoot.querySelector(".panel-icon");
+		// A plain-text icon (currently just Code's "</>") still uses the
+		// `icon` attribute, rendered into this fallback span — it only ever
+		// shows up while nothing's assigned to the "icon" slot. Every other
+		// panel gets a flat, monochrome `<svg slot="icon">...</svg>` light-DOM
+		// child in index.html instead (per Hans: white-on-black line icons,
+		// not pictorial emoji), which pre-empts this fallback entirely.
+		this._iconEl = this.shadowRoot.querySelector(".panel-icon-text");
 		this._header = this.shadowRoot.querySelector(".panel-header");
 		this._collapseBtn = this.shadowRoot.querySelector(".collapse-btn");
 		this._resizeHandle = this.shadowRoot.querySelector(".resize-handle");
@@ -130,6 +147,11 @@ export class WaPanel extends HTMLElement {
 		this._applyFlex();
 		this._collapseBtn.addEventListener("click", () => this.toggleCollapse());
 		this._resizeHandle.addEventListener("pointerdown", (e) => this._onResizeStart(e));
+		// A markup-level starting state (e.g. Code defaulting to closed in a
+		// fresh project, per Hans) — workstation-state.js's own saved state
+		// (if any) still wins once it applies, same as any other later
+		// toggleCollapse() call.
+		if (this.hasAttribute("collapsed")) this.toggleCollapse(true);
 	}
 
 	attributeChangedCallback(name, oldVal, newVal) {
@@ -143,6 +165,24 @@ export class WaPanel extends HTMLElement {
 
 	get collapsed() {
 		return this._collapsed;
+	}
+
+	// The panel's current "restore-to" flex-basis (e.g. "0 0 35%" or
+	// "0 0 412px") — what it's sized to when expanded and not absorbing a
+	// collapsed neighbor's space. Read by workstation-state.js to persist a
+	// user's manual resize; unaffected by collapse/absorb, which only ever
+	// touch this.style.flex, never this._baseFlex itself.
+	get widthBasis() {
+		return this._baseFlex;
+	}
+
+	// Restores a previously-saved widthBasis (see above) — used only when
+	// applying workstation-state.json on load, so it deliberately does NOT
+	// dispatch "width-change" (that's reserved for an actual user drag, see
+	// _onResizeEnd) to avoid an immediate redundant save right after load.
+	setWidthBasis(basis) {
+		this._baseFlex = basis;
+		this._applyFlex();
 	}
 
 	toggleCollapse(force) {
@@ -207,6 +247,9 @@ export class WaPanel extends HTMLElement {
 	_onResizeEnd() {
 		window.removeEventListener("pointermove", this._onResizeMove);
 		window.removeEventListener("pointerup", this._onResizeEnd);
+		// Fired once per drag (not per pointermove) so workstation-state.js's
+		// own debounce isn't doing all the work of not saving mid-drag.
+		this.dispatchEvent(new CustomEvent("width-change", { bubbles: true, detail: { width: this._baseFlex } }));
 	}
 }
 

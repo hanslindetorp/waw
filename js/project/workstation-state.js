@@ -26,11 +26,17 @@ let panels = [];
 // index.html's fileManager/xmlEditor/preview/xmlCode).
 export function registerPanels(panelEls) {
 	panels = panelEls;
-	panels.forEach((panel) => panel.addEventListener("collapse-change", scheduleSave));
+	panels.forEach((panel) => {
+		panel.addEventListener("collapse-change", scheduleSave);
+		panel.addEventListener("width-change", scheduleSave);
+	});
 }
 
 function captureState() {
-	const state = { openPanels: panels.filter((p) => !p.collapsed).map((p) => p.id) };
+	const state = {
+		openPanels: panels.filter((p) => !p.collapsed).map((p) => p.id),
+		panelWidths: Object.fromEntries(panels.map((p) => [p.id, p.widthBasis]))
+	};
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -49,6 +55,12 @@ function applyState(state) {
 	if (!state || typeof state !== "object") return;
 	if (Array.isArray(state.openPanels)) {
 		panels.forEach((panel) => panel.toggleCollapse(!state.openPanels.includes(panel.id)));
+	}
+	if (state.panelWidths && typeof state.panelWidths === "object") {
+		panels.forEach((panel) => {
+			const basis = state.panelWidths[panel.id];
+			if (typeof basis === "string") panel.setWidthBasis(basis);
+		});
 	}
 	if (state.selectedElementId && xmlStore.root) {
 		const node = findNodeByAttributeId(xmlStore.root, state.selectedElementId);

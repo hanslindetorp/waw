@@ -67,13 +67,6 @@ body {
 	letter-spacing: 0.02em;
 }
 
-.app-header__subtitle {
-	margin-left: 0.6rem;
-	font-weight: 400;
-	color: var(--waw-muted);
-	font-size: 0.85rem;
-}
-
 .app-panels {
 	flex: 1 1 auto;
 	display: flex;
