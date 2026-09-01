@@ -4,6 +4,7 @@ import { applyLiveProperty } from "../waxml-integration/live-property.js";
 import { parseGainAttributeToDb, isDbNativeGain, dbToLinearRatio } from "../waxml-integration/gain-units.js";
 import { getAttributeCurve } from "../xml-editor/attribute-curves.js";
 import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
+import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribute-inheritance.js";
 import { openIoPicker } from "./wa-io-picker.js";
 
 // Nudges the live audio graph (if currently playing and this node survived
@@ -144,6 +145,13 @@ template.innerHTML = `
 			align-items: center;
 			gap: 0.4rem;
 			min-width: 0;
+		}
+		/* See attribute-inheritance.js — an unset Layer/Section attribute
+		   showing its resolved inherited/default value instead of a blank
+		   field, styled to read as "not your own value yet". */
+		.attr-row.inherited-value .attr-control input {
+			color: var(--waw-muted, #8a8a8a);
+			font-style: italic;
 		}
 		.attr-control input[type="text"],
 		.attr-control input[type="number"],
@@ -568,6 +576,35 @@ export class WaNodeInspector extends HTMLElement {
 			applyLiveAttributeNudge(node, attrName, v);
 		};
 
+		// Per Hans: a few Layer/Section attributes inherit from their parent
+		// Section/Composition, then a hardcoded default, when unset on the
+		// element itself (see attribute-inheritance.js) — show that resolved
+		// value grayed out rather than a blank field, so e.g. a Layer with no
+		// loopLength of its own still shows what it will actually use. It's
+		// still a real, editable field: typing in it commits an explicit
+		// override the normal way. Bypasses the type-specific controls below
+		// entirely (deliberately simple — this is a display+override
+		// convenience, not another mode of the union/number pencil-cycle).
+		if (value === undefined && isInheritable(node.tagName, attrName)) {
+			const resolved = resolveInheritedAttribute(xmlStore.root, node, attrName);
+			if (resolved.value !== null) {
+				row.classList.add("inherited-value");
+				// Strip the grayed styling the instant the user types a real
+				// value — onChange itself never triggers a re-render (see the
+				// comment above), so without this the row would keep reading
+				// as "inherited" even once it holds an explicit value.
+				control.appendChild(
+					this._renderInheritedControl(resolved, (v) => {
+						row.classList.remove("inherited-value");
+						onChange(v);
+					})
+				);
+				row.appendChild(control);
+				row.appendChild(removeBtn);
+				return row;
+			}
+		}
+
 		if (attrName === "output" || attrName === "input" || attrName === "bus") {
 			control.appendChild(this._renderIoSelectorControl(node, attrName, value, attrSchema, onChange));
 		} else if (attrSchema?.type === "boolean") {
@@ -983,6 +1020,31 @@ export class WaNodeInspector extends HTMLElement {
 		});
 		frag.appendChild(pickBtn);
 
+		return frag;
+	}
+
+	// See attribute-inheritance.js and the note in _renderAttributeRow above
+	// — a simple, always-text field showing an unset attribute's resolved
+	// inherited/default value (grayed via the row's own .inherited-value
+	// class), editable the normal way: typing commits a real explicit value.
+	_renderInheritedControl(resolved, onChange) {
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.3rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "mono";
+		input.style.flex = "1 1 auto";
+		input.style.minWidth = "0";
+		input.value = resolved.value;
+		input.title = resolved.source === "default" ? "Using the built-in default — type a value to override" : `Inherited from the nearest <${resolved.source}> — type a value to override`;
+		input.addEventListener("input", () => onChange(input.value));
+
+		frag.appendChild(input);
 		return frag;
 	}
 

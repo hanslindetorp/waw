@@ -25,10 +25,17 @@ const DEFAULT_TEMPO = 120;
 const DEFAULT_TIME_SIGN = "4/4";
 const MIN_TOTAL_BARS = 16;
 
-export function readSectionInfo(sectionNode) {
+// compositionNode: the Section's parent <Composition>, if the caller has
+// one handy (same convention as readEffectiveLoopLength's own
+// compositionNode param below) — tempo/timeSign inherit Composition ->
+// Section, per Hans: an unset Section attribute defers to the Composition's
+// own value before falling back to the hardcoded default.
+export function readSectionInfo(sectionNode, compositionNode = null) {
 	const attrs = sectionNode.attributes;
-	const tempo = parseFloat(attrs.tempo);
-	const timeSign = parseTimeSign(attrs.timeSign);
+	const tempoRaw = ownAttr(sectionNode, "tempo") ?? ownAttr(compositionNode, "tempo");
+	const timeSignRaw = ownAttr(sectionNode, "timeSign") ?? ownAttr(compositionNode, "timeSign");
+	const tempo = parseFloat(tempoRaw);
+	const timeSign = parseTimeSign(timeSignRaw);
 	const beatDuration = 60 / (Number.isFinite(tempo) && tempo > 0 ? tempo : DEFAULT_TEMPO);
 	const barDuration = beatDuration * timeSign.numerator;
 	return {
@@ -39,6 +46,14 @@ export function readSectionInfo(sectionNode) {
 		id: attrs.id || "",
 		className: attrs.class || ""
 	};
+}
+
+// undefined/empty are both "not actually set" — same convention used
+// throughout this module's other own-vs-inherited checks (e.g.
+// ownLoopLengthSeconds below).
+function ownAttr(node, attrName) {
+	const v = node?.attributes[attrName];
+	return v !== undefined && v !== "" ? v : undefined;
 }
 
 function parseTimeSign(value) {
@@ -224,7 +239,9 @@ function ownLoopLengthSeconds(node, info) {
 // loopLength-värde loopen inställd till fyra takter" — each level's own
 // explicit value (including "off") wins outright over any ancestor's;
 // only an actually-*missing* attribute falls through to the next one up.
-// null = no loop is in effect anywhere in the chain.
+// null = no loop is in effect anywhere in the chain — same outcome whether
+// nothing in the chain set loopLength at all, or something explicitly set
+// it to "off" (the schema's own default, per Hans/attribute-inheritance.js).
 export function readEffectiveLoopLength(layerNode, sectionNode, compositionNode, info) {
 	const ownValue = ownLoopLengthSeconds(layerNode, info);
 	if (ownValue !== undefined) return ownValue;

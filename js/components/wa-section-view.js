@@ -198,7 +198,12 @@ template.innerHTML = `
 		.layer-scroll,
 		.stinger-scroll {
 			overflow-x: auto;
-			overflow-y: hidden;
+			/* Each area's own height is set explicitly by
+			   _applyLayerStingerSplit — auto here (not hidden) so content
+			   squeezed below its natural size (Stingers borrowing space
+			   from Layers, or vice versa at the Layer-minimum floor) still
+			   scrolls internally rather than just clipping. */
+			overflow-y: auto;
 		}
 		.section-divider {
 			padding: 0.35rem 0.5rem;
@@ -678,6 +683,11 @@ export class WaSectionView extends HTMLElement {
 		this.shadowRoot.querySelectorAll(".zoom-btn").forEach((btn) => {
 			btn.addEventListener("click", () => this._handleZoom(btn.dataset.zoom));
 		});
+		// Trackpad/Magic Trackpad pinch (browsers synthesize this as wheel +
+		// ctrlKey) zooms this view's own content directly, per Hans
+		// (2026-09-02) — added on `this` rather than some inner element so it
+		// catches the gesture anywhere over the Section preview.
+		this.addEventListener("wheel", (e) => this._onWheelZoom(e), { passive: false });
 
 		const gridSelect = this.shadowRoot.querySelector(".grid-select");
 		GRID_RESOLUTIONS.forEach((r) => {
@@ -814,6 +824,14 @@ export class WaSectionView extends HTMLElement {
 		return ops.findNodeById(xmlStore.root, this._lastSectionId);
 	}
 
+	// A Section's parent is always its <Composition> per the schema — used
+	// wherever readSectionInfo/readEffectiveLoopLength need it for
+	// Composition -> Section/Layer attribute inheritance (see
+	// section-model.js).
+	_getCompositionAncestor(sectionNode) {
+		return sectionNode?.parent ? ops.findNodeById(xmlStore.root, sectionNode.parent) : null;
+	}
+
 	// --- playback (driven by the global player-store, not owned here) ---
 
 	// Reacts to the shared player's Play/Stop/selector-target state — this
@@ -859,6 +877,29 @@ export class WaSectionView extends HTMLElement {
 		if (node) this._renderSection(node);
 	}
 
+	// A pinch gesture is one continuous scalar, unlike the H/V buttons'
+	// discrete per-axis steps — scales pxPerSecond and rowHeight together
+	// (both axes at once, matching how a pinch naturally reads) and smoothly
+	// (proportional to the actual gesture magnitude) rather than reusing
+	// _handleZoom's fixed 1.4x-per-click step, which would feel jumpy
+	// applied on every wheel tick of a gesture that can fire dozens of them.
+	// stopPropagation() (see connectedCallback) keeps wa-panel.js's own
+	// generic CSS-transform zoom fallback from also firing for this same
+	// gesture.
+	_onWheelZoom(e) {
+		if (!e.ctrlKey) return;
+		e.preventDefault();
+		e.stopPropagation();
+		// Negative deltaY = pinch out/zoom in, matching native browser
+		// page-zoom's own convention for this synthesized gesture.
+		const factor = Math.exp(-e.deltaY * 0.01);
+		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factor));
+		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factor));
+
+		const node = this._getActiveSectionNode();
+		if (node) this._renderSection(node);
+	}
+
 	// --- playhead animation ---
 
 	_startPositionLoop() {
@@ -890,7 +931,7 @@ export class WaSectionView extends HTMLElement {
 	_updatePlayheadVisual() {
 		const node = this._getActiveSectionNode();
 		if (!node) return;
-		const info = readSectionInfo(node);
+		const info = readSectionInfo(node, this._getCompositionAncestor(node));
 		const cursorPx = this._timeToPx(this._cursorTime, info);
 
 		if (this._playheadEl) {
@@ -912,7 +953,7 @@ export class WaSectionView extends HTMLElement {
 	_updatePositionReadout() {
 		const node = this._getActiveSectionNode();
 		if (!node) return;
-		const info = readSectionInfo(node);
+		const info = readSectionInfo(node, this._getCompositionAncestor(node));
 		const bar = Math.floor(this._cursorTime / info.barDuration) + 1;
 		const beatInBar = Math.floor((this._cursorTime % info.barDuration) / info.beatDuration) + 1;
 		const frac = Math.floor((this._cursorTime % info.beatDuration) / info.beatDuration * 100);
@@ -980,7 +1021,7 @@ export class WaSectionView extends HTMLElement {
 		if (this._activeStingerTriggers.size === 0) return;
 		const node = this._getActiveSectionNode();
 		if (!node) return;
-		const info = readSectionInfo(node);
+		const info = readSectionInfo(node, this._getCompositionAncestor(node));
 		const nowAudioTime = bridge.audioContext.currentTime;
 
 		for (const [stingerId, entry] of this._activeStingerTriggers) {
@@ -1061,12 +1102,13 @@ export class WaSectionView extends HTMLElement {
 		this._stingerDivider.hidden = false;
 		this._stingerScroll.hidden = false;
 
-		const info = readSectionInfo(node);
-		this._infoEl.textContent = `${info.tempo} BPM · ${info.timeSign.label}${info.id ? " · " + info.id : ""}`;
 		// loopLength inherits Composition -> Section -> Layer (see
-		// readEffectiveLoopLength) — need the Composition ancestor on hand
-		// wherever a Layer's *effective* loop length is resolved.
-		const compositionNode = node.parent ? ops.findNodeById(xmlStore.root, node.parent) : null;
+		// readEffectiveLoopLength), and tempo/timeSign inherit Composition ->
+		// Section (see readSectionInfo) — need the Composition ancestor on
+		// hand for both.
+		const compositionNode = this._getCompositionAncestor(node);
+		const info = readSectionInfo(node, compositionNode);
+		this._infoEl.textContent = `${info.tempo} BPM · ${info.timeSign.label}${info.id ? " · " + info.id : ""}`;
 
 		const layers = getLayers(node);
 		const totalDuration = Math.max(minimumTotalDuration(info), this._estimateMaxEnd(layers, node, compositionNode, info));
@@ -1099,13 +1141,15 @@ export class WaSectionView extends HTMLElement {
 		// thin DROPZONE_HEIGHT sliver — the playhead needs to span that too,
 		// or it ends up just a few pixels tall, per Hans.
 		const emptyRowExtraHeight = layers.length === 0 ? this._rowHeight - DROPZONE_HEIGHT : 0;
+		const layersNaturalHeight = RULER_HEIGHT + totalRowsHeight + dropZoneCount * DROPZONE_HEIGHT + emptyRowExtraHeight;
 		const playhead = document.createElement("div");
 		playhead.className = "playhead";
-		playhead.style.height = `${RULER_HEIGHT + totalRowsHeight + dropZoneCount * DROPZONE_HEIGHT + emptyRowExtraHeight}px`;
+		playhead.style.height = `${layersNaturalHeight}px`;
 		this._grid.appendChild(playhead);
 		this._playheadEl = playhead;
 
-		this._renderStingers(node, info, totalWidth, totalDuration, token);
+		const stingersNaturalHeight = this._renderStingers(node, info, totalWidth, totalDuration, token);
+		this._applyLayerStingerSplit(layersNaturalHeight, stingersNaturalHeight);
 
 		this._updatePlayheadVisual();
 		this._updatePositionReadout();
@@ -1159,6 +1203,35 @@ export class WaSectionView extends HTMLElement {
 		if (isOnlyRow) emptyLabel.classList.add("preview-layer");
 		this._stingerGrid.appendChild(emptyLabel);
 		this._stingerGrid.appendChild(this._buildStingerEmptyDropzone(sectionNode, info, totalWidth, isOnlyRow));
+
+		// Natural (unconstrained) content height — see _applyLayerStingerSplit,
+		// which decides whether this area actually gets this much room.
+		return RULER_HEIGHT + stingers.length * this._rowHeight + (isOnlyRow ? this._rowHeight : DROPZONE_HEIGHT);
+	}
+
+	// Vertical space split between the Layer and Stinger areas, per Hans
+	// (2026-09-02):
+	// - An empty Section splits 80/20 (Layers/Stingers).
+	// - Stingers can grow past its 20% share by borrowing from Layers, but
+	//   Layers never shrinks below one row's worth of height (reserved even
+	//   with zero Layers) — Stingers' own growth is capped there.
+	// - If Layers' own content needs more than its current share, the whole
+	//   Layer area grows instead (taller than the split gave it) — the outer
+	//   .scroll-area's normal vertical scroll takes over from there; Stingers
+	//   keeps whatever height it already had.
+	// - Either area scrolls internally (see the .layer-scroll/.stinger-scroll
+	//   overflow-y:auto) if squeezed below its own natural content height.
+	_applyLayerStingerSplit(layersNaturalHeight, stingersNaturalHeight) {
+		const dividerHeight = (this._layersDivider?.offsetHeight || 0) + (this._stingerDivider?.offsetHeight || 0);
+		const available = Math.max(0, this._scrollArea.clientHeight - dividerHeight);
+		const layersMin = RULER_HEIGHT + this._rowHeight;
+
+		const stingersHeight = Math.max(available * 0.2, Math.min(stingersNaturalHeight, Math.max(0, available - layersMin)));
+		let layersHeight = Math.max(available - stingersHeight, layersMin);
+		if (layersNaturalHeight > layersHeight) layersHeight = layersNaturalHeight;
+
+		this._layerScroll.style.height = `${layersHeight}px`;
+		this._stingerScroll.style.height = `${stingersHeight}px`;
 	}
 
 	// Trailing drop target for the Stinger area, always present — a file or

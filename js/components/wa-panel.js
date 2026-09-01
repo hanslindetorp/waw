@@ -10,6 +10,8 @@
 // not XML Code three panels away.
 
 const COLLAPSED_FLEX = "0 0 2.8rem";
+const MIN_ZOOM = 0.4;
+const MAX_ZOOM = 3;
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -79,6 +81,17 @@ template.innerHTML = `
 		:host(.collapsed) .panel-body {
 			display: none;
 		}
+		/* Generic trackpad/Magic-pad pinch-to-zoom fallback for panel content
+		   (see the wheel+ctrlKey handler below) — per Hans, "the same gesture
+		   in other panels zooms that panel's own content". A panel whose own
+		   content implements a more meaningful zoom (e.g. wa-section-view.js's
+		   pxPerSecond/rowHeight zoom) stops the wheel event from ever
+		   reaching here instead of using this. transform-origin 0 0 so
+		   scaling grows toward the bottom-right, matching where scroll
+		   position already is rather than jumping to re-center. */
+		.panel-zoom-wrap {
+			transform-origin: 0 0;
+		}
 		.collapse-btn {
 			background: none;
 			border: none;
@@ -106,7 +119,7 @@ template.innerHTML = `
 		<span class="panel-title"></span>
 		<button class="collapse-btn" type="button" title="Show/hide panel">-</button>
 	</div>
-	<div class="panel-body"><slot></slot></div>
+	<div class="panel-body"><div class="panel-zoom-wrap"><slot></slot></div></div>
 	<div class="resize-handle"></div>
 `;
 
@@ -130,6 +143,9 @@ export class WaPanel extends HTMLElement {
 		this._header = this.shadowRoot.querySelector(".panel-header");
 		this._collapseBtn = this.shadowRoot.querySelector(".collapse-btn");
 		this._resizeHandle = this.shadowRoot.querySelector(".resize-handle");
+		this._panelBody = this.shadowRoot.querySelector(".panel-body");
+		this._zoomWrap = this.shadowRoot.querySelector(".panel-zoom-wrap");
+		this._zoomScale = 1;
 		this._collapsed = false;
 		this._absorbing = false;
 		this._onResizeMove = this._onResizeMove.bind(this);
@@ -147,6 +163,12 @@ export class WaPanel extends HTMLElement {
 		this._applyFlex();
 		this._collapseBtn.addEventListener("click", () => this.toggleCollapse());
 		this._resizeHandle.addEventListener("pointerdown", (e) => this._onResizeStart(e));
+		// Generic trackpad/Magic-pad pinch-zoom fallback (see the .panel-zoom-wrap
+		// CSS comment) — per Hans (2026-09-02). A descendant that wants its own
+		// zoom instead (wa-section-view.js's pxPerSecond/rowHeight zoom) calls
+		// stopPropagation() on the same wheel+ctrlKey gesture before it bubbles
+		// up here, so this never fires for it.
+		this._panelBody.addEventListener("wheel", (e) => this._onWheelZoom(e), { passive: false });
 		// A markup-level starting state (e.g. Code defaulting to closed in a
 		// fresh project, per Hans) — workstation-state.js's own saved state
 		// (if any) still wins once it applies, same as any other later
@@ -228,6 +250,20 @@ export class WaPanel extends HTMLElement {
 		} else {
 			this.style.flex = this._baseFlex;
 		}
+	}
+
+	// Browsers synthesize a trackpad/Magic-pad pinch as wheel + ctrlKey (also
+	// catches an actual Ctrl+scroll-wheel zoom attempt, a reasonable bonus) —
+	// scales this panel's own content around wherever the gesture is
+	// happening, clamped to [MIN_ZOOM, MAX_ZOOM]. Skipped for a collapsed
+	// panel (nothing to zoom) and for any wheel event a descendant already
+	// claimed via stopPropagation (see connectedCallback).
+	_onWheelZoom(e) {
+		if (!e.ctrlKey || this._collapsed) return;
+		e.preventDefault();
+		const factor = Math.exp(-e.deltaY * 0.01);
+		this._zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this._zoomScale * factor));
+		this._zoomWrap.style.transform = `scale(${this._zoomScale})`;
 	}
 
 	_onResizeStart(e) {

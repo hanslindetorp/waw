@@ -12500,12 +12500,13 @@ class WebAudio extends EventTarget {
 		this.snapShots = [];
 
 		source = source || src;
+		this.musicEngine = new Music(undefined, this);
 
 		if(source){
 			window.addEventListener("load", () => {
 				// read music structure from external, an element in WAXML or init musicEngine without music structure
 				// musicStructure = musicStructure || this._xml.querySelector("Composition") || null;
-				this.musicEngine = new Music(musicStructure, this);
+				
 
 
 				
@@ -12725,6 +12726,9 @@ class WebAudio extends EventTarget {
 		[...xml.children].forEach(childNode => this.removeObjects(childNode));
 
 		this.inputBusses.disconnectAll();
+
+		// XXX Special hack for musicEngine until it follows the same rules as the rest of WAXML
+		this.musicEngine.remove();
 		return null;
 	}
 
@@ -15791,17 +15795,20 @@ class Music extends EventTarget {
 		var audioContext;
 		var maxChannelCount;
 	
-		window.AudioContext = window.AudioContext || window.webkitAudioContext;
+		audioContext = waxml._ctx;
 	
-		if(window.webAudioXML){
-			audioContext = window.webAudioXML._ctx;
-		} else if (AudioContext){
-			audioContext = new AudioContext();
-		} else {
-		  // Web Audio API is not available. Ask the user to use a supported browser.
-		  alert('Web Audio API not supported. Please use another browser');
-		  return;
-		}
+		// Old code for creating a new AudioContext if not provided by WAXML
+
+		// window.AudioContext = window.AudioContext || window.webkitAudioContext;
+		// if(window.webAudioXML){
+		// 	audioContext = window.webAudioXML._ctx;
+		// } else if (AudioContext){
+		// 	audioContext = new AudioContext();
+		// } else {
+		//   // Web Audio API is not available. Ask the user to use a supported browser.
+		//   alert('Web Audio API not supported. Please use another browser');
+		//   return;
+		// }
 	
 	
 		maxChannelCount = audioContext.destination.maxChannelCount || 2;
@@ -16263,6 +16270,11 @@ class Music extends EventTarget {
 		Bus.prototype.getBarDuration = getBarDuration;
 		Bus.prototype.getTime = getTime;
 	
+		Bus.prototype.remove = function() {
+			this.input.disconnect(0);
+			this.voiceGain.disconnect(0);
+			this.output.disconnect(0);
+		}
 	
 		Bus.prototype.setOutput = function(ch, targetCh){
 	
@@ -19334,10 +19346,14 @@ class Music extends EventTarget {
 			Motif.prototype.addEnvelopes = function(envelopes){
 				this.envelopes = envelopes;
 			}
-	
-	
-	
-	
+
+			Motif.prototype.remove = () => {
+				this.sounds.forEach(sound => {
+
+				});
+				this.sounds = [];
+			}
+
 	
 	
 	
@@ -19651,6 +19667,42 @@ class Music extends EventTarget {
 			while(this.triggerIntervals.length){
 				clearInterval(this.triggerIntervals.pop());
 			}
+		}
+
+
+		iMus.prototype.remove = function(){
+
+			this.sections.forEach(section => {
+				section.remove();
+			});
+			this.sections = [];
+
+			this.motifs.forEach(motif => {
+				motif.remove();
+			});
+			this.motifs = [];
+
+			this.busses.forEach(bus => {
+				bus.remove();
+			});
+			this.busses = [];
+
+			try{
+				this.sfxBus.remove(0);
+				this.motifBus.remove(0);
+				this.channelMerger.disconnect(0);
+
+				this.sfxBus = null;
+				this.motifBus = null;
+				this.channelMerger = null;
+			} catch(e){
+				// console.error("Error removing iMus instance: " + e);
+			}
+			// remove from global list of instances
+			// let index = iMus.instances.indexOf(this);
+			// if(index > -1){
+			// 	iMus.instances.splice(index, 1);
+			// }
 		}
 		
 	
@@ -20300,7 +20352,8 @@ class Music extends EventTarget {
 		defaultParams.offset = 0;
 		defaultParams.suffix = "mp3";
 		defaultParams.loopActive = 1;
-		defaultParams.loopEnd = "5.1";
+		// defaultParams.loopEnd = "5.1";
+		defaultParams.loopLength = "off";
 		defaultParams.activeRange = {};
 		defaultParams.activeRange.min = 0;
 		defaultParams.activeRange.max = 1;
@@ -20810,7 +20863,7 @@ class Music extends EventTarget {
 				selector = selector.replace(/[#.]/g, "");
 				
 				// get new selection
-				var selection = new Selection(myInstance, ).selectForPlayback(selector);
+				var selection = new Selection(myInstance).selectForPlayback(selector);
 	
 				if(iMus.playAfterInterlude && selection.sections.length){
 					clearTimeout(iMus.playAfterInterlude);
@@ -21635,7 +21688,12 @@ class Music extends EventTarget {
 
 
 	timeTo(val){
-		return defaultInstance.on(val);
+		return this.defaultInstance.on(val);
+	}
+
+	remove(){
+		this.defaultInstance.remove();
+		// this.defaultInstance = undefined;
 	}
 
 }
