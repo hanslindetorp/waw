@@ -2632,7 +2632,9 @@ export class WaSectionView extends HTMLElement {
 
 			if (this._isFileDrag(types)) {
 				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
-				if (fileId) this._replaceBoxSrc(node.id, fileId);
+				if (!fileId) return;
+				if (node.tagName === "Segment" || node.tagName === "Stinger") this._addOptionToContainer(node.id, fileId);
+				else this._replaceBoxSrc(node.id, fileId);
 				return;
 			}
 
@@ -2672,6 +2674,33 @@ export class WaSectionView extends HTMLElement {
 		const existing = findSrcAttribute(xmlStore.schema, node);
 		const attrName = existing?.attrName || getSchemaSrcAttributeName(xmlStore.schema, node.tagName) || "src";
 		xmlStore.updateAttributes(nodeId, { ...node.attributes, [attrName]: exportPath });
+	}
+
+	// Dropping a file onto a <Segment> or <Stinger> box adds it as a new
+	// <Option> child instead of overwriting the container's own src
+	// attribute — per Hans (2026-09-03). A container that already had its
+	// own src (the "just one Option's worth of audio" shorthand) gets that
+	// promoted to a real <Option> first, so the audio it already had isn't
+	// silently discarded — it ends up as the earlier of the two Options, the
+	// newly dropped file the later one. This is specific to the Section
+	// preview: dropping a file on a <Segment> row in the XML editor's tree
+	// (wa-xml-tree.js) stays a plain src set there, per Hans.
+	_addOptionToContainer(containerId, fileId) {
+		const fileNode = vfs.getNode(fileId);
+		if (!fileNode || fileNode.type !== "file") return;
+		const exportPath = vfs.getExportPath(fileNode.id);
+		const containerNode = ops.findNodeById(xmlStore.root, containerId);
+		if (!containerNode) return;
+		const optionSrcAttr = getSchemaSrcAttributeName(xmlStore.schema, "Option") || "src";
+		const containerSrcAttr = getSchemaSrcAttributeName(xmlStore.schema, containerNode.tagName) || "src";
+		const existingSrc = containerNode.attributes[containerSrcAttr];
+		if (existingSrc !== undefined) {
+			const next = { ...containerNode.attributes };
+			delete next[containerSrcAttr];
+			xmlStore.updateAttributes(containerId, next);
+			xmlStore.insertNewChild(containerId, "Option", { [optionSrcAttr]: existingSrc });
+		}
+		xmlStore.insertNewChild(containerId, "Option", { [optionSrcAttr]: exportPath });
 	}
 
 	// Layer background (not hitting an existing Segment/Option box): a

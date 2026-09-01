@@ -8,6 +8,12 @@ const FILE_DROP_TAG = "AudioBufferSourceNode";
 const INDENT_PX = 18;
 const BASE_PADDING_PX = 8;
 const DEFAULT_COLUMNS = ["id", "class"];
+// Changing an element's type by clicking its name here (opens the same
+// rename popover used elsewhere) is turned off per Hans (2026-09-03) — the
+// popover/rename machinery itself (_renderTagLabel's button branch,
+// xmlStore.updateTagName) is left in place rather than deleted, so this is
+// a one-line flip back on if he changes his mind.
+const ALLOW_TAG_RENAME_VIA_TREE = false;
 
 // Renders the tree as a flat, indented list of CSS Grid rows (Finder-style
 // "list view") rather than nested DOM — every row shares the same column
@@ -735,7 +741,7 @@ export class WaXmlTree extends HTMLElement {
 
 	_renderTagLabel(node, isRoot, parentAllowedChildren) {
 		const schema = xmlStore.schema;
-		const options = !schema
+		const options = !ALLOW_TAG_RENAME_VIA_TREE || !schema
 			? []
 			: isRoot
 				? [...schema.rootElements].sort((a, b) => a.localeCompare(b))
@@ -944,10 +950,19 @@ export class WaXmlTree extends HTMLElement {
 
 			// Internal node-reorder drag.
 			if (this._dragState.draggedNodeId === node.id) return;
+			const draggedNode = ops.findNodeById(xmlStore.root, this._dragState.draggedNodeId);
+			if (!draggedNode) return;
 			const rect = primaryCell.getBoundingClientRect();
 			const y = e.clientY - rect.top;
 			const position = y < rect.height * 0.25 ? "before" : y > rect.height * 0.75 ? "after" : "inside";
-			this._setDropIndicator(cells, node.id, position);
+			if (this._isSchemaValidReparent(draggedNode, node, position)) {
+				e.dataTransfer.dropEffect = "move";
+				this._setDropIndicator(cells, node.id, position);
+			} else {
+				e.dataTransfer.dropEffect = "none";
+				this._clearDropIndicators();
+				this._dragState = { ...this._dragState, dropTargetId: null, dropPosition: null };
+			}
 		};
 
 		const onDragLeave = () => {
@@ -1012,7 +1027,10 @@ export class WaXmlTree extends HTMLElement {
 	// "inside" (on an element) sets its src/source attribute; "before"/"after"
 	// (between elements) inserts a new AudioBufferSourceNode with src set —
 	// both gated by canAcceptFile/canInsertFileNode, which already checked the
-	// XSD (when a schema is loaded) during dragover.
+	// XSD (when a schema is loaded) during dragover. Note this differs from a
+	// drop on a <Segment> box in the Section preview (wa-section-view.js),
+	// which adds a new <Option> instead — here in the tree it's always a
+	// plain src set, same as any other element, per Hans (2026-09-03).
 	_handleVfsFileDrop(targetNode, fileNodeId, position, canAcceptFile, effectiveSrcAttrName, canInsertFileNode) {
 		const fileNode = vfs.getNode(fileNodeId);
 		if (!fileNode || fileNode.type !== "file") return;
@@ -1056,6 +1074,34 @@ export class WaXmlTree extends HTMLElement {
 		}
 	}
 
+	// A schema-loaded document shouldn't let a drag-and-drop reorder produce
+	// a structurally invalid one (e.g. a <Layer> inside a <Layer>, or a
+	// <Composition> inside an <Option>) — per Hans (2026-09-03). "inside"
+	// checks the hovered node itself as the prospective new parent;
+	// "before"/"after" check its own parent instead, since that's who
+	// actually ends up parenting the dragged node — except when the target
+	// IS the root (root has no parent to reorder around), where all three
+	// positions already mean "become a child of root" (see _performDrop's
+	// own root handling, and the matching comment on the VFS file-drop
+	// branch above). No schema loaded, or the tag isn't declared in it ->
+	// nothing to validate against, same permissive fallback used elsewhere
+	// in this file (e.g. _startAddChild).
+	_isSchemaValidReparent(draggedNode, targetNode, position) {
+		const schema = xmlStore.schema;
+		if (!schema) return true;
+		const isTargetRoot = xmlStore.root && targetNode.id === xmlStore.root.id;
+		const effectiveParentNode =
+			position === "inside" || isTargetRoot
+				? targetNode
+				: targetNode.parent
+					? ops.findNodeById(xmlStore.root, targetNode.parent)
+					: null;
+		if (!effectiveParentNode) return true;
+		const schemaElement = schema.elements[effectiveParentNode.tagName];
+		if (!schemaElement) return true;
+		return schemaElement.allowedChildren.includes(draggedNode.tagName);
+	}
+
 	_performDrop(targetNodeId, position) {
 		const draggedNodeId = this._dragState.draggedNodeId;
 		const root = xmlStore.root;
@@ -1063,6 +1109,9 @@ export class WaXmlTree extends HTMLElement {
 
 		const targetNode = ops.findNodeById(root, targetNodeId);
 		if (!targetNode) return;
+
+		const draggedNode = ops.findNodeById(root, draggedNodeId);
+		if (!draggedNode || !this._isSchemaValidReparent(draggedNode, targetNode, position)) return;
 
 		if (position === "inside") {
 			xmlStore.reparentNode(draggedNodeId, targetNodeId);

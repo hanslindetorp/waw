@@ -7,6 +7,12 @@ import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
 import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribute-inheritance.js";
 import { openIoPicker } from "./wa-io-picker.js";
 
+// Showing/editing an element's own tag name here is turned off per Hans
+// (2026-09-03) — _renderTagNameField (and xmlStore.updateTagName) are left
+// in place rather than deleted, so this is a one-line flip back on if he
+// changes his mind. Matches wa-xml-tree.js's own ALLOW_TAG_RENAME_VIA_TREE.
+const SHOW_ELEMENT_TYPE_FIELD = false;
+
 // Nudges the live audio graph (if currently playing and this node survived
 // into it) to match a value just edited here — same "also move the
 // currently-sounding audio, xmlStore stays the source of truth" side
@@ -342,7 +348,7 @@ export class WaNodeInspector extends HTMLElement {
 
 		const body = document.createElement("div");
 		body.className = "body";
-		body.appendChild(this._renderTagNameField(node));
+		if (SHOW_ELEMENT_TYPE_FIELD) body.appendChild(this._renderTagNameField(node));
 		const textField = this._renderTextContentField(node);
 		if (textField) body.appendChild(textField);
 		body.appendChild(this._renderAttributesSection(node));
