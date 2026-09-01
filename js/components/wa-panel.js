@@ -10,8 +10,16 @@
 // not XML Code three panels away.
 
 const COLLAPSED_FLEX = "0 0 2.8rem";
-const MIN_ZOOM = 0.4;
-const MAX_ZOOM = 3;
+// Every panel keeps flex-shrink:0 while expanded (see _applyFlex/_baseFlex)
+// — letting the browser's own flex-shrink renegotiate *every* panel's width
+// continuously (which an earlier version of this file did) made a manual
+// resize-handle drag lag behind the pointer, per Hans (2026-09-02): the
+// dragged panel's own width was itself subject to shrinking against its
+// neighbors mid-drag instead of tracking the cursor 1:1. Space-stealing for
+// an *opening* panel (Code needs room from the left, File Manager from the
+// right) is instead a one-time, explicit reflow — see _reclaimSpaceIfNeeded.
+const MIN_EXPANDED_WIDTH_PX = 160;
+const MIN_EXPANDED_WIDTH = `${MIN_EXPANDED_WIDTH_PX}px`;
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -20,11 +28,14 @@ template.innerHTML = `
 			position: relative;
 			display: flex;
 			flex-direction: column;
-			min-width: 0;
+			min-width: ${MIN_EXPANDED_WIDTH};
 			border-right: 1px solid var(--waw-border, #2f2f2f);
 			background: var(--waw-panel-bg, #1a1a1a);
 			color: var(--waw-fg, #e8e8e8);
 			overflow: hidden;
+		}
+		:host(.collapsed) {
+			min-width: 0;
 		}
 		:host([hidden]) {
 			display: none;
@@ -81,17 +92,6 @@ template.innerHTML = `
 		:host(.collapsed) .panel-body {
 			display: none;
 		}
-		/* Generic trackpad/Magic-pad pinch-to-zoom fallback for panel content
-		   (see the wheel+ctrlKey handler below) — per Hans, "the same gesture
-		   in other panels zooms that panel's own content". A panel whose own
-		   content implements a more meaningful zoom (e.g. wa-section-view.js's
-		   pxPerSecond/rowHeight zoom) stops the wheel event from ever
-		   reaching here instead of using this. transform-origin 0 0 so
-		   scaling grows toward the bottom-right, matching where scroll
-		   position already is rather than jumping to re-center. */
-		.panel-zoom-wrap {
-			transform-origin: 0 0;
-		}
 		.collapse-btn {
 			background: none;
 			border: none;
@@ -119,7 +119,7 @@ template.innerHTML = `
 		<span class="panel-title"></span>
 		<button class="collapse-btn" type="button" title="Show/hide panel">-</button>
 	</div>
-	<div class="panel-body"><div class="panel-zoom-wrap"><slot></slot></div></div>
+	<div class="panel-body"><slot></slot></div>
 	<div class="resize-handle"></div>
 `;
 
@@ -144,8 +144,6 @@ export class WaPanel extends HTMLElement {
 		this._collapseBtn = this.shadowRoot.querySelector(".collapse-btn");
 		this._resizeHandle = this.shadowRoot.querySelector(".resize-handle");
 		this._panelBody = this.shadowRoot.querySelector(".panel-body");
-		this._zoomWrap = this.shadowRoot.querySelector(".panel-zoom-wrap");
-		this._zoomScale = 1;
 		this._collapsed = false;
 		this._absorbing = false;
 		this._onResizeMove = this._onResizeMove.bind(this);
@@ -163,12 +161,6 @@ export class WaPanel extends HTMLElement {
 		this._applyFlex();
 		this._collapseBtn.addEventListener("click", () => this.toggleCollapse());
 		this._resizeHandle.addEventListener("pointerdown", (e) => this._onResizeStart(e));
-		// Generic trackpad/Magic-pad pinch-zoom fallback (see the .panel-zoom-wrap
-		// CSS comment) — per Hans (2026-09-02). A descendant that wants its own
-		// zoom instead (wa-section-view.js's pxPerSecond/rowHeight zoom) calls
-		// stopPropagation() on the same wheel+ctrlKey gesture before it bubbles
-		// up here, so this never fires for it.
-		this._panelBody.addEventListener("wheel", (e) => this._onWheelZoom(e), { passive: false });
 		// A markup-level starting state (e.g. Code defaulting to closed in a
 		// fresh project, per Hans) — workstation-state.js's own saved state
 		// (if any) still wins once it applies, same as any other later
@@ -225,6 +217,12 @@ export class WaPanel extends HTMLElement {
 		// panels further over.
 		const neighbor = this._findAbsorbingNeighbor();
 		if (neighbor) neighbor.setAbsorbing(this._collapsed);
+
+		// A panel that just opened needs to actually be visible — see
+		// _reclaimSpaceIfNeeded. A panel that just closed gives back
+		// whatever it had borrowed while open, if anything.
+		if (this._collapsed) this._giveBackStolenSpace();
+		else this._reclaimSpaceIfNeeded();
 	}
 
 	// Called by a collapsing/expanding right neighbor (see toggleCollapse) —
@@ -252,18 +250,62 @@ export class WaPanel extends HTMLElement {
 		}
 	}
 
-	// Browsers synthesize a trackpad/Magic-pad pinch as wheel + ctrlKey (also
-	// catches an actual Ctrl+scroll-wheel zoom attempt, a reasonable bonus) —
-	// scales this panel's own content around wherever the gesture is
-	// happening, clamped to [MIN_ZOOM, MAX_ZOOM]. Skipped for a collapsed
-	// panel (nothing to zoom) and for any wheel event a descendant already
-	// claimed via stopPropagation (see connectedCallback).
-	_onWheelZoom(e) {
-		if (!e.ctrlKey || this._collapsed) return;
-		e.preventDefault();
-		const factor = Math.exp(-e.deltaY * 0.01);
-		this._zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this._zoomScale * factor));
-		this._zoomWrap.style.transform = `scale(${this._zoomScale})`;
+	// Called right after this panel expands (see toggleCollapse). Every
+	// panel keeps flex-shrink:0 (see the MIN_EXPANDED_WIDTH_PX comment up
+	// top), so an opening panel that doesn't already have room just
+	// overflows the row instead of showing — this is what actually makes it
+	// visible in that case: a single explicit width transfer from one
+	// specific neighbor (found via _findNeighborToShrink), not a standing
+	// CSS shrink relationship. Reversed by _giveBackStolenSpace once this
+	// panel collapses again.
+	_reclaimSpaceIfNeeded() {
+		const container = this.parentElement;
+		if (!container) return;
+		const panels = [...container.children].filter((el) => el instanceof WaPanel);
+		const totalWidth = panels.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0);
+		const overflow = totalWidth - container.getBoundingClientRect().width;
+		if (overflow <= 0.5) return;
+		const neighbor = this._findNeighborToShrink();
+		if (!neighbor) return;
+		const neighborWidth = neighbor.getBoundingClientRect().width;
+		const shrinkBy = Math.min(overflow, Math.max(0, neighborWidth - MIN_EXPANDED_WIDTH_PX));
+		if (shrinkBy <= 0.5) return;
+		neighbor._shrinkBy(shrinkBy);
+		this._stolenFrom = { panel: neighbor, amount: shrinkBy };
+	}
+
+	_giveBackStolenSpace() {
+		if (!this._stolenFrom) return;
+		const { panel, amount } = this._stolenFrom;
+		this._stolenFrom = null;
+		panel._growBy(amount);
+	}
+
+	_shrinkBy(px) {
+		const currentWidth = this.getBoundingClientRect().width;
+		this._baseFlex = `0 0 ${Math.max(MIN_EXPANDED_WIDTH_PX, currentWidth - px)}px`;
+		this._applyFlex();
+	}
+
+	_growBy(px) {
+		const currentWidth = this.getBoundingClientRect().width;
+		this._baseFlex = `0 0 ${currentWidth + px}px`;
+		this._applyFlex();
+	}
+
+	// Which neighbor should give up width when this panel expands and
+	// doesn't fit — the nearest expanded panel to the left (mirrors
+	// _findAbsorbingNeighbor's own "nearest neighbor" convention), falling
+	// back to the right for a panel with no left neighbor at all (File
+	// Manager) — per Hans (2026-09-02): Code takes space from the left,
+	// File Manager from the right.
+	_findNeighborToShrink() {
+		let el = this.previousElementSibling;
+		while (el instanceof WaPanel && el.classList.contains("collapsed")) el = el.previousElementSibling;
+		if (el instanceof WaPanel) return el;
+		el = this.nextElementSibling;
+		while (el instanceof WaPanel && el.classList.contains("collapsed")) el = el.nextElementSibling;
+		return el instanceof WaPanel ? el : null;
 	}
 
 	_onResizeStart(e) {
@@ -275,7 +317,7 @@ export class WaPanel extends HTMLElement {
 	}
 
 	_onResizeMove(e) {
-		const newWidth = Math.max(160, this._resizeStartWidth + (e.clientX - this._resizeStartX));
+		const newWidth = Math.max(MIN_EXPANDED_WIDTH_PX, this._resizeStartWidth + (e.clientX - this._resizeStartX));
 		this._baseFlex = `0 0 ${newWidth}px`;
 		this._applyFlex();
 	}

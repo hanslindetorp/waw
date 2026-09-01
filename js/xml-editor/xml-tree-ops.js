@@ -155,6 +155,29 @@ export function createXmlNode(tagName, parentId) {
 	};
 }
 
+// A-Z, then A1/B1/.../Z1, A2/B2/... — per Hans (2026-09-02), every new
+// <Section> gets one of these as its `class` so it's addressable as a
+// PLAY/STOP trigger selector (see player-store.js) without the user having
+// to type one by hand. Picks the first value in that sequence not already
+// used as a `class` token anywhere in the document (space-separated, same as
+// any HTML/XML class attribute), so it stays collision-free against both
+// hand-set classes and previously auto-assigned ones, loaded document or not.
+function usedClassTokens(node, set = new Set()) {
+	(node.attributes.class || "").split(/\s+/).filter(Boolean).forEach((t) => set.add(t));
+	node.children.forEach((c) => usedClassTokens(c, set));
+	return set;
+}
+
+export function generateSectionClass(root) {
+	const used = root ? usedClassTokens(root) : new Set();
+	for (let n = 0; ; n++) {
+		const letter = String.fromCharCode(65 + (n % 26));
+		const suffix = Math.floor(n / 26);
+		const candidate = suffix > 0 ? `${letter}${suffix}` : letter;
+		if (!used.has(candidate)) return candidate;
+	}
+}
+
 export function findNodeById(root, id) {
 	if (root.id === id) return root;
 	for (const child of root.children) {

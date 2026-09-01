@@ -120,6 +120,11 @@ class XmlStore extends EventTarget {
 	insertNewChild(parentId, tagName, attributes, index) {
 		if (!this.root) return;
 		let child = ops.createXmlNode(tagName, parentId);
+		// Every new <Section> gets a unique `class` so it's usable as a
+		// PLAY/STOP trigger selector right away — see generateSectionClass.
+		if (tagName === "Section" && !attributes?.class) {
+			attributes = { ...attributes, class: ops.generateSectionClass(this.root) };
+		}
 		if (attributes) child = { ...child, attributes };
 		this.root = ops.insertChild(this.root, parentId, child, index);
 		this.selectedNodeId = child.id;

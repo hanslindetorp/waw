@@ -41,6 +41,10 @@
 html, body {
 	height: 100%;
 	margin: 0;
+	/* A horizontal swipe that runs out of content to scroll would otherwise
+	   fall through to the browser's own back/forward navigation gesture —
+	   very unwelcome in an app, per Hans (2026-09-02). */
+	overscroll-behavior-x: none;
 }
 
 body {

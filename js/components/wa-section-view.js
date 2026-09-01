@@ -215,6 +215,15 @@ template.innerHTML = `
 			border-bottom: 1px solid var(--waw-border, #2f2f2f);
 			background: var(--waw-panel-bg, #1a1a1a);
 		}
+		/* The Stinger divider sits directly between the Layer and Stinger
+		   scroll areas, so it doubles as the draggable handle between them
+		   (see _onDividerResizeStart) — per Hans (2026-09-02), every panel
+		   with two stacked areas gets a movable divider. The cursor alone
+		   signals that (no extra hover color, per Hans). */
+		.stinger-divider {
+			cursor: row-resize;
+			touch-action: none;
+		}
 		.empty-hint {
 			color: var(--waw-muted, #8a8a8a);
 			text-align: center;
@@ -375,6 +384,10 @@ template.innerHTML = `
 		.loop-repeat {
 			opacity: 0.4;
 		}
+		/* A musical repeat sign (𝄇: thin bar, thick bar, two dots) rather than
+		   an arbitrary single line — per Hans (2026-09-02) — and white, not
+		   the accent blue, so it reads as a distinct kind of marker from the
+		   Stinger anchor/selection/etc. colors used everywhere else here. */
 		.loop-marker {
 			position: absolute;
 			top: 0;
@@ -384,30 +397,33 @@ template.innerHTML = `
 			cursor: ew-resize;
 			touch-action: none;
 		}
-		.loop-marker::before {
-			content: "";
+		.loop-marker-bar {
 			position: absolute;
 			top: 0;
 			bottom: 0;
-			left: 50%;
-			width: 2px;
-			background: var(--waw-accent, #4fa3ff);
-			transform: translateX(-50%);
+			background: #fff;
+		}
+		.loop-marker-bar.thin {
+			left: 7px;
+			width: 1.5px;
+		}
+		.loop-marker-bar.thick {
+			left: 10px;
+			width: 3px;
 		}
 		.loop-marker-dot {
 			position: absolute;
-			left: 50%;
-			width: 4px;
-			height: 4px;
+			left: 2px;
+			width: 3px;
+			height: 3px;
 			border-radius: 50%;
-			background: var(--waw-accent, #4fa3ff);
-			transform: translateX(-50%);
+			background: #fff;
 		}
 		.loop-marker-dot:first-child {
-			top: calc(50% - 8px);
+			top: calc(50% - 6px);
 		}
 		.loop-marker-dot:last-child {
-			top: calc(50% + 4px);
+			top: calc(50% + 3px);
 		}
 		.stinger-anchor {
 			position: absolute;
@@ -517,6 +533,19 @@ template.innerHTML = `
 		.timed-box.drop-active {
 			outline: 2px dashed var(--waw-fg, #e8e8e8);
 			outline-offset: -2px;
+		}
+		/* Drag to change a closed Segment's own length (see
+		   _buildSegmentResizeHandle) — the cursor alone marks it as
+		   draggable, no extra visible chrome (per Hans, 2026-09-02). */
+		.segment-resize-handle {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			right: 0;
+			width: 8px;
+			cursor: ew-resize;
+			touch-action: none;
+			z-index: 2;
 		}
 		.timed-box canvas {
 			position: absolute;
@@ -657,6 +686,10 @@ export class WaSectionView extends HTMLElement {
 
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
+		// Share of the Layer/Stinger area's vertical space given to Layers
+		// (Stingers gets the rest) — user-draggable via .stinger-divider (see
+		// _onDividerResizeStart), 80/20 initially per Hans (2026-09-02).
+		this._layerStingerRatio = 0.8;
 		// The finest grid the zoom-adaptive resolution (_effectiveGridBeats) is
 		// allowed to reach — "1/4" through "1/32", or "off" to disable
 		// grid/snapping entirely. User-selectable via the grid-resolution menu.
@@ -677,6 +710,22 @@ export class WaSectionView extends HTMLElement {
 
 		this._onKeyDown = this._onKeyDown.bind(this);
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
+		this._onDividerResizeMove = this._onDividerResizeMove.bind(this);
+		this._onDividerResizeEnd = this._onDividerResizeEnd.bind(this);
+		// .scroll-area's clientHeight is 0 (or stale) the moment a Section
+		// first becomes visible — e.g. right after wa-preview.js flips its
+		// "section" state to display:block, that layout hasn't happened yet
+		// in the same synchronous call as _renderSection's own measurement —
+		// so the very first _applyLayerStingerSplit call used to under-size
+		// Layers down to its one-row minimum until *something else* (like
+		// dragging the divider) forced a re-measure, per Hans (2026-09-02).
+		// Re-running the split whenever this area's real size changes (first
+		// paint included) fixes that without having to guess the right delay.
+		this._resizeObserver = new ResizeObserver(() => {
+			if (this._lastLayersNaturalHeight !== undefined) {
+				this._applyLayerStingerSplit(this._lastLayersNaturalHeight, this._lastStingersNaturalHeight);
+			}
+		});
 	}
 
 	connectedCallback() {
@@ -688,6 +737,16 @@ export class WaSectionView extends HTMLElement {
 		// (2026-09-02) — added on `this` rather than some inner element so it
 		// catches the gesture anywhere over the Section preview.
 		this.addEventListener("wheel", (e) => this._onWheelZoom(e), { passive: false });
+		this._stingerDivider.addEventListener("pointerdown", (e) => this._onDividerResizeStart(e));
+		this._resizeObserver.observe(this._scrollArea);
+		// Manually scrolling toward the current right edge needs to extend
+		// the timeline too, not just playback's own autoscroll — see
+		// _ensureTimelineCovers.
+		this._layerScroll.addEventListener("scroll", () => {
+			if (!this._lastRenderInfo) return;
+			const rightEdgeSeconds = this._pxToTime(this._layerScroll.scrollLeft + this._layerScroll.clientWidth, this._lastRenderInfo);
+			this._ensureTimelineCovers(rightEdgeSeconds);
+		});
 
 		const gridSelect = this.shadowRoot.querySelector(".grid-select");
 		GRID_RESOLUTIONS.forEach((r) => {
@@ -715,6 +774,7 @@ export class WaSectionView extends HTMLElement {
 
 	disconnectedCallback() {
 		this._stopPositionLoop();
+		this._resizeObserver.disconnect();
 		document.removeEventListener("keydown", this._onKeyDown);
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
 	}
@@ -736,6 +796,7 @@ export class WaSectionView extends HTMLElement {
 			this._teardownActive();
 			this._cursorTime = 0;
 			this._maxDecodedEnd = 0;
+			this._extendedDuration = 0;
 			this._openSegmentIds.clear();
 			this._selectedIds.clear();
 			this._lastSectionId = selected.id;
@@ -848,6 +909,10 @@ export class WaSectionView extends HTMLElement {
 			// engine from its true beginning, so the visual cursor resets too.
 			this._cursorTime = 0;
 			this._playStartAudioTime = playerStore.audioContext.currentTime;
+			// A fresh play session should page forward from wherever the view
+			// happens to be scrolled right now, not from a stale target left
+			// over from a previous playback (see _updatePlayheadVisual).
+			this._autoScrollTargetLeft = undefined;
 			this._startPositionLoop();
 		} else {
 			this._stopPositionLoop();
@@ -931,8 +996,15 @@ export class WaSectionView extends HTMLElement {
 		const node = this._getActiveSectionNode();
 		if (!node) return;
 		const info = readSectionInfo(node, this._getCompositionAncestor(node));
-		const cursorPx = this._timeToPx(this._cursorTime, info);
 
+		if (this._isPlaying && this._layerScroll) {
+			// Keeps the rendered timeline ahead of the playhead — one
+			// viewport of lookahead — so a long or looping Layer never runs
+			// into blank space during playback (see _ensureTimelineCovers).
+			this._ensureTimelineCovers(this._cursorTime + this._layerScroll.clientWidth / this._pxPerSecond);
+		}
+
+		const cursorPx = this._timeToPx(this._cursorTime, info);
 		if (this._playheadEl) {
 			this._playheadEl.style.left = `${LABEL_WIDTH + cursorPx}px`;
 		}
@@ -940,13 +1012,39 @@ export class WaSectionView extends HTMLElement {
 		// own independent horizontal scroll below it, see .layer-scroll/
 		// .stinger-scroll in the template) — the Layer area's own horizontal
 		// scroll, which the playhead should follow during playback, lives on
-		// .layer-scroll instead.
+		// .layer-scroll instead. Once the playhead reaches the right edge of
+		// what's currently visible, the view smoothly pages forward so the
+		// playhead lands back at the far left — per Hans (2026-09-02), no
+		// abrupt jump. _autoScrollTargetLeft (not the live scrollLeft, which
+		// is still mid-animation while a smooth scroll is in flight) is what
+		// this compares against, so an in-progress scroll isn't retriggered
+		// every frame.
 		if (this._isPlaying && this._layerScroll) {
-			const targetLeft = cursorPx - this._layerScroll.clientWidth * 0.3;
-			if (Math.abs(this._layerScroll.scrollLeft - targetLeft) > this._layerScroll.clientWidth * 0.6) {
-				this._layerScroll.scrollLeft = Math.max(0, targetLeft);
+			const viewportWidth = this._layerScroll.clientWidth;
+			if (this._autoScrollTargetLeft === undefined) this._autoScrollTargetLeft = this._layerScroll.scrollLeft;
+			if (cursorPx >= this._autoScrollTargetLeft + viewportWidth || cursorPx < this._autoScrollTargetLeft) {
+				this._autoScrollTargetLeft = Math.max(0, cursorPx);
+				this._layerScroll.scrollTo({ left: this._autoScrollTargetLeft, behavior: "smooth" });
 			}
 		}
+	}
+
+	// Extends the rendered timeline (see _renderSection's totalDuration) and
+	// re-renders if `seconds` would fall outside what's currently drawn —
+	// called while scrolling (see the .layer-scroll "scroll" listener in
+	// connectedCallback) and during playback's autoscroll (_updatePlayheadVisual),
+	// so a long or looping Layer keeps drawing further out instead of running
+	// into blank space, per Hans (2026-09-02) — it used to stop dead at a
+	// fixed 16 bars. Extends with a full viewport of extra headroom (not just
+	// up to `seconds`) so this doesn't have to re-render on every single
+	// scroll/frame tick near the edge.
+	_ensureTimelineCovers(seconds) {
+		if (this._lastTotalDuration !== undefined && seconds <= this._lastTotalDuration) return;
+		const node = this._getActiveSectionNode();
+		if (!node) return;
+		const viewportSeconds = (this._layerScroll?.clientWidth || 0) / this._pxPerSecond;
+		this._extendedDuration = Math.max(seconds + viewportSeconds, (this._lastTotalDuration || 0) * 1.5);
+		this._renderSection(node);
 	}
 
 	_updatePositionReadout() {
@@ -1110,7 +1208,20 @@ export class WaSectionView extends HTMLElement {
 		this._infoEl.textContent = `${info.tempo} BPM · ${info.timeSign.label}${info.id ? " · " + info.id : ""}`;
 
 		const layers = getLayers(node);
-		const totalDuration = Math.max(minimumTotalDuration(info), this._estimateMaxEnd(layers, node, compositionNode, info));
+		// Never draws less than one viewport's worth (so zooming out doesn't
+		// run into blank space) or less than whatever _ensureTimelineCovers
+		// already extended to (scrolling/playback autoscroll past the edge,
+		// see there) — a looping Layer needs to keep tiling out that far too,
+		// per Hans (2026-09-02): it used to stop dead at a fixed 16 bars.
+		const viewportSeconds = (this._layerScroll?.clientWidth || 0) / this._pxPerSecond;
+		const totalDuration = Math.max(
+			minimumTotalDuration(info),
+			this._estimateMaxEnd(layers, node, compositionNode, info),
+			viewportSeconds + info.barDuration * PRE_ROLL_BARS,
+			this._extendedDuration || 0
+		);
+		this._lastTotalDuration = totalDuration;
+		this._lastRenderInfo = info;
 		const totalWidth = this._timeToPx(totalDuration, info);
 		const rowsPerLayer = layers.map((layer) => this._rowsNeededForLayer(layer));
 
@@ -1210,10 +1321,11 @@ export class WaSectionView extends HTMLElement {
 
 	// Vertical space split between the Layer and Stinger areas, per Hans
 	// (2026-09-02):
-	// - An empty Section splits 80/20 (Layers/Stingers).
-	// - Stingers can grow past its 20% share by borrowing from Layers, but
-	//   Layers never shrinks below one row's worth of height (reserved even
-	//   with zero Layers) — Stingers' own growth is capped there.
+	// - Starts at 80/20 (Layers/Stingers), user-adjustable by dragging
+	//   .stinger-divider (see _onDividerResizeStart) — _layerStingerRatio is
+	//   Layers' own share, Stingers gets the rest.
+	// - Layers never shrinks below one row's worth of height (reserved even
+	//   with zero Layers); Stingers never shrinks below one ruler's worth.
 	// - If Layers' own content needs more than its current share, the whole
 	//   Layer area grows instead (taller than the split gave it) — the outer
 	//   .scroll-area's normal vertical scroll takes over from there; Stingers
@@ -1221,16 +1333,47 @@ export class WaSectionView extends HTMLElement {
 	// - Either area scrolls internally (see the .layer-scroll/.stinger-scroll
 	//   overflow-y:auto) if squeezed below its own natural content height.
 	_applyLayerStingerSplit(layersNaturalHeight, stingersNaturalHeight) {
+		// Cached so a divider drag (see _onDividerResizeMove) can re-apply the
+		// split immediately without waiting for a full _renderSection.
+		this._lastLayersNaturalHeight = layersNaturalHeight;
+		this._lastStingersNaturalHeight = stingersNaturalHeight;
+
 		const dividerHeight = (this._layersDivider?.offsetHeight || 0) + (this._stingerDivider?.offsetHeight || 0);
 		const available = Math.max(0, this._scrollArea.clientHeight - dividerHeight);
 		const layersMin = RULER_HEIGHT + this._rowHeight;
+		const stingersMin = RULER_HEIGHT;
 
-		const stingersHeight = Math.max(available * 0.2, Math.min(stingersNaturalHeight, Math.max(0, available - layersMin)));
-		let layersHeight = Math.max(available - stingersHeight, layersMin);
+		let stingersHeight = Math.max(stingersMin, available * (1 - this._layerStingerRatio));
+		let layersHeight = Math.max(layersMin, available - stingersHeight);
 		if (layersNaturalHeight > layersHeight) layersHeight = layersNaturalHeight;
+		stingersHeight = Math.max(stingersMin, available - layersHeight);
 
 		this._layerScroll.style.height = `${layersHeight}px`;
 		this._stingerScroll.style.height = `${stingersHeight}px`;
+	}
+
+	_onDividerResizeStart(e) {
+		e.preventDefault();
+		try {
+			this._stingerDivider.setPointerCapture(e.pointerId);
+		} catch {}
+		this._dividerStartY = e.clientY;
+		this._dividerStartRatio = this._layerStingerRatio;
+		window.addEventListener("pointermove", this._onDividerResizeMove);
+		window.addEventListener("pointerup", this._onDividerResizeEnd);
+	}
+
+	_onDividerResizeMove(e) {
+		const dividerHeight = (this._layersDivider?.offsetHeight || 0) + (this._stingerDivider?.offsetHeight || 0);
+		const available = Math.max(1, this._scrollArea.clientHeight - dividerHeight);
+		const deltaRatio = (e.clientY - this._dividerStartY) / available;
+		this._layerStingerRatio = Math.min(0.9, Math.max(0.1, this._dividerStartRatio + deltaRatio));
+		this._applyLayerStingerSplit(this._lastLayersNaturalHeight, this._lastStingersNaturalHeight);
+	}
+
+	_onDividerResizeEnd() {
+		window.removeEventListener("pointermove", this._onDividerResizeMove);
+		window.removeEventListener("pointerup", this._onDividerResizeEnd);
 	}
 
 	// Trailing drop target for the Stinger area, always present — a file or
@@ -2007,6 +2150,21 @@ export class WaSectionView extends HTMLElement {
 		lane.addEventListener("click", (e) => {
 			if (e.target === lane) this._clearSelection();
 		});
+		// Double-click sets this Layer's own loopEnd to the clicked position
+		// (snapped to the same beat grid the loop marker's own drag uses),
+		// per Hans (2026-09-02) — same write as dragging the marker itself,
+		// just a faster way to place it at a specific spot.
+		lane.addEventListener("dblclick", (e) => {
+			const laneRect = lane.getBoundingClientRect();
+			const rawSeconds = this._pxToTime(e.clientX - laneRect.left + lane.scrollLeft, info);
+			const gridBeats = this._effectiveGridBeats(info) || 1;
+			const beatCount = Math.max(1, Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats);
+			const seconds = beatCount * info.beatDuration;
+			const layerNow = ops.findNodeById(xmlStore.root, layer.id);
+			if (layerNow) {
+				xmlStore.updateAttributes(layer.id, { ...layerNow.attributes, loopEnd: secondsToPosString(seconds, info, gridBeats) });
+			}
+		});
 
 		return lane;
 	}
@@ -2029,6 +2187,8 @@ export class WaSectionView extends HTMLElement {
 		marker.style.height = `${laneHeight}px`;
 		marker.appendChild(document.createElement("span")).className = "loop-marker-dot";
 		marker.appendChild(document.createElement("span")).className = "loop-marker-dot";
+		marker.appendChild(document.createElement("span")).className = "loop-marker-bar thin";
+		marker.appendChild(document.createElement("span")).className = "loop-marker-bar thick";
 
 		marker.addEventListener("pointerdown", (e) => {
 			e.preventDefault();
@@ -2338,9 +2498,63 @@ export class WaSectionView extends HTMLElement {
 			});
 		}
 
+		// A closed Segment's own length is resizable from its right edge, per
+		// Hans (2026-09-02) — Options aren't (their box is either read-only
+		// preview content inside an open Segment, or driven by the Segment's
+		// own length when closed).
+		if (kind === "Segment") {
+			box.appendChild(this._buildSegmentResizeHandle(node, info, box));
+		}
+
 		this._wireBoxDropTarget(box, node, kind, info);
 
 		return box;
+	}
+
+	// A grip at a closed Segment's right edge — drag to change its own
+	// `length`, snapped to the same beat grid other drags use (see
+	// _buildLoopMarker). Positioned via CSS right:0 so it tracks the box's
+	// current width even when that width was grown after the fact to fit
+	// nested Options (_renderSegmentBox's own post-hoc width bump).
+	_buildSegmentResizeHandle(segment, info, box) {
+		const handle = document.createElement("div");
+		handle.className = "segment-resize-handle";
+		handle.title = "Drag to change this Segment's length";
+		// The parent box is itself draggable (native HTML5 DnD, for moving
+		// the whole Segment) — without this, a mousedown here would be
+		// picked up as the start of *that* drag instead of this one.
+		handle.draggable = false;
+		handle.addEventListener("click", (e) => e.stopPropagation());
+
+		handle.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			try {
+				handle.setPointerCapture(e.pointerId);
+			} catch {}
+			const gridBeats = this._effectiveGridBeats(info) || 1;
+			let pendingSeconds = parseFloat(box.style.width) / this._pxPerSecond;
+
+			const onMove = (moveEvt) => {
+				const boxRect = box.getBoundingClientRect();
+				const rawSeconds = (moveEvt.clientX - boxRect.left) / this._pxPerSecond;
+				const beatCount = Math.max(1, Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats);
+				pendingSeconds = Math.max(info.beatDuration * gridBeats, beatCount * info.beatDuration);
+				box.style.width = `${pendingSeconds * this._pxPerSecond}px`;
+			};
+			const onUp = () => {
+				handle.removeEventListener("pointermove", onMove);
+				handle.removeEventListener("pointerup", onUp);
+				const segmentNow = ops.findNodeById(xmlStore.root, segment.id);
+				if (segmentNow) {
+					xmlStore.updateAttributes(segment.id, { ...segmentNow.attributes, length: secondsToLengthString(pendingSeconds) });
+				}
+			};
+			handle.addEventListener("pointermove", onMove);
+			handle.addEventListener("pointerup", onUp);
+		});
+
+		return handle;
 	}
 
 	// True for anything that resolves to a playable audio file on drop: a
