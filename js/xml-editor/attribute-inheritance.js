@@ -7,7 +7,7 @@ import * as ops from "./xml-tree-ops.js";
 // 2026-09-02). Each entry lists the ancestor tags to check, nearest first.
 const LAYER_INHERITANCE = {
 	fadeTime: ["Section", "Composition"],
-	loopLength: ["Section", "Composition"],
+	loopEnd: ["Section", "Composition"],
 	changeOnNext: ["Section", "Composition"]
 };
 
@@ -21,11 +21,12 @@ const SECTION_INHERITANCE = {
 // XML attribute's own string format/unit — not the internal JS shape (e.g.
 // timeSign's {nominator,denominator} becomes "4/4" per the schema's `meter`
 // pattern; fadeTime's 0.01s becomes "10" since the schema's fadeTime is in
-// ms). loopLength's default is "off" per Hans (2026-09-02) — matching
-// waxml.js's own change there.
+// ms). loopEnd (formerly loopLength — now a musical position, per Hans
+// 2026-09-02, matching the schema's own musicalLoopEnd type) defaults to
+// "off", matching waxml.js's own defaultParams.loopEnd.
 const DEFAULTS = {
 	fadeTime: "10",
-	loopLength: "off",
+	loopEnd: "off",
 	tempo: "120",
 	timeSign: "4/4",
 	changeOnNext: "1/1"

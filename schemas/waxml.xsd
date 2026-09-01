@@ -512,11 +512,38 @@
     <xs:annotation>
       <!-- Consolidated from the former "iMusicLoopLength" (renamed here to just
            "loopLength" - the "iMusic" prefix was only ever needed to avoid a
-           name collision during the schema merge, not a meaningful distinction). -->
+           name collision during the schema merge, not a meaningful distinction).
+           Still used by ObjectBasedAudio/AmbientAudio's own native-looping
+           loopLength and the granular-audio loopLength in the shared waxml
+           attributeGroup — NOT by Layer/Section/Composition's own loopEnd
+           any more (see musicalLoopEnd below), which is a different,
+           unrelated concept that happens to share a similar name. -->
       <xs:documentation>Loop length specified by a musical meter: 'bar', 'beat', nr of bars, 4/4, 3/4, 6/8, 5/8 etc or 'off' (for no loop).</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string">
       <xs:pattern value="off|bar|beat|\d+|\d+(\.\d+)?\/\d+|-?\d+(\.\d+)?(ms|s)"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- A Layer/Section/Composition's loop end, per Hans (2026-09-02): a
+       musical *position* (bar.beat.offbeat, same notation as `position`
+       below), not a length — replaces their former "loopLength" attribute.
+       Named "musicalLoopEnd" (not just "loopEnd") to stay distinct from the
+       existing, unrelated `loopEnd` type used by AudioBufferSourceNode-style
+       native looping (loopStart/loopEnd in raw seconds) elsewhere in this
+       schema — same attribute *name* ("loopEnd") on Layer/Section/
+       Composition, deliberately different type, since XSD scopes attribute
+       declarations per complexType. -->
+  <xs:simpleType name="musicalLoopEnd">
+    <xs:annotation>
+      <xs:documentation>The musical position (bar.beat.offbeat, e.g. "5.1.00") where a Layer/Section/Composition's content stops looping and restarts, or "off" to disable looping.</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="musicalLoopEndOff position"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="musicalLoopEndOff">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="off"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -1956,7 +1983,7 @@
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
-    <xs:attribute name="loopLength" type="loopLength"/>
+    <xs:attribute name="loopEnd" type="musicalLoopEnd"/>
     <xs:attribute name="partLength" type="length"/>
     <xs:attribute name="upbeat" type="length"/>
     <xs:attribute name="active" type="active"/>
@@ -1978,7 +2005,7 @@
     <xs:attribute name="suffix" type="suffix"/>
     <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
-    <xs:attribute name="loopLength" type="length"/>
+    <xs:attribute name="loopEnd" type="musicalLoopEnd"/>
     <xs:attribute name="length" type="length"/>
     <xs:attribute name="src" type="fileName"/>
   </xs:complexType>
@@ -1996,7 +2023,7 @@
     <xs:attribute name="timeSign" type="meter"/>
     <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
-    <xs:attribute name="loopLength" type="length"/>
+    <xs:attribute name="loopEnd" type="musicalLoopEnd"/>
   </xs:complexType>
 
   <!--

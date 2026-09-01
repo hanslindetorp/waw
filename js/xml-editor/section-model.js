@@ -8,28 +8,30 @@
 // "layer"), Segment (was "region", then "segment"). Option/Command are
 // unchanged apart from the same lowercase->PascalCase schema-wide rename.
 //
-// IMPORTANT: pos/length/loopLength are NOT plain seconds, and — easy to miss
-// — pos uses a DIFFERENT notation than length/loopLength do:
-// - length/loopLength/upbeat/delay/changeOnNext/partLength/quantize go
-//   through parseDivision() below, mirroring waxml.js's divisionToTime()/
+// IMPORTANT: pos/length/loopEnd are NOT plain seconds, and — easy to miss —
+// pos/loopEnd use a DIFFERENT notation than length does:
+// - length/upbeat/delay/changeOnNext/partLength/quantize go through
+//   parseDivision() below, mirroring waxml.js's divisionToTime()/
 //   getTimeSign(): a bare number is a bar COUNT (length="2" = 2 bars), "X/Y"
 //   is a fraction of a whole note ("3/8" = three eighth notes), "bar"/"beat"
 //   are literally one bar/beat, and an explicit real-time value can be given
 //   as "Xs" or "Xms".
-// - pos (on Segment/Option/Command) goes through parsePosition() below
-//   instead, mirroring waxml.js's own separate musicalPositionToTime(): a
-//   1-indexed "bar.beat.offbeat" notation (e.g. "4.4.75" = bar 4, beat 4,
-//   75% through that beat), NOT a bar-count/fraction/unit value.
+// - pos (on Segment/Option/Command) and loopEnd (on Layer/Section/
+//   Composition — see readEffectiveLoopEnd) go through parsePosition()
+//   below instead, mirroring waxml.js's own separate
+//   musicalPositionToTime(): a 1-indexed "bar.beat.offbeat" notation (e.g.
+//   "4.4.75" = bar 4, beat 4, 75% through that beat), NOT a
+//   bar-count/fraction/unit value. loopEnd additionally allows "off".
 
 const DEFAULT_TEMPO = 120;
 const DEFAULT_TIME_SIGN = "4/4";
 const MIN_TOTAL_BARS = 16;
 
 // compositionNode: the Section's parent <Composition>, if the caller has
-// one handy (same convention as readEffectiveLoopLength's own
-// compositionNode param below) — tempo/timeSign inherit Composition ->
-// Section, per Hans: an unset Section attribute defers to the Composition's
-// own value before falling back to the hardcoded default.
+// one handy (same convention as readEffectiveLoopEnd's own compositionNode
+// param below) — tempo/timeSign inherit Composition -> Section, per Hans:
+// an unset Section attribute defers to the Composition's own value before
+// falling back to the hardcoded default.
 export function readSectionInfo(sectionNode, compositionNode = null) {
 	const attrs = sectionNode.attributes;
 	const tempoRaw = ownAttr(sectionNode, "tempo") ?? ownAttr(compositionNode, "tempo");
@@ -78,11 +80,12 @@ export function getStingers(sectionNode) {
 	return sectionNode.children.filter((c) => c.tagName === "Stinger");
 }
 
-// Converts a pos/length/loopLength attribute value to seconds, mirroring
+// Converts a length-notation attribute value to seconds, mirroring
 // waxml.js's divisionToTime()/getTimeSign() against this section's own
 // tempo/timeSign. Returns 0 for missing/empty values (matching divisionToTime's
-// own `if(!div) return 0`), Infinity for "off" (its "never" sentinel, used for
-// e.g. loopLength="off" to mean "don't loop").
+// own `if(!div) return 0`), Infinity for "off" (its "never" sentinel, used
+// e.g. for quantize="off" — parsePosition below parses loopEnd's own "off"
+// the same way).
 export function parseDivision(value, info) {
 	if (value === undefined || value === null || value === "") return 0;
 	if (typeof value === "number") return value;
@@ -119,7 +122,7 @@ function resolveDivisionFraction(str, timeSign) {
 	return { numerator: bars * timeSign.numerator, denominator: timeSign.denominator };
 }
 
-// `pos` on Segment/Option/Command is NOT a length/loopLength-style value —
+// `pos` on Segment/Option/Command is NOT a length-style value —
 // waxml.js parses it with its own separate musicalPositionToTime()/
 // posStringToObject() (Music.js, confirmed via Part construction at
 // `curPos = this.musicalPositionToTime(o.pos)`), a 1-indexed
@@ -214,40 +217,32 @@ export function readLength(node, info) {
 	return Number.isFinite(seconds) ? seconds : null;
 }
 
-// Layer looping (spec: <Layer loopLength="...">) — null means "doesn't loop"
-// (attribute absent, "off", zero, or unparseable). This only reads the
-// Layer's OWN attribute; see readEffectiveLoopLength below for the real,
-// inheritance-aware value the schema actually intends.
-export function readLoopLength(layerNode, info) {
-	const raw = layerNode.attributes.loopLength;
-	if (raw === undefined) return null;
-	const seconds = parseDivision(raw, info);
-	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
-}
-
-// undefined = this element doesn't specify loopLength at all (keep looking
-// up the chain); null = it specifies "off" (or something unparseable) —
+// undefined = this element doesn't specify loopEnd at all (keep looking up
+// the chain); null = it specifies "off" (or something unparseable) —
 // looping stops here, full stop, regardless of what any ancestor says.
-function ownLoopLengthSeconds(node, info) {
-	if (!node || node.attributes.loopLength === undefined) return undefined;
-	const seconds = parseDivision(node.attributes.loopLength, info);
+// loopEnd is a musical *position* (bar.beat.offbeat, e.g. "5.1.00" — see
+// parsePosition), not a length, per Hans (2026-09-02) — it replaced the
+// former loopLength attribute (a bar-count/fraction length).
+function ownLoopEndSeconds(node, info) {
+	if (!node || node.attributes.loopEnd === undefined) return undefined;
+	const seconds = parsePosition(node.attributes.loopEnd, info);
 	return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
-// loopLength inherits Composition -> Section -> Layer: "om t.ex.
-// <Composition> har loopLength='4' får alla <Layer> utan eget
-// loopLength-värde loopen inställd till fyra takter" — each level's own
-// explicit value (including "off") wins outright over any ancestor's;
-// only an actually-*missing* attribute falls through to the next one up.
-// null = no loop is in effect anywhere in the chain — same outcome whether
-// nothing in the chain set loopLength at all, or something explicitly set
-// it to "off" (the schema's own default, per Hans/attribute-inheritance.js).
-export function readEffectiveLoopLength(layerNode, sectionNode, compositionNode, info) {
-	const ownValue = ownLoopLengthSeconds(layerNode, info);
+// loopEnd inherits Composition -> Section -> Layer: "om t.ex. <Composition>
+// har loopEnd='4.1.00' får alla <Layer> utan eget loopEnd-värde loopen
+// inställd till bar 4" — each level's own explicit value (including "off")
+// wins outright over any ancestor's; only an actually-*missing* attribute
+// falls through to the next one up. null = no loop is in effect anywhere in
+// the chain — same outcome whether nothing in the chain set loopEnd at all,
+// or something explicitly set it to "off" (the schema's own default, per
+// Hans/attribute-inheritance.js).
+export function readEffectiveLoopEnd(layerNode, sectionNode, compositionNode, info) {
+	const ownValue = ownLoopEndSeconds(layerNode, info);
 	if (ownValue !== undefined) return ownValue;
-	const sectionValue = ownLoopLengthSeconds(sectionNode, info);
+	const sectionValue = ownLoopEndSeconds(sectionNode, info);
 	if (sectionValue !== undefined) return sectionValue;
-	const compositionValue = ownLoopLengthSeconds(compositionNode, info);
+	const compositionValue = ownLoopEndSeconds(compositionNode, info);
 	if (compositionValue !== undefined) return compositionValue;
 	return null;
 }
@@ -261,8 +256,8 @@ export function minimumTotalDuration(info) {
 
 // A <Stinger> isn't placed on the Section's own timeline — it can trigger at
 // any moment during live playback — but its `quantize` attribute (same
-// grammar as length/loopLength: "bar", "beat", a bar count, or a fraction)
-// says how far a trigger has to wait for the next musically-sound moment to
+// grammar as length: "bar", "beat", a bar count, or a fraction) says how
+// far a trigger has to wait for the next musically-sound moment to
 // actually start. For a static preview (per Hans), that's shown as "if
 // triggered right at bar 1, where does it land": one quantize-unit's
 // duration after bar 1, minus one whole bar (Hans, having seen it rendered —

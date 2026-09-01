@@ -196,7 +196,7 @@ copyNode(nodeId) {
 		if (node.tagName === "OscillatorNode" && nextAttributes.type !== node.attributes.type) return true;
 		// Temporary, per Hans (2026-09-01): the <Composition>/iMus side of
 		// waxml.js doesn't have the Web Audio side's live-property-nudge
-		// wiring yet (e.g. changing loopLength live currently does nothing
+		// wiring yet (e.g. changing loopEnd live currently does nothing
 		// audible) — so ANY attribute change on a <Composition> itself, or on
 		// anything inside one, needs the whole graph rebuilt rather than a
 		// live nudge that would silently no-op. Remove this blanket rule once

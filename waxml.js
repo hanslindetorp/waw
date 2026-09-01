@@ -17378,7 +17378,7 @@ class Music extends EventTarget {
 				this.parameters = this.initParameters(o, myInstance.parameters);
 	
 				o.loopEnd = o.loopEnd || o.end || defaultParams.loopEnd;
-				this.parameters.loopEnd = this.getPosition(o.loopEnd).time;
+				this.parameters.loopEnd = this.musicalPositionToTime(o.loopEnd).time;
 				this.parameters.length = this.divisionToTime(o.length);
 				this.parameters.changeOnNextQ = this.divisionToTime(this.parameters.changeOnNext || myInstance.parameters.changeOnNext);
 	
@@ -18204,39 +18204,27 @@ class Music extends EventTarget {
 				// parameters. If loopLength is used, the value is recalculated to a position and stored as loopEnd
 				// If both are set, then loopLength take precidence over loopEnd
 	
-				var loopEnd;
+				let loopEnd;
 				if(params.loopLength){
 					loopEnd = this.divisionToTime(String(params.loopLength));
 				}
-	
-				this.parameters.loopEnd = loopEnd || params.loopEnd || section.parameters.loopEnd || myInstance.parameters.loopEnd || defaultParams.loopEnd;
-	
-				switch(typeof params.loopEnd){
-	
-					case "string":
-					// get track length (for looping) from specified value
-					// one year is currently enough to pretend it's off
-					this.parameters.loopEnd = this.musicalPositionToTime(o.loopEnd);
-					break;
-	
-					case "number":
-					break;
-	
-					default:
-	
-					// use position and length of last part to define track length
-					if(this.parts.length){
-						var lastPart = this.parts[this.parts.length-1];
-						lastPart.length = lastPart.length || barDuration;
-						this.parameters.loopEnd = lastPart.pos + lastPart.length;
-					} else {
-						// to avoid errors
-						this.parameters.loopEnd = barDuration;
-					}
-					break;
+
+				// XXX 
+				// this is a confusing section caused by the intention to provide both loopLength and loopEnd as valid input
+				// parameters. If loopLength is used, the value is recalculated to a position and stored as loopEnd
+				// If both are set, then loopLength take precidence over loopEnd
+
+				// The inheritance of loopEnd is also confusing. It can be set in the track parameters, in the section parameters, 
+				// in the instance parameters or as a default parameter. The order of precedence is: track parameters > section parameters > 
+				// instance parameters > default parameters.
+
+				// Rebuild to use the WAXML inheritance system. 
+				
+				let loopEndInheritanceList = [defaultParams.loopEnd, section.parameters.loopEnd, params.loopEnd];
+				while(loopEnd == undefined){
+					loopEnd = this.musicalPositionToTime(loopEndInheritanceList.pop());
 				}
-	
-	
+				this.parameters.loopEnd = loopEnd;
 				this.eventHandler = new EventHandler();
 	
 	
@@ -19347,7 +19335,7 @@ class Music extends EventTarget {
 				this.envelopes = envelopes;
 			}
 
-			Motif.prototype.remove = () => {
+			Motif.prototype.remove = function() {
 				this.sounds.forEach(sound => {
 
 				});
@@ -20352,8 +20340,7 @@ class Music extends EventTarget {
 		defaultParams.offset = 0;
 		defaultParams.suffix = "mp3";
 		defaultParams.loopActive = 1;
-		// defaultParams.loopEnd = "5.1";
-		defaultParams.loopLength = "off";
+		defaultParams.loopEnd = "off";
 		defaultParams.activeRange = {};
 		defaultParams.activeRange.min = 0;
 		defaultParams.activeRange.max = 1;

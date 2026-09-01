@@ -11,7 +11,7 @@ import {
 	getStingers,
 	readPos,
 	readLength,
-	readEffectiveLoopLength,
+	readEffectiveLoopEnd,
 	readStingerQuantizePosition,
 	readStingerOffset,
 	readUpbeatSeconds,
@@ -825,9 +825,8 @@ export class WaSectionView extends HTMLElement {
 	}
 
 	// A Section's parent is always its <Composition> per the schema — used
-	// wherever readSectionInfo/readEffectiveLoopLength need it for
-	// Composition -> Section/Layer attribute inheritance (see
-	// section-model.js).
+	// wherever readSectionInfo/readEffectiveLoopEnd need it for Composition
+	// -> Section/Layer attribute inheritance (see section-model.js).
 	_getCompositionAncestor(sectionNode) {
 		return sectionNode?.parent ? ops.findNodeById(xmlStore.root, sectionNode.parent) : null;
 	}
@@ -1102,8 +1101,8 @@ export class WaSectionView extends HTMLElement {
 		this._stingerDivider.hidden = false;
 		this._stingerScroll.hidden = false;
 
-		// loopLength inherits Composition -> Section -> Layer (see
-		// readEffectiveLoopLength), and tempo/timeSign inherit Composition ->
+		// loopEnd inherits Composition -> Section -> Layer (see
+		// readEffectiveLoopEnd), and tempo/timeSign inherit Composition ->
 		// Section (see readSectionInfo) — need the Composition ancestor on
 		// hand for both.
 		const compositionNode = this._getCompositionAncestor(node);
@@ -1763,9 +1762,9 @@ export class WaSectionView extends HTMLElement {
 			// everything else already establishes (see _buildLayerLane) — it
 			// must not drive the timeline outward itself, or a short loop on
 			// a long-lived section would grow forever as more copies get
-			// laid out. loopLength is inheritance-aware (Composition ->
+			// laid out. loopEnd is inheritance-aware (Composition ->
 			// Section -> Layer), same as everywhere else it's used.
-			if (readEffectiveLoopLength(layer, sectionNode, compositionNode, info) !== null) return;
+			if (readEffectiveLoopEnd(layer, sectionNode, compositionNode, info) !== null) return;
 
 			getSegments(layer).forEach((segment) => {
 				const segmentPos = readPos(segment, info);
@@ -1948,16 +1947,16 @@ export class WaSectionView extends HTMLElement {
 	// Non-looping layers render their content once, at offset 0, and are
 	// allowed to grow the overall timeline (a bare src's decoded duration is
 	// the only source of length info we have for it up front). A layer with
-	// a loopLength instead tiles its WHOLE content (bare src, or its
-	// segment/option children) every loopLength seconds, only as many times
+	// a loopEnd instead tiles its WHOLE content (bare src, or its
+	// segment/option children) every loopEnd seconds, only as many times
 	// as needed to fill the timeline duration already established by
 	// everything else — never open-ended. Later copies are appended later in
-	// DOM order, so an audio tail past loopLength or a segment with a
+	// DOM order, so an audio tail past loopEnd or a segment with a
 	// negative pos (an upbeat) naturally paints over the previous loop's
 	// tail via normal stacking order, with no extra z-index bookkeeping.
 	// Only the repeat tiles (i>=1) are dimmed (.loop-repeat) to mark them as
 	// looped echoes — the i=0 original isn't, even where part of its own
-	// content already extends past loopLength: that content isn't itself a
+	// content already extends past loopEnd: that content isn't itself a
 	// loop repeat, it's just unreachable during looped playback, which is a
 	// different thing worth seeing plainly rather than implying it repeats.
 	_buildLayerLane(layer, sectionNode, compositionNode, info, totalWidth, totalDuration, token, rowsNeeded) {
@@ -1968,7 +1967,7 @@ export class WaSectionView extends HTMLElement {
 
 		const segments = getSegments(layer);
 		const directOptions = getOptions(layer);
-		const loopLength = readEffectiveLoopLength(layer, sectionNode, compositionNode, info);
+		const loopEnd = readEffectiveLoopEnd(layer, sectionNode, compositionNode, info);
 		const laneHeight = this._rowHeight * rowsNeeded;
 
 		const renderContentAt = (offsetSeconds, allowGrow, isRepeat) => {
@@ -1987,15 +1986,15 @@ export class WaSectionView extends HTMLElement {
 			);
 		};
 
-		if (loopLength === null) {
+		if (loopEnd === null) {
 			renderContentAt(0, true, false);
 		} else {
-			const repeatCount = Math.max(1, Math.ceil(totalDuration / loopLength));
+			const repeatCount = Math.max(1, Math.ceil(totalDuration / loopEnd));
 			for (let i = 0; i < repeatCount; i++) {
-				renderContentAt(i * loopLength, false, i > 0);
+				renderContentAt(i * loopEnd, false, i > 0);
 			}
 
-			lane.appendChild(this._buildLoopMarker(layer, loopLength, info, laneHeight, lane));
+			lane.appendChild(this._buildLoopMarker(layer, loopEnd, info, laneHeight, lane));
 		}
 
 		const ghost = document.createElement("div");
@@ -2015,16 +2014,18 @@ export class WaSectionView extends HTMLElement {
 	// The repeat-sign marker at a looping Layer's loop boundary — draggable
 	// horizontally (pointer capture, not HTML5 DnD: this is a plain "drag
 	// along one axis to change one number" interaction, not a drop onto
-	// anything) to change that Layer's own loopLength, snapped to the same
-	// beat grid Segment dragging uses. Always writes an explicit loopLength
+	// anything) to change that Layer's own loopEnd, snapped to the same
+	// beat grid Segment dragging uses. Always writes an explicit loopEnd
 	// onto this Layer, even if the value being displayed/dragged was
 	// inherited from its Section/Composition — dragging is how you give one
-	// specific Layer its own override.
-	_buildLoopMarker(layer, loopLengthSeconds, info, laneHeight, lane) {
+	// specific Layer its own override. Written as a musical position
+	// (bar.beat.offbeat, via secondsToPosString) rather than a length, per
+	// Hans (2026-09-02) — matches loopEnd's own schema type.
+	_buildLoopMarker(layer, loopEndSeconds, info, laneHeight, lane) {
 		const marker = document.createElement("div");
 		marker.className = "loop-marker";
-		marker.title = "Drag to change this Layer's loop length";
-		marker.style.left = `${this._timeToPx(loopLengthSeconds, info)}px`;
+		marker.title = "Drag to change this Layer's loop end";
+		marker.style.left = `${this._timeToPx(loopEndSeconds, info)}px`;
 		marker.style.height = `${laneHeight}px`;
 		marker.appendChild(document.createElement("span")).className = "loop-marker-dot";
 		marker.appendChild(document.createElement("span")).className = "loop-marker-dot";
@@ -2035,7 +2036,7 @@ export class WaSectionView extends HTMLElement {
 			try {
 				marker.setPointerCapture(e.pointerId);
 			} catch {}
-			let pendingSeconds = loopLengthSeconds;
+			let pendingSeconds = loopEndSeconds;
 
 			const onMove = (moveEvt) => {
 				const laneRect = lane.getBoundingClientRect();
@@ -2048,10 +2049,11 @@ export class WaSectionView extends HTMLElement {
 			const onUp = () => {
 				marker.removeEventListener("pointermove", onMove);
 				marker.removeEventListener("pointerup", onUp);
-				if (pendingSeconds === loopLengthSeconds) return;
+				if (pendingSeconds === loopEndSeconds) return;
 				const layerNow = ops.findNodeById(xmlStore.root, layer.id);
 				if (layerNow) {
-					xmlStore.updateAttributes(layer.id, { ...layerNow.attributes, loopLength: secondsToLengthString(pendingSeconds) });
+					const gridBeats = this._effectiveGridBeats(info);
+					xmlStore.updateAttributes(layer.id, { ...layerNow.attributes, loopEnd: secondsToPosString(pendingSeconds, info, gridBeats) });
 				}
 			};
 			marker.addEventListener("pointermove", onMove);

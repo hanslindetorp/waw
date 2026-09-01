@@ -580,7 +580,7 @@ export class WaNodeInspector extends HTMLElement {
 		// Section/Composition, then a hardcoded default, when unset on the
 		// element itself (see attribute-inheritance.js) — show that resolved
 		// value grayed out rather than a blank field, so e.g. a Layer with no
-		// loopLength of its own still shows what it will actually use. It's
+		// loopEnd of its own still shows what it will actually use. It's
 		// still a real, editable field: typing in it commits an explicit
 		// override the normal way. Bypasses the type-specific controls below
 		// entirely (deliberately simple — this is a display+override
