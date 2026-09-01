@@ -154,6 +154,22 @@ template.innerHTML = `
 			color: var(--waw-muted, #8a8a8a);
 			white-space: nowrap;
 		}
+		/* Tempo/timeSign/id, each double-clickable in place (see
+		   _renderTransportInfo/_startInfoFieldEdit) — cursor alone marks
+		   them as interactive, no extra hover chrome (per Hans). */
+		.tp-info-field {
+			cursor: pointer;
+		}
+		.tp-info-input {
+			font: inherit;
+			font-family: inherit;
+			background: #24272c;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: var(--waw-fg, #e8e8e8);
+			border-radius: 3px;
+			padding: 0 0.25rem;
+			width: 4.5rem;
+		}
 		.zoom-controls {
 			margin-left: auto;
 			display: flex;
@@ -302,6 +318,21 @@ template.innerHTML = `
 		}
 		.layer-label.selected {
 			background: rgba(79, 163, 255, 0.18);
+		}
+		/* Same box as .layer-label, swapped in on double-click (see
+		   _startAttributeEdit) — an actual <input> instead of a <div>, same
+		   idea as wa-mixer-view.js's own channel-strip rename. */
+		.inline-rename-input {
+			box-sizing: border-box;
+			height: 100%;
+			width: 100%;
+			font: inherit;
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			background: #24272c;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: inherit;
+			border-radius: 3px;
+			padding: 0 0.4rem;
 		}
 		.layer-lane {
 			position: relative;
@@ -577,6 +608,23 @@ template.innerHTML = `
 			pointer-events: none;
 			white-space: nowrap;
 			z-index: 1;
+		}
+		/* Same spot as .box-label, swapped in on double-click (see
+		   _startAttributeEdit) — a real input, so (unlike .box-label) it needs
+		   its own pointer-events:auto rather than inheriting none. */
+		.box-label-input {
+			position: absolute;
+			top: 1px;
+			left: 4px;
+			width: calc(100% - 8px);
+			font-size: 0.62rem;
+			font-family: inherit;
+			background: #14181e;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: var(--waw-fg, #e8e8e8);
+			border-radius: 2px;
+			padding: 0 2px;
+			z-index: 2;
 		}
 		/* One small tag per <Command> child of a Layer/Segment/Option/Stinger —
 		   the only representation Command elements get in this view, per Hans
@@ -1219,7 +1267,7 @@ export class WaSectionView extends HTMLElement {
 		// hand for both.
 		const compositionNode = this._getCompositionAncestor(node);
 		const info = readSectionInfo(node, compositionNode);
-		this._infoEl.textContent = `${info.tempo} BPM · ${info.timeSign.label}${info.id ? " · " + info.id : ""}`;
+		this._renderTransportInfo(node, info);
 
 		const layers = getLayers(node);
 		// Never draws less than one viewport's worth (so zooming out doesn't
@@ -1304,20 +1352,7 @@ export class WaSectionView extends HTMLElement {
 		this._stingerGrid.appendChild(this._buildRuler(info, totalWidth, totalDuration));
 
 		stingers.forEach((stinger) => {
-			const label = document.createElement("div");
-			label.className = "layer-label";
-			label.dataset.nodeId = stinger.id;
-			label.style.height = `${this._rowHeight}px`;
-			label.textContent = this._displayLabel(stinger, "Stinger");
-			label.addEventListener("click", (e) => {
-				e.stopPropagation();
-				this._handleItemClick(stinger.id, e);
-			});
-			label.addEventListener("dblclick", (e) => {
-				e.stopPropagation();
-				this._handleStingerDoubleClick(stinger, info);
-			});
-			this._stingerGrid.appendChild(label);
+			this._stingerGrid.appendChild(this._buildStingerLabel(stinger));
 			this._stingerGrid.appendChild(this._buildStingerLane(stinger, info, totalWidth, token));
 		});
 
@@ -2073,7 +2108,111 @@ export class WaSectionView extends HTMLElement {
 			e.stopPropagation();
 			this._handleItemClick(layer.id, e);
 		});
+		label.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			this._startAttributeEdit(label, layer, "label", () => this._buildLayerLabel(layer, rowsNeeded), "inline-rename-input", layer.attributes.id || layer.tagName);
+		});
 		return label;
+	}
+
+	// A Stinger's own row-label — double-click renames it (see
+	// _startAttributeEdit), same as a Layer's label. Triggering the Stinger
+	// for live preview (formerly also on this same dblclick) is still
+	// reachable via double-clicking its content/box in the lane instead
+	// (_buildStingerLane), so nothing is lost by repurposing this one.
+	_buildStingerLabel(stinger) {
+		const label = document.createElement("div");
+		label.className = "layer-label";
+		label.dataset.nodeId = stinger.id;
+		label.style.height = `${this._rowHeight}px`;
+		label.textContent = this._displayLabel(stinger, "Stinger");
+		label.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._handleItemClick(stinger.id, e);
+		});
+		label.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			this._startAttributeEdit(label, stinger, "label", () => this._buildStingerLabel(stinger), "inline-rename-input", stinger.attributes.id || stinger.tagName);
+		});
+		return label;
+	}
+
+	// Swaps `displayEl` for an inline text input editing `node`'s own
+	// `attrName` attribute — Enter/blur commits (writing the actual typed
+	// value, even for an attribute that was showing an *inherited* value,
+	// like a Section's tempo/timeSign — same "typing gives this element its
+	// own explicit override" convention _renderInheritedControl already
+	// uses in wa-node-inspector.js), Escape reverts. `rebuild()` recreates
+	// the original display element either way. Used for a Layer/Stinger's
+	// row-label, a Segment's box (all three write `label` — same attribute,
+	// and same interaction, as wa-mixer-view.js's channel-strip rename;
+	// _displayLabel already prefers `label` over id/src everywhere a name is
+	// shown in this view), and the transport bar's tempo/timeSign/id fields.
+	_startAttributeEdit(displayEl, node, attrName, rebuild, inputClassName, placeholder) {
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = inputClassName;
+		input.value = node.attributes[attrName] || "";
+		if (placeholder) input.placeholder = placeholder;
+		displayEl.replaceWith(input);
+		input.focus();
+		input.select();
+
+		let done = false;
+		const commit = () => {
+			if (done) return;
+			done = true;
+			const value = input.value.trim();
+			if (value !== (node.attributes[attrName] || "")) {
+				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+				if (nodeNow) {
+					const attrs = { ...nodeNow.attributes };
+					if (value) attrs[attrName] = value;
+					else delete attrs[attrName];
+					xmlStore.updateAttributes(nodeNow.id, attrs);
+					return; // the resulting re-render replaces this input for us
+				}
+			}
+			input.replaceWith(rebuild());
+		};
+		input.addEventListener("keydown", (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commit();
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				done = true;
+				input.replaceWith(rebuild());
+			}
+		});
+		input.addEventListener("blur", commit);
+		input.addEventListener("click", (e) => e.stopPropagation());
+	}
+
+	// tempo/timeSign inherit Composition -> Section (see readSectionInfo);
+	// id is never inherited, just possibly absent. All three are shown here
+	// and double-click-editable via _startAttributeEdit, per Hans
+	// (2026-09-03).
+	_renderTransportInfo(sectionNode, info) {
+		this._infoEl.innerHTML = "";
+		this._infoEl.appendChild(this._buildInfoField(sectionNode, "tempo", String(info.tempo), "Double-click to change tempo"));
+		this._infoEl.appendChild(document.createTextNode(" BPM · "));
+		this._infoEl.appendChild(this._buildInfoField(sectionNode, "timeSign", info.timeSign.label, "Double-click to change time signature"));
+		this._infoEl.appendChild(document.createTextNode(" · "));
+		this._infoEl.appendChild(this._buildInfoField(sectionNode, "id", info.id, "Double-click to change this Section's id"));
+	}
+
+	_buildInfoField(sectionNode, attrName, displayValue, title) {
+		const span = document.createElement("span");
+		span.className = "tp-info-field";
+		span.textContent = displayValue || "—";
+		span.title = title;
+		span.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			this._startAttributeEdit(span, sectionNode, attrName, () => this._buildInfoField(sectionNode, attrName, displayValue, title), "tp-info-input");
+		});
+		return span;
 	}
 
 	// Small clickable tags for a node's own <Command> children — the only
@@ -2518,6 +2657,22 @@ export class WaSectionView extends HTMLElement {
 		// own length when closed).
 		if (kind === "Segment") {
 			box.appendChild(this._buildSegmentResizeHandle(node, info, box));
+			// Double-click renames the Segment (see _startAttributeEdit) — on
+			// the box itself, not just .box-label, since that span is
+			// pointer-events:none (see its CSS). stopPropagation keeps this
+			// from also bubbling to the lane's own dblclick, which sets this
+			// Layer's loopEnd (see _buildLayerLane) — per Hans (2026-09-03).
+			box.addEventListener("dblclick", (e) => {
+				e.stopPropagation();
+				const labelEl = box.querySelector(".box-label");
+				if (!labelEl) return;
+				this._startAttributeEdit(labelEl, node, "label", () => {
+					const rebuilt = document.createElement("span");
+					rebuilt.className = "box-label";
+					rebuilt.textContent = this._displayLabel(node, kind);
+					return rebuilt;
+				}, "box-label-input", node.attributes.id || node.tagName);
+			});
 		}
 
 		this._wireBoxDropTarget(box, node, kind, info);
