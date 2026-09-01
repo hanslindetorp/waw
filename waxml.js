@@ -17378,7 +17378,7 @@ class Music extends EventTarget {
 				this.parameters = this.initParameters(o, myInstance.parameters);
 	
 				o.loopEnd = o.loopEnd || o.end || defaultParams.loopEnd;
-				this.parameters.loopEnd = this.musicalPositionToTime(o.loopEnd).time;
+				this.parameters.loopEnd = this.musicalPositionToTime(o.loopEnd);
 				this.parameters.length = this.divisionToTime(o.length);
 				this.parameters.changeOnNextQ = this.divisionToTime(this.parameters.changeOnNext || myInstance.parameters.changeOnNext);
 	
