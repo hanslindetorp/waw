@@ -384,15 +384,22 @@ template.innerHTML = `
 		.loop-repeat {
 			opacity: 0.4;
 		}
-		/* A musical repeat sign (𝄇: thin bar, thick bar, two dots) rather than
-		   an arbitrary single line — per Hans (2026-09-02) — and white, not
-		   the accent blue, so it reads as a distinct kind of marker from the
-		   Stinger anchor/selection/etc. colors used everywhere else here. */
+		/* A musical repeat sign (𝄇: dots, thin bar, thick bar, left to right)
+		   rather than an arbitrary single line — per Hans (2026-09-02/03) —
+		   white, not the accent blue, so it reads as a distinct kind of
+		   marker from the Stinger anchor/selection/etc. colors used
+		   everywhere else here. The box's own right edge is the thick bar's
+		   right edge (width 15px, margin-left the same amount) — that's the
+		   edge that has to land exactly on loopEnd's own px (see
+		   marker.style.left in _buildLoopMarker), not the box's center: a
+		   repeat sign's bars mark *where* the loop wraps, so the thick bar
+		   (the actual boundary) has to be the one snapped there, with the
+		   thin bar and dots trailing off to its left. */
 		.loop-marker {
 			position: absolute;
 			top: 0;
-			width: 14px;
-			margin-left: -7px;
+			width: 15px;
+			margin-left: -15px;
 			z-index: 5;
 			cursor: ew-resize;
 			touch-action: none;
@@ -404,26 +411,33 @@ template.innerHTML = `
 			background: #fff;
 		}
 		.loop-marker-bar.thin {
-			left: 7px;
-			width: 1.5px;
+			left: 8px;
+			width: 1px;
 		}
 		.loop-marker-bar.thick {
-			left: 10px;
+			left: 12px;
 			width: 3px;
 		}
+		/* Sized clearly bigger than the thick bar (diameter 5px vs. 3px) —
+		   per Hans, dots that are barely bigger than the bars read as
+		   another bar rather than a repeat sign's dots. .dot-top/.dot-bottom
+		   (not :first-child/:last-child, which would've matched one of the
+		   bars above instead of the second dot — the actual bug behind
+		   "dots haven't changed") position the pair centered as a whole on
+		   the marker's own vertical center. */
 		.loop-marker-dot {
 			position: absolute;
-			left: 2px;
-			width: 3px;
-			height: 3px;
+			left: 0;
+			width: 5px;
+			height: 5px;
 			border-radius: 50%;
 			background: #fff;
 		}
-		.loop-marker-dot:first-child {
-			top: calc(50% - 6px);
+		.loop-marker-dot.dot-top {
+			top: calc(50% - 8.75px);
 		}
-		.loop-marker-dot:last-child {
-			top: calc(50% + 3px);
+		.loop-marker-dot.dot-bottom {
+			top: calc(50% + 3.75px);
 		}
 		.stinger-anchor {
 			position: absolute;
@@ -2185,8 +2199,8 @@ export class WaSectionView extends HTMLElement {
 		marker.title = "Drag to change this Layer's loop end";
 		marker.style.left = `${this._timeToPx(loopEndSeconds, info)}px`;
 		marker.style.height = `${laneHeight}px`;
-		marker.appendChild(document.createElement("span")).className = "loop-marker-dot";
-		marker.appendChild(document.createElement("span")).className = "loop-marker-dot";
+		marker.appendChild(document.createElement("span")).className = "loop-marker-dot dot-top";
+		marker.appendChild(document.createElement("span")).className = "loop-marker-dot dot-bottom";
 		marker.appendChild(document.createElement("span")).className = "loop-marker-bar thin";
 		marker.appendChild(document.createElement("span")).className = "loop-marker-bar thick";
 
