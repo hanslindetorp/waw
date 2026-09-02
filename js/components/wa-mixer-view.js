@@ -1,7 +1,8 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
-import { applyLiveProperty, applyLiveMethodCall } from "../waxml-integration/live-property.js";
+import { applyLiveProperty, applyLiveMethodCall, getLiveProperty } from "../waxml-integration/live-property.js";
+import { isVariableControlled, variableNameFromValue } from "../xml-editor/variable-references.js";
 import { openWamPicker } from "./wa-wam-picker.js";
 import { openWamStack } from "./wa-wam-stack.js";
 import { getInsertEffects } from "../wam/wam-catalog.js";
@@ -498,6 +499,18 @@ template.innerHTML = `
 		}
 		.knob:hover {
 			filter: brightness(1.2);
+		}
+		/* A knob/fader-handle whose governing attribute is a "$name" <Var>
+		   reference — waxml.js's own Watcher already drives it live, so
+		   dragging here would just fight that. Dashed ring instead of the
+		   normal hover glow, per Hans: "styras av <Var>s aktuella värde". */
+		.knob.remote-controlled,
+		.fader-handle.remote-controlled {
+			cursor: default;
+			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
+		}
+		.knob.remote-controlled:hover {
+			filter: none;
 		}
 		.knob-dial {
 			position: absolute;
@@ -1118,6 +1131,7 @@ export class WaMixerView extends HTMLElement {
 		this._lastRenderedMixerId = null;
 		this._meterState = new Map(); // chainId (internal tree id) -> {analyser, dataArray, vuFillEl, smoothedT}
 		this._meterRafId = null;
+		this._remoteControls = []; // per-frame tick()s for <Var>-controlled knobs — see _lockRemoteControlled
 		this._onStoreChange = this._onStoreChange.bind(this);
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 		this._onKeyDown = this._onKeyDown.bind(this);
@@ -1343,6 +1357,7 @@ export class WaMixerView extends HTMLElement {
 				entry.vuFillEl.style.height = `${entry.smoothedT * 100}%`;
 			});
 			this._updateSoloButtonGains();
+			this._remoteControls.forEach((tick) => tick());
 			this._meterRafId = requestAnimationFrame(step);
 		};
 		this._meterRafId = requestAnimationFrame(step);
@@ -1681,6 +1696,13 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	_render(mixerNode) {
+		// Rebuilt fresh by every remote-controlled (see _lockRemoteControlled)
+		// knob/fader built below — ticked once per frame from the meter RAF
+		// loop (_startMeterLoop) to mirror each one's live value back onto its
+		// visual, since a rebuild here always makes stale entries pointing at
+		// detached elements otherwise.
+		this._remoteControls = [];
+
 		// Filter/Insert/Send section heights are each shared across every
 		// channel — set by whichever channel has the most of that section's
 		// own row type — so all channels' rows line up regardless of how
@@ -2372,6 +2394,13 @@ export class WaMixerView extends HTMLElement {
 		applyVisual(startDb);
 		knob.title = "Gain";
 
+		const locked = this._lockRemoteControlled(knob, node.attributes.gain, () => {
+			const db = getLiveProperty(node.attributes.id, "gain"); // BiquadFilterNode.gain is native dB
+			if (typeof db !== "number" || !Number.isFinite(db)) return;
+			applyVisual(db);
+		});
+		if (locked) return wrap;
+
 		this._wireVerticalDrag(
 			knob,
 			startDb,
@@ -2408,6 +2437,14 @@ export class WaMixerView extends HTMLElement {
 		const startT = freqToKnobT(readFrequency(node));
 		applyVisual(startT);
 		knob.title = "Frequency";
+
+		const locked = this._lockRemoteControlled(knob, node.attributes.frequency, () => {
+			const freq = getLiveProperty(node.attributes.id, "frequency");
+			if (typeof freq !== "number" || !Number.isFinite(freq)) return;
+			applyVisual(freqToKnobT(freq));
+		});
+		if (locked) return wrap;
+
 		// Same per-type frequency FILTER_TYPE_DEFAULT_FREQUENCY uses for a
 		// freshly-created filter (defaultFilterAttributes) — double-clicking
 		// resets to that same "sensible starting point", not just any fixed
@@ -2442,6 +2479,13 @@ export class WaMixerView extends HTMLElement {
 		applyVisual(readQ(node));
 		knob.title = "Q";
 
+		const locked = this._lockRemoteControlled(knob, node.attributes.Q, () => {
+			const q = getLiveProperty(node.attributes.id, "Q");
+			if (typeof q !== "number" || !Number.isFinite(q)) return;
+			applyVisual(q);
+		});
+		if (locked) return wrap;
+
 		this._wireVerticalDrag(
 			knob,
 			readQ(node),
@@ -2471,6 +2515,13 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (pan) => this._applyKnobRotation(dial, pan, -1, 1);
 		applyVisual(readPan(node));
 		knob.title = "Pan";
+
+		const locked = this._lockRemoteControlled(knob, node.attributes.pan, () => {
+			const pan = getLiveProperty(node.attributes.id, "pan");
+			if (typeof pan !== "number" || !Number.isFinite(pan)) return;
+			applyVisual(pan);
+		});
+		if (locked) return wrap;
 
 		this._wireVerticalDrag(
 			knob,
@@ -2561,6 +2612,33 @@ export class WaMixerView extends HTMLElement {
 		} finally {
 			this._isLocalEdit = false;
 		}
+	}
+
+	// Locks a knob/fader-handle against direct dragging when the attribute
+	// it's built from is currently a <Var> reference ("$name" — see
+	// variable-references.js): waxml.js resolves that reference itself via
+	// a Watcher that pushes live updates straight into the node's own
+	// property whenever the named Variable changes, so a plain drag here
+	// would just fight it — per Hans, it should instead be "fjärrstyrd" and
+	// only ever reflect whatever value the Var is currently driving.
+	//
+	// The XML attribute stays the literal "$name" string forever once set
+	// (waxml.js never rewrites it), so `tick` — called once per animation
+	// frame from _startMeterLoop, same cadence as the VU meters — is the
+	// only way this control's visual ever shows the real current value; it
+	// gets `getLiveProperty`'s result (undefined whenever nothing live can
+	// answer yet) and must apply it (or silently skip) itself, since the
+	// unit conversion differs per control (dB vs. linear vs. Hz vs. Q).
+	//
+	// Returns true (and adds the "remote-controlled" class) when locked, so
+	// callers know to skip their own drag wiring entirely; false otherwise.
+	_lockRemoteControlled(el, rawAttrValue, tick) {
+		if (!isVariableControlled(rawAttrValue)) return false;
+		el.classList.add("remote-controlled");
+		const varName = variableNameFromValue(rawAttrValue);
+		el.title = varName ? `Controlled by $${varName}` : "Controlled by a <Var>";
+		this._remoteControls.push(tick);
+		return true;
 	}
 
 	// Shared vertical-drag-to-adjust-a-value interaction for knobs (rotary,
@@ -2670,6 +2748,14 @@ export class WaMixerView extends HTMLElement {
 		const startDb = parseGainAttributeToDb(gainNode.tagName, gainNode.attributes.gain);
 		applyVisual(startDb);
 		handle.title = "Volume";
+
+		const locked = this._lockRemoteControlled(handle, gainNode.attributes.gain, () => {
+			const linear = getLiveProperty(gainNode.attributes.id, "gain"); // GainNode.gain is linear
+			if (typeof linear !== "number" || !Number.isFinite(linear)) return;
+			const db = linear > 0 ? 20 * Math.log10(linear) : FADER_MIN_DB;
+			applyVisual(db);
+		});
+		if (locked) return wrap;
 
 		const resetToDefault = () => {
 			applyVisual(0);
@@ -2807,23 +2893,32 @@ export class WaMixerView extends HTMLElement {
 		const startDb = parseGainAttributeToDb(send.tagName, send.attributes.gain);
 		applyVisual(startDb);
 		knob.title = "Send Level";
-		this._wireVerticalDrag(
-			knob,
-			startDb,
-			EQ_MIN_DB,
-			EQ_MAX_DB,
-			(db) => {
-				applyVisual(db);
-				knob.title = `${db.toFixed(1)} dB`;
-				applyLiveGainDb(send.attributes.id, db, true); // Send routes through a GainNode-based bus, linear like GainNode
-				const nodeNow = ops.findNodeById(xmlStore.root, send.id);
-				if (nodeNow) this._commitAttributes(send.id, { ...nodeNow.attributes, gain: formatGainAttribute(send.tagName, db) });
-			},
-			() => {
-				knob.title = "Send Level";
-			},
-			0
-		);
+
+		const locked = this._lockRemoteControlled(knob, send.attributes.gain, () => {
+			const linear = getLiveProperty(send.attributes.id, "gain"); // Send routes through a GainNode-based bus, linear like GainNode
+			if (typeof linear !== "number" || !Number.isFinite(linear)) return;
+			const db = linear > 0 ? 20 * Math.log10(linear) : EQ_MIN_DB;
+			applyVisual(db);
+		});
+		if (!locked) {
+			this._wireVerticalDrag(
+				knob,
+				startDb,
+				EQ_MIN_DB,
+				EQ_MAX_DB,
+				(db) => {
+					applyVisual(db);
+					knob.title = `${db.toFixed(1)} dB`;
+					applyLiveGainDb(send.attributes.id, db, true); // Send routes through a GainNode-based bus, linear like GainNode
+					const nodeNow = ops.findNodeById(xmlStore.root, send.id);
+					if (nodeNow) this._commitAttributes(send.id, { ...nodeNow.attributes, gain: formatGainAttribute(send.tagName, db) });
+				},
+				() => {
+					knob.title = "Send Level";
+				},
+				0
+			);
+		}
 		row.appendChild(knobWrap);
 
 		const busRow = document.createElement("div");

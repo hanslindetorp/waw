@@ -205,6 +205,21 @@ class PlayerStore extends EventTarget {
 		this._emit();
 	}
 
+	// Pushes a live value into a <Var> by name (see wa-var-knobs.js) —
+	// independent of isPlaying/triggerSelector, same as trigShortcut, but
+	// doesn't reload the document first: a <Var>'s own Variable object exists
+	// as soon as the graph is loaded at all, and turning a Var knob before
+	// the graph has ever loaded wouldn't mean anything yet anyway (nothing
+	// would be listening).
+	setVariable(name, value) {
+		if (!this._documentLoaded || !name) return;
+		try {
+			bridge.setVariable(name, value);
+		} catch {
+			// waxml not loaded — nothing we can do until it is.
+		}
+	}
+
 	get audioContext() {
 		return bridge.audioContext;
 	}

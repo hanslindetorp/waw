@@ -93,6 +93,15 @@ export class WaxmlBridge {
 		this.waxml.stop("all");
 	}
 
+	// Pushes a live value into a <Var> (see wa-var-knobs.js) — every "$name"
+	// attribute elsewhere in the document that references it picks the new
+	// value up on its own via waxml.js's own Watcher mechanism, no document
+	// reload needed, same "talk straight to whatever's already loaded live"
+	// idea as trig()/stopAll().
+	setVariable(name, value) {
+		this.waxml.setVariable(name, value);
+	}
+
 	// Triggers one specific node (by its auto-assigned `id` attribute)
 	// within the document already loaded for preview — used to trigger an
 	// individual <Stinger> live during Section Preview playback, distinct

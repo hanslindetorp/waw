@@ -30,6 +30,32 @@ export function applyLiveProperty(nodeId, propName, value) {
 	}
 }
 
+// Reads a value straight off a node's *live* waxml object — the read
+// counterpart to applyLiveProperty above, used for attributes that are
+// currently remote-controlled by a <Var> (a "$name"-style value — see
+// variable-references.js): once waxml.js resolves that reference, the XML
+// attribute itself stays the literal "$name" string forever, so the only
+// place the actual current value ever shows up is the live object's own
+// property. Returns undefined whenever nothing live can answer (no graph
+// loaded, node not found, or the property genuinely isn't there) — callers
+// should treat that as "nothing to show yet", not an error.
+export function getLiveProperty(nodeId, propName) {
+	if (!playerStore.isDocumentLoaded || !nodeId) return undefined;
+	let liveObj;
+	try {
+		const matches = playerStore.getLiveObjects(`[id='${nodeId}']`);
+		liveObj = matches && matches[0];
+	} catch {
+		return undefined;
+	}
+	if (!liveObj) return undefined;
+	try {
+		return liveObj[propName];
+	} catch {
+		return undefined;
+	}
+}
+
 // Same idea as applyLiveProperty, but for nudging the live graph via a
 // *method* rather than a property assignment (e.g. Mixer's own
 // clearSolo()) — same lookup, same no-op-when-no-graph-loaded/not-found

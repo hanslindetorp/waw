@@ -1567,7 +1567,7 @@ class AudioObject extends EventTarget{
       // Jag vågar nog ändå inte...
       // return this._node.gain;
       if(this._node){
-        this._node.gain.value;
+        return this._node.gain.value;
       } else {
         return 0;
       }

@@ -1,5 +1,6 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
+import "./wa-var-knobs.js";
 
 // Global transport, in the app header (to the right of the File menu) — per
 // Hans, playback is app-wide and independent of whichever Preview panel/view
@@ -94,6 +95,7 @@ template.innerHTML = `
 	<button class="tp-btn tp-play" data-action="play" title="Play">▶</button>
 	<button class="tp-btn" data-action="stop" title="Stop">■</button>
 	<input type="text" class="selector-input" placeholder="CSS selector to trig" title="What PLAY triggers — auto-fills when a Section is selected, or type your own" />
+	<wa-var-knobs></wa-var-knobs>
 	<div class="shortcuts"></div>
 `;
 
