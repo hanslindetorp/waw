@@ -1,0 +1,12 @@
+{
+	"multi": [
+		"audio/intro.mp3",
+		"wa.xml",
+		"workstation-state.json"
+	],
+	"waw-project": [
+		"audio/6a_5_3a_4.mp3",
+		"wa.xml",
+		"workstation-state.json"
+	]
+}

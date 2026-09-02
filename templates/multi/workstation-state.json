@@ -1,0 +1,14 @@
+{
+  "openPanels": [
+    "fileManager",
+    "xmlEditor",
+    "preview"
+  ],
+  "panelWidths": {
+    "fileManager": "0 0 15%",
+    "xmlEditor": "0 0 35%",
+    "preview": "0 0 50%",
+    "xmlCode": "1 1 auto"
+  },
+  "selectedElementId": "Option-1"
+}

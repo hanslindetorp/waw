@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<WAXML version="1.0" timeUnit="ms" gain="-3dB" controls="false">
+  <Composition id="Composition-1">
+    <Section id="Section-1" class="A">
+      <Layer id="Layer-1">
+        <Segment pos="9.1.00" id="Segment-1" length="12s">
+          <Option src="audio/intro.mp3" id="Option-1" />
+        </Segment>
+      </Layer>
+    </Section>
+  </Composition>
+</WAXML>
