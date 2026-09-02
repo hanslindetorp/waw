@@ -100,7 +100,7 @@ template.innerHTML = `
 				<span>New Project</span><span class="menu-shortcut">${MOD_KEY_LABEL}N</span>
 			</button>
 			<button class="menu-item" type="button" data-action="open">
-				<span>Open Project</span><span class="menu-shortcut">${MOD_KEY_LABEL}O</span>
+				<span>Open Project...</span><span class="menu-shortcut">${MOD_KEY_LABEL}O</span>
 			</button>
 			<button class="menu-item" type="button" data-action="save">
 				<span>Save</span><span class="menu-shortcut">${MOD_KEY_LABEL}S</span>
@@ -285,6 +285,13 @@ export class WaFileMenu extends HTMLElement {
 				this._startOpenViaInput();
 				return;
 			}
+			// _confirmThen shows its prompt *inside* the dropdown — closed
+			// above (needed while the native picker itself was open, so it
+			// wasn't left hanging behind that dialog) — so it has to be
+			// reopened here, or the confirm prompt renders invisibly and the
+			// whole flow appears to silently do nothing. Bug per Hans
+			// (2026-09-04): "File Open... öppnar inte någonting".
+			this._open();
 			this._confirmThen("Discard the current project and open another one?", async () => {
 				this._close();
 				try {
