@@ -149,10 +149,10 @@ function onKeyDown(e) {
 
 // True while focus is inside a text-editing control (an <input>, <textarea>,
 // or contenteditable — including one buried inside another component's
-// shadow DOM, e.g. the Code panel's textarea or a file-rename field) — in
-// which case Cmd/Ctrl+Z should fall through to the browser's own per-field
-// undo rather than our app-wide one.
-function isEditableContext() {
+// shadow DOM, e.g. the Code panel's textarea or a file-rename field) — used
+// to let a global single-key shortcut (Cmd/Ctrl+Z here, Space for PLAY/STOP
+// in wa-player-bar.js) fall through to normal typing instead of firing.
+export function isEditableContext() {
 	let el = document.activeElement;
 	while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
 	if (!el) return false;

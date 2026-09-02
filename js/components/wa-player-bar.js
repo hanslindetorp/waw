@@ -1,5 +1,6 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
+import { isEditableContext } from "../project/edit-history.js";
 import "./wa-var-knobs.js";
 
 // Global transport, in the app header (to the right of the File menu) — per
@@ -110,6 +111,7 @@ export class WaPlayerBar extends HTMLElement {
 		this._shortcuts = this.shadowRoot.querySelector(".shortcuts");
 		this._onPlayerChange = this._onPlayerChange.bind(this);
 		this._onXmlStoreChange = this._onXmlStoreChange.bind(this);
+		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
 	connectedCallback() {
@@ -120,6 +122,7 @@ export class WaPlayerBar extends HTMLElement {
 		});
 		playerStore.addEventListener("change", this._onPlayerChange);
 		xmlStore.addEventListener("change", this._onXmlStoreChange);
+		document.addEventListener("keydown", this._onKeyDown);
 		this._onPlayerChange();
 		this._renderShortcuts();
 	}
@@ -127,6 +130,18 @@ export class WaPlayerBar extends HTMLElement {
 	disconnectedCallback() {
 		playerStore.removeEventListener("change", this._onPlayerChange);
 		xmlStore.removeEventListener("change", this._onXmlStoreChange);
+		document.removeEventListener("keydown", this._onKeyDown);
+	}
+
+	// Space toggles PLAY/STOP globally, per Hans — except while any text
+	// field has focus (isEditableContext, same shadow-DOM-piercing check
+	// edit-history.js uses for its own Cmd/Ctrl+Z guard), where Space must
+	// still just type a space.
+	_onKeyDown(e) {
+		if (e.key !== " " && e.code !== "Space") return;
+		if (isEditableContext()) return;
+		e.preventDefault();
+		playerStore.isPlaying ? playerStore.stop() : playerStore.play();
 	}
 
 	_onPlayerChange() {

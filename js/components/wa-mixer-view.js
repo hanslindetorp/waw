@@ -20,7 +20,7 @@ import {
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
 // <Mixer> gets its own channel strip; the "+" strip at the end creates a
-// fresh <Chain id="MixChan-N"> with the default shape a channel strip is
+// fresh <Chain id="Mix-<mixerNum>-Ch-N"> with the default shape a channel strip is
 // built around: N BiquadFilterNodes (EQ, rendered top-down in XML order),
 // inserts (<Wam>), sends (<Send>), a StereoPannerNode, and a GainNode.
 // Everything reads/writes straight through xmlStore, same pattern as
@@ -1828,16 +1828,40 @@ export class WaMixerView extends HTMLElement {
 		setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
 	}
 
-	// New channel strips get a "MixChan-N" id (never colliding with an
-	// existing one, never reusing a number even after deletion, mirroring
-	// the reasoning behind xmlStore's own TagName-N auto-id backfill) rather
-	// than the generic "Chain-N"/"GainNode-N" auto-id, per Hans.
+	// New channel strips get a "Mix-<mixerNum>-Ch-<channelNum>" id — globally
+	// unique across every <Mixer> in the document, rather than the old
+	// "MixChan-N" scheme, which numbered purely within whichever Mixer was
+	// being edited and so collided the moment a second <Mixer> also grew a
+	// channel (bug per Hans, 2026-09-05). mixerNum is picked once per Mixer:
+	// reused from whatever number its own existing channels already carry,
+	// or — for a brand new Mixer, or one whose channels were all deleted —
+	// one past the highest mixerNum used anywhere in the document.
+	// channelNum never gets reused within a Mixer even after deletion, same
+	// "never reuse a number" reasoning as xmlStore's own TagName-N auto-id
+	// backfill.
 	_nextChannelId(mixerNow) {
-		const existingNums = mixerNow.children
-			.map((c) => /^MixChan-(\d+)$/.exec(c.attributes.id || ""))
-			.filter(Boolean)
-			.map((m) => parseInt(m[1], 10));
-		return existingNums.length ? Math.max(...existingNums) + 1 : 1;
+		const pattern = /^Mix-(\d+)-Ch-(\d+)$/;
+		let maxMixerNum = 0;
+		let mixerNum = null;
+		let maxChannelNum = 0;
+
+		const scan = (node) => {
+			const match = pattern.exec(node.attributes.id || "");
+			if (match) {
+				const mNum = parseInt(match[1], 10);
+				if (mNum > maxMixerNum) maxMixerNum = mNum;
+				if (node.parent === mixerNow.id) {
+					if (mixerNum === null) mixerNum = mNum;
+					const cNum = parseInt(match[2], 10);
+					if (cNum > maxChannelNum) maxChannelNum = cNum;
+				}
+			}
+			node.children.forEach(scan);
+		};
+		if (xmlStore.root) scan(xmlStore.root);
+
+		if (mixerNum === null) mixerNum = maxMixerNum + 1;
+		return `Mix-${mixerNum}-Ch-${maxChannelNum + 1}`;
 	}
 
 	// <Mixer> gets sensible blend/transitionTime defaults the first time it
@@ -1862,8 +1886,7 @@ export class WaMixerView extends HTMLElement {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
 		this._ensureMixerDefaults(mixerNow);
-		const nextNum = this._nextChannelId(mixerNow);
-		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: `MixChan-${nextNum}` });
+		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
 		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first in the signal chain, per Hans
 		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf", frequency: "4000" });
 		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking", frequency: "400" });
@@ -1876,8 +1899,7 @@ export class WaMixerView extends HTMLElement {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
 		this._ensureMixerDefaults(mixerNow);
-		const nextNum = this._nextChannelId(mixerNow);
-		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: `MixChan-${nextNum}` });
+		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
 		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first, per Hans (same as Full Channel Strip)
 		xmlStore.insertNewChild(chain.id, "StereoPannerNode", {});
 		xmlStore.insertNewChild(chain.id, "GainNode", {});
@@ -1887,8 +1909,7 @@ export class WaMixerView extends HTMLElement {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
 		this._ensureMixerDefaults(mixerNow);
-		const nextNum = this._nextChannelId(mixerNow);
-		xmlStore.insertNewChild(mixerNow.id, "GainNode", { id: `MixChan-${nextNum}` });
+		xmlStore.insertNewChild(mixerNow.id, "GainNode", { id: this._nextChannelId(mixerNow) });
 	}
 
 	// --- channel strips ---

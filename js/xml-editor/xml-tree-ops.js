@@ -178,6 +178,25 @@ export function generateSectionClass(root) {
 	}
 }
 
+// A nameless <Var> can't be turned into a live knob (wa-var-knobs.js) or
+// referenced as "$name" anywhere else — every new one gets a "varN" name
+// (never colliding with an existing <Var name="...">, never reusing a
+// number even after deletion, same reasoning as backfillElementIds' own
+// TagName-N scheme), per Hans (2026-09-05).
+function usedVarNames(node, set = new Set()) {
+	if (node.tagName === "Var" && node.attributes.name) set.add(node.attributes.name);
+	node.children.forEach((c) => usedVarNames(c, set));
+	return set;
+}
+
+export function generateVarName(root) {
+	const used = root ? usedVarNames(root) : new Set();
+	for (let n = 1; ; n++) {
+		const candidate = `var${n}`;
+		if (!used.has(candidate)) return candidate;
+	}
+}
+
 export function findNodeById(root, id) {
 	if (root.id === id) return root;
 	for (const child of root.children) {

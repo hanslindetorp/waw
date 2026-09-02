@@ -125,6 +125,19 @@ class XmlStore extends EventTarget {
 		if (tagName === "Section" && !attributes?.class) {
 			attributes = { ...attributes, class: ops.generateSectionClass(this.root) };
 		}
+		// Every new <Var> gets a name (see generateVarName — required for
+		// setVariable()/"$name" to reach it at all) plus a sensible starting
+		// mapin/default, so a freshly-created one is immediately usable as a
+		// wa-var-knobs.js knob rather than needing three attributes filled in
+		// by hand first. Never overrides a caller-supplied value.
+		if (tagName === "Var") {
+			attributes = {
+				name: ops.generateVarName(this.root),
+				mapin: "0,1",
+				default: "0",
+				...attributes
+			};
+		}
 		if (attributes) child = { ...child, attributes };
 		this.root = ops.insertChild(this.root, parentId, child, index);
 		this.selectedNodeId = child.id;
