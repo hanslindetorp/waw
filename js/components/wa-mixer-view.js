@@ -20,7 +20,7 @@ import {
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
 // <Mixer> gets its own channel strip; the "+" strip at the end creates a
-// fresh <Chain id="Mix-<mixerNum>-Ch-N"> with the default shape a channel strip is
+// fresh <Chain id="Mix<mixerNum>-Ch<N>"> with the default shape a channel strip is
 // built around: N BiquadFilterNodes (EQ, rendered top-down in XML order),
 // inserts (<Wam>), sends (<Send>), a StereoPannerNode, and a GainNode.
 // Everything reads/writes straight through xmlStore, same pattern as
@@ -1828,7 +1828,7 @@ export class WaMixerView extends HTMLElement {
 		setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
 	}
 
-	// New channel strips get a "Mix-<mixerNum>-Ch-<channelNum>" id — globally
+	// New channel strips get a "Mix<mixerNum>-Ch<channelNum>" id — globally
 	// unique across every <Mixer> in the document, rather than the old
 	// "MixChan-N" scheme, which numbered purely within whichever Mixer was
 	// being edited and so collided the moment a second <Mixer> also grew a
@@ -1840,7 +1840,7 @@ export class WaMixerView extends HTMLElement {
 	// "never reuse a number" reasoning as xmlStore's own TagName-N auto-id
 	// backfill.
 	_nextChannelId(mixerNow) {
-		const pattern = /^Mix-(\d+)-Ch-(\d+)$/;
+		const pattern = /^Mix(\d+)-Ch(\d+)$/;
 		let maxMixerNum = 0;
 		let mixerNum = null;
 		let maxChannelNum = 0;
@@ -1861,7 +1861,7 @@ export class WaMixerView extends HTMLElement {
 		if (xmlStore.root) scan(xmlStore.root);
 
 		if (mixerNum === null) mixerNum = maxMixerNum + 1;
-		return `Mix-${mixerNum}-Ch-${maxChannelNum + 1}`;
+		return `Mix${mixerNum}-Ch${maxChannelNum + 1}`;
 	}
 
 	// <Mixer> gets sensible blend/transitionTime defaults the first time it
