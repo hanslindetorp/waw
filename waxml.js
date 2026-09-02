@@ -9846,6 +9846,7 @@ class Parser {
 									}
 									switch(key){
 										case "mix":
+										case "solo":
 										case "selectindex":
 										xmlNode.obj[key] = val;
 										break;
