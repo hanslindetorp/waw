@@ -1198,7 +1198,14 @@ export class WaSectionView extends HTMLElement {
 			}
 			if (!entry.el) continue; // its lane isn't currently rendered
 			const basePos = readStingerQuantizePosition(stinger, info) + readStingerOffset(stinger, info);
-			const pointerAbsSeconds = basePos + entry.startOffsetSeconds + elapsedSinceTrigger;
+			// startOffsetSeconds is measured against the Section's own
+			// cursorTime, whose zero point is bar 1 — but the quantize grid
+			// this Stinger triggers within is anchored one bar earlier, at
+			// bar 0 (see _updateStingerQuantizeGuides's own bar0Seconds), so
+			// the pointer needs that same one-bar shift to actually start
+			// from bar 0 relative to the anchor instead of bar 1, per Hans
+			// (2026-09-04).
+			const pointerAbsSeconds = basePos - info.barDuration + entry.startOffsetSeconds + elapsedSinceTrigger;
 			entry.el.style.left = `${this._timeToPx(pointerAbsSeconds, info)}px`;
 		}
 	}
@@ -1567,6 +1574,7 @@ export class WaSectionView extends HTMLElement {
 			-info.barDuration // a Stinger can't be dragged left of bar 0, per Hans
 		);
 		lane.appendChild(anchor);
+		this._updateStingerQuantizeGuides(lane, info, quantizePos);
 
 		const ghost = document.createElement("div");
 		ghost.className = "segment-ghost";
@@ -1718,52 +1726,35 @@ export class WaSectionView extends HTMLElement {
 		return anchor;
 	}
 
-	// Faint vertical guide lines across a Stinger's own lane, shown only
-	// while its anchor is being dragged — one at every multiple of the
-	// *live* quantize duration currently being previewed (so dragging to
-	// quantize="1/4" shows a line every beat, quantize="1" every bar, etc,
-	// per Hans), from the current scroll position out to the visible
-	// viewport's right edge. committedSeconds === null (drag not active, or
-	// just ended) clears them.
-	//
-	// A pointermove fires far more often than the grid-snapped
-	// committedSeconds actually changes — most calls during a drag land on
-	// the exact same quantize duration as the previous one. Rebuilding up to
-	// MAX_GUIDES DOM nodes on every single one of those was the cause of the
-	// sluggish anchor-drag response Hans reported; skipping the rebuild
-	// whenever the duration hasn't actually changed fixes it without
-	// changing what gets drawn.
-	_updateStingerQuantizeGuides(lane, info, committedSeconds) {
-		if (committedSeconds === null) {
-			(lane._quantizeGuideEls || []).forEach((el) => el.remove());
-			lane._quantizeGuideEls = [];
-			lane._lastGuideQuantizeDuration = undefined;
-			return;
-		}
-
-		const quantizeDurationSeconds = committedSeconds + info.barDuration;
-		if (!(quantizeDurationSeconds > 0) || !Number.isFinite(quantizeDurationSeconds)) return;
-		if (lane._lastGuideQuantizeDuration === quantizeDurationSeconds) return;
-		lane._lastGuideQuantizeDuration = quantizeDurationSeconds;
-
+	// Four reference marks across a Stinger's own lane showing its quantize
+	// grid: bar 0 (one bar before the timeline's own bar 1 — also the
+	// earliest an anchor can be dragged to, see _wireStingerDrag's
+	// minAbsSeconds below), the anchor itself, and two more continuing that
+	// same spacing — per Hans (2026-09-04), replacing an earlier version
+	// that tiled a guide at *every* multiple of the quantize duration across
+	// the whole visible viewport (accurate, but too noisy to actually read).
+	// Always drawn (called once from _buildStingerLane with the Stinger's
+	// real quantize position, not just while dragging) and left in place
+	// after a drag ends — "pedagogical and good", per Hans — rather than
+	// cleared on mouseup the way the old tiled version was; also passed as
+	// the anchor drag's onLiveMove callback so they track the pointer
+	// smoothly before the drag's own commit re-renders everything from the
+	// new quantize value anyway.
+	_updateStingerQuantizeGuides(lane, info, anchorSeconds) {
 		(lane._quantizeGuideEls || []).forEach((el) => el.remove());
 		lane._quantizeGuideEls = [];
+		if (anchorSeconds === null || !Number.isFinite(anchorSeconds)) return;
 
-		const scrollLeftPx = this._stingerScroll ? this._stingerScroll.scrollLeft : 0;
-		const viewportWidthPx = this._stingerScroll ? this._stingerScroll.clientWidth : lane.clientWidth;
-		const viewportLeftSeconds = this._pxToTime(scrollLeftPx, info);
-		const viewportRightSeconds = this._pxToTime(scrollLeftPx + viewportWidthPx, info);
-		const startMultiple = Math.floor(viewportLeftSeconds / quantizeDurationSeconds) * quantizeDurationSeconds;
-
-		const MAX_GUIDES = 300; // safety cap in case a tiny quantize duration would otherwise flood the DOM
-		let t = startMultiple;
-		for (let i = 0; i < MAX_GUIDES && t <= viewportRightSeconds; i++, t += quantizeDurationSeconds) {
+		const bar0Seconds = -info.barDuration;
+		const spacing = anchorSeconds - bar0Seconds;
+		const positions = [bar0Seconds, anchorSeconds, anchorSeconds + spacing, anchorSeconds + 2 * spacing];
+		positions.forEach((t) => {
 			const guide = document.createElement("div");
 			guide.className = "stinger-quantize-guide";
 			guide.style.left = `${this._timeToPx(t, info)}px`;
 			lane.appendChild(guide);
 			lane._quantizeGuideEls.push(guide);
-		}
+		});
 	}
 
 	// changeOnNext marks: when a Stinger's (or one of its Options') own
@@ -1901,8 +1892,12 @@ export class WaSectionView extends HTMLElement {
 			const onUp = () => {
 				el.removeEventListener("pointermove", onMove);
 				el.removeEventListener("pointerup", onUp);
+				// No onLiveMove(null) here any more — per Hans (2026-09-04),
+				// the anchor drag's quantize guides (_updateStingerQuantizeGuides)
+				// should stay put after mouseup rather than being cleared;
+				// onCommit's own attribute write re-renders everything from
+				// the new value anyway, redrawing them from there instead.
 				if (dragging) onCommit(committedSeconds);
-				if (onLiveMove) onLiveMove(null);
 			};
 			el.addEventListener("pointermove", onMove);
 			el.addEventListener("pointerup", onUp);
