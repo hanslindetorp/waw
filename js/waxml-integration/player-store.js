@@ -49,6 +49,7 @@ class PlayerStore extends EventTarget {
 		this._reloadTimer = null;
 		this._reloadInFlight = false;
 		this._reloadPending = false;
+		this._reloadPromise = null; // shared by every caller currently waiting on _reloadDocument() — see there
 		xmlStore.addEventListener("change", (e) => this._onXmlStoreChange(e));
 	}
 
@@ -83,32 +84,49 @@ class PlayerStore extends EventTarget {
 	// reload is already in flight, it's remembered and re-run once the
 	// in-flight one finishes, rather than starting a second
 	// updateFromString() concurrently against the same waxml instance.
-	async _reloadDocument() {
-		if (!xmlStore.root) return;
+	//
+	// Every caller shares the same _reloadPromise while one is running —
+	// play()'s own `await this._reloadDocument()` needs the graph to
+	// actually be loaded (or have genuinely failed) by the time it resumes,
+	// not just "a reload was requested at some point". The old version
+	// returned immediately from the "already in flight" branch instead of
+	// waiting for it, so play() could resume — and trig — before the graph
+	// it just asked for was actually ready. Bug per Hans (2026-09-04).
+	_reloadDocument() {
+		if (!xmlStore.root) return Promise.resolve();
 		if (this._reloadInFlight) {
 			this._reloadPending = true;
-			return;
+			return this._reloadPromise;
 		}
 		this._reloadInFlight = true;
-		try {
-			await raceWithTimeout(bridge.loadFullDocument(xmlStore.root), RELOAD_TIMEOUT_MS);
-			this._documentLoaded = true;
-			this._emit();
-		} catch (err) {
-			// waxml.js hasn't finished loading yet, a transient parse issue,
-			// or the RELOAD_TIMEOUT_MS safety net above firing — worth a
-			// console warning (unlike the individual live-nudge failures
-			// elsewhere in this integration, a graph that won't load at all
-			// is a real operational problem, not routine no-op territory).
-			// The next structural change (or the retry below) will try again.
-			console.warn("player-store: failed to load the live waxml graph", err);
-		} finally {
-			this._reloadInFlight = false;
-			if (this._reloadPending) {
-				this._reloadPending = false;
-				this._scheduleReload();
+		this._reloadPromise = this._runReloadLoop();
+		return this._reloadPromise;
+	}
+
+	// One loadFullDocument() attempt, repeated in place (not via a fresh
+	// _reloadDocument() call/promise) for as long as another structural edit
+	// keeps arriving while the previous attempt was in flight — so the
+	// single shared _reloadPromise every caller is awaiting only resolves
+	// once things have genuinely settled.
+	async _runReloadLoop() {
+		do {
+			this._reloadPending = false;
+			try {
+				await raceWithTimeout(bridge.loadFullDocument(xmlStore.root), RELOAD_TIMEOUT_MS);
+				this._documentLoaded = true;
+				this._emit();
+			} catch (err) {
+				// waxml.js hasn't finished loading yet, a transient parse issue,
+				// or the RELOAD_TIMEOUT_MS safety net above firing — worth a
+				// console warning (unlike the individual live-nudge failures
+				// elsewhere in this integration, a graph that won't load at all
+				// is a real operational problem, not routine no-op territory).
+				// The next structural change (or the loop continuing below)
+				// will try again.
+				console.warn("player-store: failed to load the live waxml graph", err);
 			}
-		}
+		} while (this._reloadPending);
+		this._reloadInFlight = false;
 	}
 
 	// Per Hans (2026-09-01): waxml.js's sectionStart only ends up set

@@ -151,6 +151,17 @@ sololampor är lika verkliga utan en Composition).
 | 5 | `WebAudio`, `updateFromString()` | Den inre `parser.initFromString(str).then(xml => {...})`-kedjan hade ingen `.catch()` kopplad tillbaka till den yttre Promise:ns `reject()` — kastade något inuti `.then()` (t.ex. bugg #7 nedan) blev en egen, okopplad "unhandled rejection", och den yttre Promise:n som `updateFromString()` faktiskt returnerar löste sig aldrig. Gjorde att en enda trasig/minimal dokumentstruktur kunde hänga hela laddningen för evigt, tyst | ✅ Patchad (`.catch(reject)` tillagd) |
 | 6 | `Connector`, konstruktor | `setTimeout(() => xml.obj.fade(...), 1000)` antog att `xml.obj` fortfarande fanns kvar när timeouten körde — kraschade om grafen hann laddas om (t.ex. via #5/proaktiv laddning, avsnitt 2.6) inom den sekunden | ✅ Patchad (null-koll före `.fade()`-anropet) |
 | 7 | `Parser.js`, `initFromString()` | Parser-error-kollen läste `this._xml.firstElementChild.tagName` — kraschade (`Cannot read properties of null`) för varje giltigt dokument vars rot-element saknar barn-element (t.ex. ett helt tomt nyskapat projekt), eftersom `firstElementChild` då är `null`. Maskerades tidigare av bugg #5 (kraschen hängde bara laddningen tyst istället för att synas) | ✅ Patchad (bytt till `xml.querySelector("parsererror")`, oberoende av dokumentets struktur) |
+| 8 | WAM-host (`initWAMsWhenAllAreLoaded()` m.fl.) | Fel case i en `querySelector("wam")` mot schemats `<Wam>`, plus en ordningsbugg — WAM-initieringen kördes innan `parseXML()` hunnit fylla `this.imports` — gjorde att WAM-inserts aldrig faktiskt startade | ✅ Patchad |
+| 9 | `Music.js`, `getPosition()` | Returnerade en fryst stub när `pos` var odefinierad, istället för att fråga den aktiva sektionen | ✅ Patchad (delegerar till `this.currentSection.getPosition()`) |
+| 10 | `Bus`/`Motif.prototype.remove` | Definierade som pilfunktioner — fel `this`-bindning, kraschade vid teardown av grafen | ✅ Patchad |
+| 11 | iMus-sidan av grafen (`Track`/`Bus`) | Ingen teardown mellan ombyggnader (ingen `.disconnect()`) — hörbar distorsion när en ny `<Layer>` lades till medan grafen redan spelade | ✅ Patchad (`remove()`-kaskad genom musikEngine-trädet) |
+| 12 | `Parser.js`, `parseXML()` (`case "composition":`) | En synkron "XXX really bad hack"-rad anropade `this.waxml.musicEngine.parseXML(xmlNode)` **innan** `WebAudio`s eget `this._xml` hunnit sättas (mitt i `initFromString()`s egen trädvandring, långt före `updateFromString()`s `.then()`) — orsakade en `TypeError` i `getInputBus`/`querySelectorAll` så fort en `<Layer output="#MixChan-N">` routades till en `<Mixer>` med riktigt innehåll. Kraschen fångades tyst av appens eget reload-felhantering (bara en `console.warn`), så en `<Section>` som spelades upp efteråt räknade position i takt med rå `audioContext.currentTime` istället för från takt 1 — allvarlig bugg, hittad via ett verkligt repro-projekt (`template.zip`) 2026-09-04 | ✅ Patchad (raden borttagen; `<Composition>`-parsningen triggas nu istället efter `initAudio()` är klar) |
+| 13 | `WebAudio.updateFromString()` | `resolve(xml)` kördes så fort `this.initAudio(xml)` bara hade *startats* (inte `await`ats) — en caller som väntade på `updateFromString()` trodde grafen var klar innan den async `initAudio()`/iMus-kedjan ens hunnit börja köra. Upptäcktes som en direkt följd av fix #12 (första versionen av den fixen flyttade bara `resolve()` men body:n körde fortfarande före `initAudio()` var klar) | ✅ Patchad (`resolve()` flyttad in i `initAudio(xml).then(() => {...})`) |
+| 14 | `Connector.connect()`, `output`-attributets `default:`-gren | `xmlNode.obj.connect(target.obj.input)` antog att både käll- och mål-objektet redan var byggda — kunde krascha/hänga beroende på ordning efter fix #12/#13 ändrade när `Connector` körs relativt resten av grafuppbyggnaden | ✅ Patchad (null-koll: `if(xmlNode.obj && target.obj && target.obj.input)`) |
+| 15 | `Music.stop`/`iMus.stop("all")` | Gick via `new Selection(myInstance, "all", defaultInstance)`, som inte tillförlitligt återställde varje sektions `playing`/`sectionStart` vid ett globalt stopp | ✅ Patchad (`selector == "all"` itererar nu `defaultInstance.sections` direkt och anropar `stopAllSounds()`/`stop()` på var och en) |
+| 16 | `WebAudio.initAudio()`, variabel- och mix-selektorer | `querySelectorAll("var")` och `querySelectorAll("*[mix]")` missade element med versalt taggnamn/attribut (`<Var>`, `solo`) | ✅ Patchad (`"var, Var"` respektive `"*[mix], *[solo]"`) |
+
+Bugg #12–16 hittades och åtgärdades tillsammans under en gemensam felsökningssession (Hans + Claude Code) 2026-09-04, utlöst av ett verkligt projekt där `<Layer output="#MixChan-N">` routade till en `<Mixer>` med riktiga `<Chain>`-effekter — se [architecture-overview.md](architecture-overview.md) för en sammanfattning ur app-sidans perspektiv.
 
 **Känt, ej åtgärdat (medvetet nedprioriterat):**
 - `addSuffix()`/`loadFile()` i `Music.js` använder fortfarande den äldre, separata path-resolution-vägen (inte `Loader.getPath()`). Fungerar idag, men är en dubblerad kodväg. Hans har en pågående, större omskrivning av hela paketet planerad — lämnas orört tills dess, med en note-to-self-kommentar i koden.
@@ -166,7 +177,7 @@ Den tidigare separata `<imusic>`-strukturen (motiv, sektioner, arrangement — l
     <AudioBufferSourceNode id="ljud1" class="test" src="Aa.mp3" />
     <Composition>
         <section class="test" tempo="144" timeSign="4/4">
-            <layer id="layer1" loopLength="16" src="audio/drums.mp3"/>
+            <layer id="layer1" loopEnd="4.0.0" src="audio/drums.mp3"/>
         </section>
     </Composition>
 </waxml>
@@ -176,6 +187,7 @@ Den tidigare separata `<imusic>`-strukturen (motiv, sektioner, arrangement — l
 - Två separata parsers samexisterar i denna version (`Parser.js` för huvudgrafen, `MusicParser` för `<Composition>`) — ett medvetet mindre omfattande ingrepp, inte en fullständig sammanslagning av loading-pipelines.
 - `Parser.js` har fått en guard som hoppar över `<Composition>`-noden i den vanliga ljudnods-genomgången.
 - `updateFromString()`/`initFromString()` bygger nu om **båda** graferna (ljud + komposition) vid varje anrop.
+- `<layer>`s gamla `loopLength`-attribut (antal takter) är ersatt av `loopEnd`, som anger en absolut musikalisk position (`bar.beat.offbeat`, t.ex. `"4.0.0"`) istället för en längd — matchar hur övriga positions-/tidsattribut i schemat redan uttrycks.
 - Cleanup/uppstädning av gamla iMusic-noder vid omladdning är ett känt uppföljningsjobb (Hans äger detta).
 
 ---

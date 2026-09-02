@@ -1004,26 +1004,54 @@ export class WaSectionView extends HTMLElement {
 	}
 
 	// A pinch gesture is one continuous scalar, unlike the H/V buttons'
-	// discrete per-axis steps — scales pxPerSecond and rowHeight together
-	// (both axes at once, matching how a pinch naturally reads) and smoothly
-	// (proportional to the actual gesture magnitude) rather than reusing
-	// _handleZoom's fixed 1.4x-per-click step, which would feel jumpy
-	// applied on every wheel tick of a gesture that can fire dozens of them.
-	// stopPropagation() (see connectedCallback) keeps wa-panel.js's own
-	// generic CSS-transform zoom fallback from also firing for this same
-	// gesture.
+	// discrete per-axis steps — scales smoothly (proportional to the actual
+	// gesture magnitude) rather than reusing _handleZoom's fixed
+	// 1.4x-per-click step, which would feel jumpy applied on every wheel
+	// tick of a gesture that can fire dozens of them. stopPropagation() (see
+	// connectedCallback) keeps wa-panel.js's own generic CSS-transform zoom
+	// fallback from also firing for this same gesture.
+	//
+	// The two axes scale independently, each by its own component of the
+	// gesture — a mostly-horizontal pinch zooms time (pxPerSecond), a
+	// mostly-vertical one zooms row height, a diagonal one scales both —
+	// per Hans (2026-09-04): "olika på H- och V-axeln beroende på hur man
+	// pinchar". A plain mouse wheel (deltaX always 0) only ever zooms V as a
+	// result; the H/V buttons remain the mouse-friendly way to zoom time.
+	//
+	// Horizontal zoom also keeps whatever time position is currently under
+	// the cursor visually fixed — captured (in the *old* pxPerSecond) before
+	// resizing, then re-applied as the new scrollLeft (in the *new*
+	// pxPerSecond) after _renderSection has rebuilt everything at the new
+	// scale — otherwise the content under the pointer drifts away as you
+	// zoom, per Hans (2026-09-04).
 	_onWheelZoom(e) {
 		if (!e.ctrlKey) return;
 		e.preventDefault();
 		e.stopPropagation();
-		// Negative deltaY = pinch out/zoom in, matching native browser
-		// page-zoom's own convention for this synthesized gesture.
-		const factor = Math.exp(-e.deltaY * 0.01);
-		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factor));
-		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factor));
 
 		const node = this._getActiveSectionNode();
-		if (node) this._renderSection(node);
+		if (!node) return;
+		const info = readSectionInfo(node, this._getCompositionAncestor(node));
+
+		let cursorTimeSeconds = null;
+		let cursorOffsetPx = null;
+		if (this._layerScroll) {
+			cursorOffsetPx = e.clientX - this._layerScroll.getBoundingClientRect().left;
+			cursorTimeSeconds = this._pxToTime(this._layerScroll.scrollLeft + cursorOffsetPx, info);
+		}
+
+		// Negative delta = pinch out/zoom in, matching native browser
+		// page-zoom's own convention for this synthesized gesture.
+		const factorX = Math.exp(-e.deltaX * 0.01);
+		const factorY = Math.exp(-e.deltaY * 0.01);
+		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factorX));
+		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));
+
+		this._renderSection(node);
+
+		if (cursorTimeSeconds !== null) {
+			this._layerScroll.scrollLeft = Math.max(0, this._timeToPx(cursorTimeSeconds, info) - cursorOffsetPx);
+		}
 	}
 
 	// --- playhead animation ---

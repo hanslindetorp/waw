@@ -261,6 +261,165 @@ solo/blend/quantize-designet. Motorsidan (`waxml.js`) för solo/blend/
 quantize är **inte** byggd än — se
 [mixer-solo-engine-todo.md](mixer-solo-engine-todo.md).
 
+## Undo/Redo (nytt, 2026-09-01)
+
+`js/project/edit-history.js` är en enda kombinerad ångra/gör om-stack som
+täcker **både** `xmlStore` och `vfs` tillsammans (en fil-drag och en
+attributändring hamnar på samma logiska "steg" om de händer nära i tid).
+Snabba ändringar i följd (t.ex. att dra i en slider) coalescas till ett
+enda ångra-steg via en 500ms idle-debounce, keyed på den *första*
+ändringen i en burst — `commitBurst()` kan tvingas fram tidigt av
+`undo()`/`redo()` själva, så Cmd+Z direkt efter en enda klick-ändring
+ångrar rätt sak istället för att vänta in debouncen. `applyingHistory`
+gate:ar bort att en ångra/gör om-operation själv råkar spelas in som ett
+nytt steg. Historiken nollställs (`resetEditHistory()`) vid varje nytt/
+öppnat projekt.
+
+Tangentbordsgenvägarna (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z eller +Y) är globala
+men hoppar över redigerbara fält — letar igenom shadow-DOM-gränser
+(`while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;`)
+för att hitta det *faktiska* fokuserade elementet, så native textfälts-
+ångra inte kapas.
+
+## Section Preview — DAW-vyn för `<Section>` (nytt, 2026-08–09)
+
+`js/components/wa-section-view.js` (stor fil, se
+[components-reference.md](components-reference.md) för detaljer) är den
+mest komplexa vyn i Preview-panelen: ett Logic/Ableton-likt arrangefönster
+för en markerad `<Section>`, med egen transport, zoom och drag-redigering.
+Centrala drag:
+
+- **Layout**: en rad per `<Layer>` (LAYERS) och en rad per `<Stinger>`
+  (STINGERS), delat 80/20 med en dragbar delare (`.stinger-divider`) —
+  Layer-arean har alltid minst en rads höjd reserverad, Stinger-arean
+  minst en linjals höjd.
+- **Zoom**: H/V-knappar (fasta steg) plus pinch/Ctrl+scroll (kontinuerlig,
+  `_onWheelZoom`) — pinchens `deltaX`/`deltaY` styr H (`pxPerSecond`) och V
+  (`rowHeight`) **oberoende av varandra**, och horisontell zoom håller
+  tidspositionen under muspekaren visuellt fast (läses av före, återställs
+  som ny `scrollLeft` efter omritning).
+- **Tidslinjen växer dynamiskt** (`_ensureTimelineCovers`) istället för
+  att vara hårdkodad till ett fast antal takter — triggas av scroll nära
+  högerkanten och av uppspelningens egen autoscroll, så en loopande
+  `<Layer>` fortsätter rendera repriser istället för att ta slut i tomrum.
+- **Loop-markören** (repristecken: tunt+tjockt streck + två prickar,
+  vitt) sitter vid en `<Layer>`s effektiva `loopEnd` — dragbar (skriver
+  `loopEnd` som musikalisk position, `bar.beat.offbeat`), dubbelklick i
+  en Layer-rad sätter `loopEnd` direkt till klickpositionen (grid-snappad).
+- **`<Segment>`s längd** är dragbar från högerkanten
+  (`_buildSegmentResizeHandle`) — skriver `length` i sekunder.
+- **Namnbyte** (Layer/Stinger radetikett, Segments box, Section-labeln i
+  transportraden, samt tempo/taktart) är dubbelklicks-redigerbara inline,
+  samma mönster som Mixerns egen channel-strip-namnbyte — skriver `label`
+  (eller `tempo`/`timeSign`/`id` för transportradens fält) direkt på
+  `xmlStore`.
+- **`<Stinger>`**: en dragbar "anchor"-linje styr `quantize`; fyra
+  referensstreck (takt 0, anchor, och två till i samma avstånd) visas
+  permanent, inte bara under drag. Ett triggat `<Stinger>` (dubbelklick,
+  bara under uppspelning) får en egen live positionspekare
+  (`_activeStingerTriggers`), beräknad relativt takt 0 i dess eget
+  quantize-raster.
+- **Filsläpp**: en fil släppt på ett `<Segment>` eller `<Stinger>` i den
+  här vyn lägger till en ny `<Option>` (befintlig bar `src` på
+  elementet blir automatiskt en egen `<Option>` före den nya) — skiljer
+  sig medvetet från XML-trädet, där samma drop bara skriver om `src`
+  rakt av.
+- **Schema-validering vid drag-and-drop** i XML-trädet (`wa-xml-tree.js`):
+  ett drop visar aldrig en dropp-indikator och committar aldrig en
+  omflyttning som skulle bryta mot `allowedChildren` (t.ex. en `<Layer>`
+  i en `<Layer>`).
+
+## WAM-inserts och IO-routing (nytt, 2026-08–09)
+
+- **WAM-inserts** (`js/wam/wam-catalog.js`, `wa-wam-picker.js`,
+  `wa-wam-stack.js`, `wam-gui.js`, `wa-wam-view.js`): en channel strip i
+  Mixern kan få ett eller flera `<Wam>`-insert. Vid val från katalogen
+  förhandsdeklareras **alla** modulens parametrar som `<Parameter>`-barn i
+  en enda batch (`ensureParametersDeclared`) så att första ratt-touchen
+  inte triggar en störande strukturell ombyggnad. `getLiveObjects`
+  matchar mot XML-`id`-**attributet** (`[id='...']`), inte det interna
+  trädid:t — lätt att blanda ihop.
+- **IO-routing** (`js/xml-editor/io-routing.js`, `wa-io-picker.js`): ett
+  klick på `output`/`input`/`bus` i Inspector öppnar en förankrad,
+  hierarkisk popup (samma expand/collapse-konvention som XML-trädet) för
+  att välja mål-`id` istället för att skriva `#id` för hand. Dessa tre
+  attribut (plus `<OscillatorNode>`s `type`) tvingar alltid en full
+  graf-ombyggnad vid ändring (`XmlStore.ROUTING_REBUILD_ATTRS`) — waxml.js
+  har ingen live-property-koppling för routing.
+- **Attribut-arv**: `Layer`/`Section` visar och tillåter redigering av
+  ärvda värden (`fadeTime`/`loopEnd`/`changeOnNext`/`tempo`/`timeSign`)
+  från närmaste förälder (Section → Composition), enligt waxml.js egna
+  defaultvärden (`js/xml-editor/attribute-inheritance.js`).
+
+## File-menyn — Save/Save As/Templates (nytt, 2026-09-03)
+
+`js/components/wa-file-menu.js` + `js/project/project-manager.js`:
+
+- **New/Open/Save/Save As** med standardgenvägar (⌘N/O/S, ⇧⌘S — Cmd/Ctrl
+  beroende på plattform). Cmd/Ctrl+N/O kan inte alltid ta över webbläsarens
+  egna reserverade genvägar; Save/Save As gör det tillförlitligt.
+- **Native filväljare** (File System Access API, `showOpenFilePicker`/
+  `showSaveFilePicker`) används där webbläsaren stödjer det (Chrome/Edge),
+  med den klassiska `<a download>`-varianten som fallback. Ett projekt
+  öppnat via den native väljaren behåller sitt filhandtag, så en vanlig
+  Save skriver tillbaka direkt utan att fråga igen.
+- **Templates**: en ny sektion i File-menyn, under en avdelare, en post
+  per undermapp i `templates/` (mappnamnet = menynamnet). Eftersom en
+  webbläsare inte kan lista en vanlig statisk mapps innehåll själv, läser
+  appen `templates/manifest.json` istället — regenereras med
+  `node scripts/build-template-manifest.js` **varje gång** en mall
+  läggs till/ändras (`js/project/template-loader.js` gör själva
+  hämtningen/uppbyggnaden i `vfs`).
+- Nya `<Section>`-element får en unik `class` automatiskt (A–Z, sen
+  A1/B1/…) så de är direkt användbara som PLAY/STOP-trigger-selektor.
+
+## Panel-layout: öppna/stäng och zoom (nytt, 2026-09-03/04)
+
+- Att öppna en panel (t.ex. Code eller File Manager) tar nu synligt plats
+  från grannpanelerna istället för att osynligt klämmas ihop till
+  ingenting — men **inte** via kontinuerlig CSS `flex-shrink` (gjorde
+  bredd-draget i resize-handtaget märkbart laggigt), utan via en
+  engångs, explicit breddöverföring från en specifik granne vid
+  öppning/stängning (`wa-panel.js`).
+- Generisk pinch-zoom på panelnivå (`wa-panel.js`) är borttagen — fanns
+  bara kvar i Preview-panelen (`wa-preview.js`), där den ser bra ut för
+  Mixer/övriga vyer som inte har egen semantisk zoom (Section Preview har
+  sin egen, se ovan, och stoppar propagering dit den generiska aldrig
+  når).
+- Horisontell svep-navigering som råkade trigga webbläsarens bakåt/framåt
+  är blockerad globalt (`overscroll-behavior-x: none`).
+
+## `waxml.js`-buggar hittade under Section-preview/Mixer-arbetet (2026-09)
+
+Utöver bugglistan i `WAXML-Workstation-spec.md` avsnitt 3 (från den
+ursprungliga arkitekturgenomgången) hittades och åtgärdades ett antal till
+under det här arbetet — alla i `waxml.js`, alla Hans egna fixar (den här
+appen redigerar aldrig `waxml.js` själv):
+
+- **WAM host-init kördes aldrig** — fel case (`querySelector("wam")` vs
+  schemats `<Wam>`) plus en ordningsbugg (`initWAMsWhenAllAreLoaded()`
+  kördes innan `parseXML()` hunnit fylla `this.imports`).
+- **`Music.getPosition()` returnerade en fryst stub** när `pos` var
+  odefinierad — löst genom att delegera till
+  `this.currentSection.getPosition()` istället för att skriva om `pos`.
+- **`Bus`/`Motif.prototype.remove`** var pilfunktioner — fel `this`-bindning,
+  kraschade vid teardown.
+- **Distorsion vid ny `<Layer>`** — iMus-sidan av grafen hade ingen
+  teardown mellan ombyggnader (ingen `.disconnect()` på Track/Bus) —
+  löst med en `remove()`-kaskad genom hela musikEngine-trädet.
+- **Allvarlig positionsbugg**: en `<Section>` som spelades upp efter att
+  en `<Mixer>`-routad `<Layer>` (`output="#MixChan-N"`)  fanns i
+  dokumentet startade positionräkningen från fel ställe (räknade i takt
+  med `audioContext.currentTime` istället för från takt 1). Root cause:
+  en synkron "XXX really bad hack"-rad i `Parser`s generiska nod-genomgång
+  anropade `musicEngine.parseXML()` **innan** `WebAudio`s eget `_xml`
+  hunnit sättas — kraschade tyst (fångades av `player-store.js`s eget
+  reload-felhantering, syntes aldrig för användaren). Löst genom att ta
+  bort den hacken och istället trigga `<Composition>`-parsningen efter
+  `initAudio()` är klar; ett par följdfel (null-koll i `Connector.connect`,
+  `iMus.stop("all")` som inte återställde `playing`/`sectionStart`
+  korrekt) hittades och åtgärdades i samma veva.
+
 ## Konventioner värda att känna till innan man ändrar kod
 
 - **Full omritning, inte diffning.** Nästan varje panel gör

@@ -3066,7 +3066,9 @@ class Connector {
 					targetElements = this.getTargetElements(curNode, output);
 		
 					targetElements.forEach(target => {
-						xmlNode.obj.connect(target.obj.input);
+						if(xmlNode.obj && target.obj && target.obj.input){
+							xmlNode.obj.connect(target.obj.input);
+						}
 					});
 				break;
 			}
@@ -9915,7 +9917,7 @@ class Parser {
 			
 			case "composition":
 			// XXX really bad hack to get the music structure parsed and stored in the musicEngine
-			xmlNode.obj = this.waxml.musicEngine.parseXML(xmlNode);
+			// xmlNode.obj = this.waxml.musicEngine.parseXML(xmlNode);
 			break;
 
 			case "link":
@@ -12665,22 +12667,23 @@ class WebAudio extends EventTarget {
 			.then(xml => {
 				this._xml = xml;
 
-				let musicStructure = this._xml.querySelector("Composition");
-				if(musicStructure){
-					// Handle the music structure
-					this.plugins.forEach(plugin => {
-						if(plugin.name == "iMusic"){
-							plugin.update(musicStructure);
-						}
-					});
-				}
-
 				this.initGUI(xml);
-				this.initAudio(xml);
+				this.initAudio(xml).then(() => {
 
-				this.dispatchEvent(new CustomEvent("init"));
-				this.dispatchEvent(new CustomEvent("inited"));
-				resolve(xml);
+					let musicStructure = xml.querySelector("Composition");
+					if(musicStructure){
+						// Handle the music structure
+						this.plugins.forEach(plugin => {
+							if(plugin.name == "iMusic"){
+								plugin.update(musicStructure);
+							}
+						});
+					}
+
+					this.dispatchEvent(new CustomEvent("init"));
+					this.dispatchEvent(new CustomEvent("inited"));
+					resolve(xml);
+				});
 			}).catch(reject);
 		});
 	}
@@ -12844,12 +12847,12 @@ class WebAudio extends EventTarget {
 			});
 	
 			// make all variable elements broadcast their init values
-			this.querySelectorAll("var").forEach(obj => {
+			this.querySelectorAll("var, Var").forEach(obj => {
 				obj.update();
 			});
 	
 			// set mix attributes (needs all children to be inited before execution)
-			this.querySelectorAll("*[mix]").forEach(obj => {
+			this.querySelectorAll("*[mix], *[solo]").forEach(obj => {
 				obj.update();
 			});
 	
@@ -20966,9 +20969,19 @@ class Music extends EventTarget {
 			}
 	
 			if(selector){
-				var selection = new Selection(myInstance, selector, defaultInstance);
-				selection.stopAllSounds();
-				selection.stop();
+				if(selector == "all"){
+
+					defaultInstance.sections.forEach(section => {
+						section.stopAllSounds();
+						section.stop();
+					});
+
+				} else {
+
+					var selection = new Selection(myInstance, selector, defaultInstance);
+					selection.stopAllSounds();
+					selection.stop();
+				}
 			} else {
 				defaultInstance.currentSection.stopAllSounds();
 			}
