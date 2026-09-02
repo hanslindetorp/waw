@@ -1,4 +1,5 @@
 import * as ops from "./xml-tree-ops.js";
+import { isVariableControlled } from "./variable-references.js";
 
 const EMPTY_XML = '<?xml version="1.0" encoding="UTF-8"?>';
 
@@ -219,7 +220,25 @@ copyNode(nodeId) {
 		// anything inside one, needs the whole graph rebuilt rather than a
 		// live nudge that would silently no-op. Remove this blanket rule once
 		// that live coupling exists on the iMus side.
-		return this._isInsideComposition(node);
+		if (this._isInsideComposition(node)) return true;
+		// An attribute whose value newly becomes (or stops being) a "$name"
+		// <Var> reference needs a full reload too, for the same "live nudge
+		// silently no-ops" reason as the Composition rule above: waxml.js
+		// only wires up that reference's live Watcher while walking the
+		// whole document afresh (Parser.parseXML, via updateFromString) — a
+		// plain live-property nudge just hands the literal "$name" string to
+		// the node's own setter, which quietly rejects it (e.g. Mixer's own
+		// `set solo()` bails out on isNaN). Bug per Hans (2026-09-05):
+		// turning a <Var> knob did nothing for a Mixer's solo, because the
+		// edit that first set solo="$var1" never actually reached waxml.js's
+		// Watcher machinery in the first place.
+		for (const name of new Set([...Object.keys(node.attributes), ...Object.keys(nextAttributes)])) {
+			const was = node.attributes[name];
+			const now = nextAttributes[name];
+			if (was === now) continue;
+			if (isVariableControlled(was) || isVariableControlled(now)) return true;
+		}
+		return false;
 	}
 
 	// Walks up from `node` (inclusive) looking for a <Composition> ancestor —

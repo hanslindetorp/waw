@@ -897,6 +897,14 @@ export class WaNodeInspector extends HTMLElement {
 			onChange(customInput.value);
 			updateValidity(customInput.value);
 		});
+		// Same as _renderStringControl's own Enter handling — nothing left
+		// to commit (already live per keystroke above), just drop focus.
+		customInput.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				customInput.blur();
+			}
+		});
 
 		const isOther = hasValue && !sorted.includes(value);
 		if (hasValue) select.value = isOther ? "__other__" : value;
@@ -975,6 +983,14 @@ export class WaNodeInspector extends HTMLElement {
 			const v = parseFloat(numberInput.value);
 			if (numberInput.value !== "" && Number.isFinite(v)) slider.value = curve.valueToPosition(v);
 			onChange(numberInput.value === "" ? "" : curve.format(v));
+		});
+		// Same as _renderStringControl's own Enter handling — nothing left
+		// to commit (already live per keystroke above), just drop focus.
+		numberInput.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				numberInput.blur();
+			}
 		});
 
 		frag.appendChild(slider);
@@ -1093,6 +1109,16 @@ export class WaNodeInspector extends HTMLElement {
 		input.addEventListener("input", () => {
 			onChange(input.value);
 			updateValidity();
+		});
+		// Already committed live on every keystroke (above) — Enter has
+		// nothing left to *do*, but per Hans (2026-09-05) it should still
+		// drop focus so the field's blue focus ring goes away, same as
+		// hitting Enter/Return in any normal form field.
+		input.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				input.blur();
+			}
 		});
 		updateValidity();
 

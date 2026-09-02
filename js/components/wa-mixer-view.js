@@ -386,6 +386,16 @@ template.innerHTML = `
 		.solo-btn:hover {
 			border-color: #6b7278;
 		}
+		/* Locked against clicks — solo="$name" (see _buildSoloButton). Same
+		   "don't fight the live value" blue ring as the other remote-
+		   controlled knobs/fader/big-slider. */
+		.solo-btn.remote-controlled {
+			cursor: default;
+			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6);
+		}
+		.solo-btn.remote-controlled:hover {
+			border-color: #0b0c0d;
+		}
 		.lamp {
 			width: 8px;
 			height: 8px;
@@ -1709,6 +1719,14 @@ export class WaMixerView extends HTMLElement {
 		// detached elements otherwise.
 		this._remoteControls = [];
 
+		// Computed early (before the channel-strip loop below) since
+		// _buildSoloButton needs it too — a $var-controlled solo locks both
+		// the big slider *and* every per-channel Solo button against direct
+		// clicks, same reasoning as the slider (_wireSoloSliderDrag's own
+		// pointerdown guard): waxml.js's Watcher already drives the position,
+		// so a click here would just fight it. Per Hans (2026-09-05).
+		this._soloLocked = isVariableControlled(mixerNode.attributes.solo);
+
 		// Filter/Insert/Send section heights are each shared across every
 		// channel — set by whichever channel has the most of that section's
 		// own row type — so all channels' rows line up regardless of how
@@ -1740,7 +1758,13 @@ export class WaMixerView extends HTMLElement {
 
 		const soloRaw = mixerNode.attributes.solo;
 		const soloValue = soloRaw !== undefined ? parseFloat(soloRaw) : undefined;
-		const hasSolo = soloRaw !== undefined && Number.isFinite(soloValue);
+		// A $var-controlled solo (this._soloLocked, set above) counts as
+		// active too, even though its own XML value can't parse as a number
+		// — the live crossfade position is real, just driven by the Variable
+		// instead of the static attribute. Bug per Hans (2026-09-05): the
+		// per-channel Solo lamps never lit up while <Mixer solo="$name">,
+		// since this used to require a parseable soloValue to ever go active.
+		const hasSolo = this._soloLocked || (soloRaw !== undefined && Number.isFinite(soloValue));
 		// Read by _updateSoloButtonGains (the RAF loop) so a lamp never
 		// re-lights itself off a stale/default getChannelGain() reading once
 		// solo's been cleared — see that method's own comment.
@@ -1756,7 +1780,7 @@ export class WaMixerView extends HTMLElement {
 		// <Mixer solo="$name"> visibly did nothing, even though the live
 		// engine value was actually updating correctly underneath — this
 		// slider was simply never hooked up to read it back.
-		this._soloLocked = this._lockRemoteControlled(this._soloHandle, soloRaw, () => {
+		this._lockRemoteControlled(this._soloHandle, soloRaw, () => {
 			const live = getLiveProperty(mixerNode.attributes.id, "solo");
 			if (typeof live !== "number" || !Number.isFinite(live)) return;
 			this._applySoloSliderVisual(live, true);
@@ -1998,6 +2022,19 @@ export class WaMixerView extends HTMLElement {
 		const currentSolo = mixerNode?.attributes.solo !== undefined ? parseFloat(mixerNode.attributes.solo) : NaN;
 		const isActive = Number.isFinite(currentSolo) && Math.abs(currentSolo - targetValue) < 0.001;
 		if (this._pendingSoloChannelIndex === index) btn.classList.add("standby");
+
+		// Locked right alongside the big slider (this._soloLocked, set once
+		// per render before this loop runs — see _render) whenever solo is a
+		// "$name" <Var> reference: clicking here would just fight whatever
+		// waxml.js's own Watcher is about to set it back to. Per Hans
+		// (2026-09-05), same "don't fight the live value" reasoning as
+		// _lockRemoteControlled's knobs/fader.
+		if (this._soloLocked) {
+			btn.classList.add("remote-controlled");
+			btn.disabled = true;
+			btn.title = `${btn.title} — controlled by ${mixerNode?.attributes.solo || "a <Var>"}`;
+			return btn;
+		}
 
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
