@@ -512,6 +512,11 @@ template.innerHTML = `
 		.knob.remote-controlled:hover {
 			filter: none;
 		}
+		.solo-slider-handle.remote-controlled {
+			cursor: default;
+			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.6);
+			opacity: 1;
+		}
 		.knob-dial {
 			position: absolute;
 			left: 50%;
@@ -1132,6 +1137,7 @@ export class WaMixerView extends HTMLElement {
 		this._meterState = new Map(); // chainId (internal tree id) -> {analyser, dataArray, vuFillEl, smoothedT}
 		this._meterRafId = null;
 		this._remoteControls = []; // per-frame tick()s for <Var>-controlled knobs — see _lockRemoteControlled
+		this._soloLocked = false; // set every _render() — guards _wireSoloSliderDrag's pointerdown, since that's wired once, not rebuilt per render
 		this._onStoreChange = this._onStoreChange.bind(this);
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 		this._onKeyDown = this._onKeyDown.bind(this);
@@ -1578,7 +1584,7 @@ export class WaMixerView extends HTMLElement {
 		const handle = this._soloHandle;
 		const track = this._soloTrack;
 		handle.addEventListener("pointerdown", (e) => {
-			if (e.button !== 0 || !this._activeMixerId) return;
+			if (e.button !== 0 || !this._activeMixerId || this._soloLocked) return;
 			e.preventDefault();
 			e.stopPropagation();
 			const trackRect = track.getBoundingClientRect();
@@ -1740,6 +1746,22 @@ export class WaMixerView extends HTMLElement {
 		// solo's been cleared — see that method's own comment.
 		this._soloActive = hasSolo;
 		this._applySoloSliderVisual(hasSolo ? soloValue : 0.5, hasSolo);
+
+		// Same lock-and-mirror-the-live-value treatment as the per-channel
+		// knobs (_lockRemoteControlled) — the big solo slider is a singleton
+		// element wired once in connectedCallback rather than rebuilt every
+		// render, so it can't just skip its own wiring like those do; instead
+		// _wireSoloSliderDrag's own pointerdown checks this flag every time.
+		// Bug per Hans (2026-09-05): turning a <Var> knob wired to
+		// <Mixer solo="$name"> visibly did nothing, even though the live
+		// engine value was actually updating correctly underneath — this
+		// slider was simply never hooked up to read it back.
+		this._soloLocked = this._lockRemoteControlled(this._soloHandle, soloRaw, () => {
+			const live = getLiveProperty(mixerNode.attributes.id, "solo");
+			if (typeof live !== "number" || !Number.isFinite(live)) return;
+			this._applySoloSliderVisual(live, true);
+		});
+		if (!this._soloLocked) this._soloHandle.classList.remove("remote-controlled");
 
 		// The blend/transitionTime mini-sliders configure the big solo
 		// slider's crossfade — pointless with fewer than two channels, same
