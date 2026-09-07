@@ -178,7 +178,16 @@ export class WaEditMenu extends HTMLElement {
 	// so normal text copy/cut/paste in the Inspector, Code panel, rename
 	// fields etc. is never hijacked into an XML-node operation. Per Hans
 	// (2026-09-06).
+	//
+	// Escape "lets go" of a pending cut (xmlStore.clearPendingCut is a no-op
+	// without one) — deliberately unguarded by isEditableContext, since it
+	// carries no modifier and never touches whatever a text field's own
+	// Escape handling already does. Per Hans (2026-09-07).
 	_onKeyDown(e) {
+		if (e.key === "Escape") {
+			xmlStore.clearPendingCut();
+			return;
+		}
 		if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
 		if (isEditableContext()) return;
 		const key = e.key.toLowerCase();

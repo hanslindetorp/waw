@@ -20,7 +20,12 @@ import { vfs } from "../vfs/VFS.js";
 // change of the burst — so pressing Undo right after releasing a slider (or
 // pausing while typing) reverts the whole gesture, not its last tick.
 
-const HISTORY_LIMIT = 100;
+// No cap on undoStack's length (per Hans, 2026-09-07: "oändligt lång" unless
+// it risks RAM) — safe because every xml-tree-ops.js mutator is non-mutating,
+// so each snapshot's xmlRoot shares almost all of its structure by reference
+// with every other snapshot (only the path from root to whatever changed is
+// ever copied); a long history costs roughly one shallow path per step, not
+// a full document copy. redoStack was never capped either.
 const COALESCE_MS = 500;
 
 let undoStack = [];
@@ -128,7 +133,6 @@ function commitBurst() {
 	coalesceTimer = null;
 	if (burstBefore === null) return;
 	undoStack.push(burstBefore);
-	if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
 	burstBefore = null;
 }
 

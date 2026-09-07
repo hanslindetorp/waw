@@ -104,14 +104,12 @@ template.innerHTML = `
 		.cell:hover {
 			background: var(--waw-tree-node-hover, #232936);
 		}
+		/* Every selected row (the single primary selection, or any member of a
+		   Cmd/Ctrl-/Shift-click multi-selection) shares this one color — no
+		   visual distinction between "primary" and "also selected", per Hans
+		   (2026-09-07). */
 		.cell.selected {
 			background: var(--waw-tree-node-selected, #234b73);
-		}
-		/* Cmd/Ctrl-click / Shift-click multi-selection — a lighter tint than
-		   the primary .selected so the "focused"/primary row (Inspector
-		   target) still stands out within the group. */
-		.cell.multi-selected {
-			background: rgba(79, 163, 255, 0.15);
 		}
 		/* Marked for a pending Cut — nothing is actually removed yet (see
 		   xmlStore.cutSelection), just visually dimmed/dashed so it's clear
@@ -337,7 +335,7 @@ export class WaXmlTree extends HTMLElement {
 			}
 		};
 		document.addEventListener("click", this._onDocumentClick);
-		xmlStore.addEventListener("change", () => this._onStoreChange());
+		xmlStore.addEventListener("change", (e) => this._onStoreChange(e));
 
 		// Safety net: without this, a file dropped on any gap between/around
 		// grid cells (not directly over a cell) falls through to the browser's
@@ -360,7 +358,17 @@ export class WaXmlTree extends HTMLElement {
 	// replace xmlStore.root (immutable-update pattern) and selectNode() never
 	// touches it, comparing root/schema by reference tells us whether this
 	// change is "just a selection" — if so, only toggle .selected in place.
-	_onStoreChange() {
+	_onStoreChange(e) {
+		// A copy/paste or duplicate hands back a map of each cloned node's
+		// original->new internal id (see xmlStore.copyNode/pasteIntoSelection)
+		// — carry over collapsed state for any original id that was collapsed,
+		// so e.g. duplicating a collapsed <Layer> keeps its clone collapsed
+		// too. Per Hans (2026-09-07).
+		if (e?.detail?.idMap) {
+			for (const [oldId, newId] of e.detail.idMap) {
+				if (this._collapsedIds.has(oldId)) this._collapsedIds.add(newId);
+			}
+		}
 		if (xmlStore.root === this._lastRoot && xmlStore.schema === this._lastSchema) {
 			this._updateSelectionHighlight();
 		} else {
@@ -372,8 +380,7 @@ export class WaXmlTree extends HTMLElement {
 		const cutIds = xmlStore.clipboardCutIds;
 		this._container.querySelectorAll(".cell[data-node-id]").forEach((cell) => {
 			const id = cell.dataset.nodeId;
-			cell.classList.toggle("selected", id === xmlStore.selectedNodeId);
-			cell.classList.toggle("multi-selected", xmlStore.selectedNodeIds.has(id) && id !== xmlStore.selectedNodeId);
+			cell.classList.toggle("selected", id === xmlStore.selectedNodeId || xmlStore.selectedNodeIds.has(id));
 			cell.classList.toggle("cut-marked", cutIds.has(id));
 		});
 	}
@@ -404,7 +411,16 @@ export class WaXmlTree extends HTMLElement {
 			return;
 		}
 		this._selectionAnchorId = node.id;
-		xmlStore.selectNode(node.id);
+		// open:true — an explicit "navigate to this element" click (as
+		// opposed to a plain click made *inside* a preview view itself,
+		// e.g. wa-composition-view.js's own box clicks, which pass no
+		// options and so default to open:false) — wa-preview.js reads this
+		// to force-open a <Section>'s own arrange view even while the
+		// Composition preview is already showing that same Section, since
+		// only a preview's *own* click should get the "stay put" carve-out.
+		// Per Hans (2026-09-08): selecting a <Section> (or its descendant)
+		// in the XML editor must always open the Section preview.
+		xmlStore.selectNode(node.id, { open: true });
 	}
 
 	render() {
@@ -643,8 +659,12 @@ export class WaXmlTree extends HTMLElement {
 
 	_renderNodeRow({ node, depth, isRoot, hasChildren, canHaveChildren, allowedChildren, parentAllowedChildren }) {
 		const schema = xmlStore.schema;
-		const isSelected = xmlStore.selectedNodeId === node.id;
-		const isMultiSelected = xmlStore.selectedNodeIds.has(node.id) && !isSelected;
+		// selectedNodeId is also checked directly (not just membership in
+		// selectedNodeIds) because several xmlStore mutations that move the
+		// primary selection (insertNewChild, removeNode, copyNode, setRoot,
+		// restoreSnapshot) don't touch selectedNodeIds — it can lag behind a
+		// freshly-added/duplicated/deleted-into node.
+		const isSelected = xmlStore.selectedNodeId === node.id || xmlStore.selectedNodeIds.has(node.id);
 		const isCutMarked = xmlStore.clipboardCutIds.has(node.id);
 		const srcAttrName = getSchemaSrcAttributeName(schema, node.tagName);
 		// Manual (schemaless) mode always allows file-drop, defaulting to "src";
@@ -709,7 +729,6 @@ export class WaXmlTree extends HTMLElement {
 		const cells = [nameCell, ...attrCells];
 
 		if (isSelected) cells.forEach((c) => c.classList.add("selected"));
-		if (isMultiSelected) cells.forEach((c) => c.classList.add("multi-selected"));
 		if (isCutMarked) cells.forEach((c) => c.classList.add("cut-marked"));
 		cells.forEach((c) => c.addEventListener("click", (e) => this._handleRowClick(e, node)));
 

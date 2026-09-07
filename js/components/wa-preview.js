@@ -44,6 +44,23 @@ function isDescendantOfTag(node, tagName) {
 	return false;
 }
 
+// Like isDescendantOfTag, but returns the actual ancestor (or `node` itself
+// if it already has that tag) instead of a bare boolean — used to find
+// "which <Section> does this belong to" for a Layer/Segment/Option/Stinger/
+// Command selection, so opening the Section preview doesn't require the
+// Section itself to be the literal selection (see the Section branch below).
+function findAncestorOrSelf(node, tagName) {
+	if (node.tagName === tagName) return node;
+	let cur = node;
+	while (cur && cur.parent) {
+		const parent = findNodeById(xmlStore.root, cur.parent);
+		if (!parent) return null;
+		if (parent.tagName === tagName) return parent;
+		cur = parent;
+	}
+	return null;
+}
+
 const template = document.createElement("template");
 template.innerHTML = `
 	<style>
@@ -207,16 +224,24 @@ export class WaPreview extends HTMLElement {
 			return;
 		}
 
-		if (node.tagName === "Section") {
-			// A plain click on a Section inside an already-open Composition
-			// preview only selects it (for the XML tree/Code panel) — it must
-			// NOT yank the panel away to the Section arrange view underneath
-			// the user, same "sticky active view" reasoning as the Mixer
-			// carve-out below. Only an explicit "open" (double-click, see
-			// xmlStore.selectNode's own `open` option) forces the switch.
-			// Per Hans (2026-09-05).
+		// A <Section>, or anything inside one (Layer/Segment/Option/Stinger/
+		// Command), opens that Section's own arrange view — resolved via its
+		// nearest Section ancestor (or itself) rather than requiring the
+		// Section to be the literal selection, so e.g. selecting straight
+		// into a <Layer> from the XML tree still shows something instead of
+		// falling through to a bare waveform/fallback view. Per Hans
+		// (2026-09-07). The one exception: a plain click on a Section (or
+		// its descendant) that already belongs to the Composition currently
+		// showing in the Composition preview only updates the tree/Code
+		// panel selection and leaves the panel where it is — same "sticky
+		// active view" reasoning as the Mixer carve-out below. Only an
+		// explicit "open" (double-click; xmlStore.selectNode's own `open`
+		// option) forces the switch away from Composition. Per Hans
+		// (2026-09-05).
+		const ancestorSection = findAncestorOrSelf(node, "Section");
+		if (ancestorSection) {
 			const forceOpen = e?.detail?.open === true;
-			if (!forceOpen && this._activeState === "composition" && isDescendantOfTag(node, "Composition")) {
+			if (!forceOpen && this._activeState === "composition" && isDescendantOfTag(ancestorSection, "Composition")) {
 				this._lastNodeId = node.id;
 				this._lastResolvedUrl = null;
 				return;
@@ -243,20 +268,6 @@ export class WaPreview extends HTMLElement {
 			// per Hans, selecting a <Wam> shows its own interface even when
 			// it's sitting inside a <Mixer> channel strip's insert chain.
 			this._showState("wam");
-			this._lastNodeId = node.id;
-			this._lastResolvedUrl = null;
-			return;
-		}
-
-		// Selecting one of a Section's own parts (e.g. clicking a Layer/Segment/
-		// Option box inside the arrange view itself, to select it for the
-		// Inspector or for multi-delete) shouldn't yank the whole panel away
-		// to a bare waveform view out from under the user — wa-section-view
-		// tracks its own active Section independently and keeps rendering it.
-		if (
-			COMPOSITION_CONTEXT_TAGS.has(node.tagName) &&
-			(this._activeState === "section" || (this._activeState === "composition" && isDescendantOfTag(node, "Composition")))
-		) {
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;

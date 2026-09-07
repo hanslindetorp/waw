@@ -728,6 +728,22 @@ template.innerHTML = `
 	</div>
 `;
 
+// Walks up from `node` (inclusive) to find the nearest enclosing <Section> —
+// `node` itself if it already is one, otherwise the first Section ancestor,
+// or null if it isn't inside one at all (Sections never nest, so there's
+// only ever at most one). Used by _onStoreChange to resolve which Section a
+// selection made anywhere in its subtree (Layer/Segment/Option/Stinger/...)
+// should show, not just a selection landing on the Section itself.
+function nearestSection(node) {
+	let cur = node;
+	while (cur) {
+		if (cur.tagName === "Section") return cur;
+		if (!cur.parent) return null;
+		cur = ops.findNodeById(xmlStore.root, cur.parent);
+	}
+	return null;
+}
+
 export class WaSectionView extends HTMLElement {
 	constructor() {
 		super();
@@ -851,17 +867,27 @@ export class WaSectionView extends HTMLElement {
 	// Section and tear this whole view down out from under the user — so we
 	// track our own active section id instead of trusting "is the currently
 	// selected node a Section" on every store change.
+	//
+	// The target Section is resolved via nearestSection (walking up from
+	// whatever's actually selected) rather than requiring the Section
+	// *itself* to be the literal selection — so selecting straight into a
+	// Layer/Segment/Option/Stinger from the XML tree, without first
+	// selecting its parent Section, still opens (or switches to) the right
+	// Section here. Per Hans (2026-09-07). A selection made *within* this
+	// same section (e.g. clicking one of its own boxes) still leaves
+	// _lastSectionId untouched, same as before.
 	_onStoreChange() {
 		const selected = xmlStore.getSelectedNode();
+		const targetSection = selected ? nearestSection(selected) : null;
 
-		if (selected && selected.tagName === "Section" && selected.id !== this._lastSectionId) {
+		if (targetSection && targetSection.id !== this._lastSectionId) {
 			this._teardownActive();
 			this._cursorTime = 0;
 			this._maxDecodedEnd = 0;
 			this._extendedDuration = 0;
 			this._openSegmentIds.clear();
 			this._selectedIds.clear();
-			this._lastSectionId = selected.id;
+			this._lastSectionId = targetSection.id;
 			this._lastSelfSelectedId = null;
 			// Arming the global player's PLAY button to target this Section
 			// (and, if already playing, immediately re-trig-ing it — browsing
@@ -1015,8 +1041,17 @@ export class WaSectionView extends HTMLElement {
 	// gesture — a mostly-horizontal pinch zooms time (pxPerSecond), a
 	// mostly-vertical one zooms row height, a diagonal one scales both —
 	// per Hans (2026-09-04): "olika på H- och V-axeln beroende på hur man
-	// pinchar". A plain mouse wheel (deltaX always 0) only ever zooms V as a
-	// result; the H/V buttons remain the mouse-friendly way to zoom time.
+	// pinchar". A genuine trackpad pinch, though, synthesizes as ctrl+wheel
+	// with only deltaY ever populated (a pinch isn't a directional X/Y
+	// gesture the way a two-finger swipe is, so deltaX stays ~0 regardless
+	// of pinch direction) — meaning horizontal zoom was effectively
+	// unreachable via the most common "pinch to zoom" gesture, only
+	// vertical ever responded (Hans, 2026-09-08: "nu funkar bara
+	// vertikal"). _onWheelZoom below falls back to deltaY driving both axes
+	// together (a uniform zoom) whenever deltaX is negligible; a genuine
+	// horizontal-only gesture (real deltaX, e.g. a dedicated horizontal
+	// scroll wheel) still zooms just that axis. The H/V buttons remain the
+	// fully independent, mouse-friendly way to zoom either axis alone.
 	//
 	// Horizontal zoom also keeps whatever time position is currently under
 	// the cursor visually fixed — captured (in the *old* pxPerSecond) before
@@ -1041,8 +1076,10 @@ export class WaSectionView extends HTMLElement {
 		}
 
 		// Negative delta = pinch out/zoom in, matching native browser
-		// page-zoom's own convention for this synthesized gesture.
-		const factorX = Math.exp(-e.deltaX * 0.01);
+		// page-zoom's own convention for this synthesized gesture. See the
+		// class-level comment above for why rawDeltaX falls back to deltaY.
+		const rawDeltaX = Math.abs(e.deltaX) > 0.01 ? e.deltaX : e.deltaY;
+		const factorX = Math.exp(-rawDeltaX * 0.01);
 		const factorY = Math.exp(-e.deltaY * 0.01);
 		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factorX));
 		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));

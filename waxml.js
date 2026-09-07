@@ -1809,8 +1809,8 @@ class AudioObject extends EventTarget{
       }
 
       val = Math.max(0, Math.min(val, 1));
-      if(this._params.quantize){
-        let delay = this.waxml.musicEngine.timeTo(this._params.quantize) * 1000;
+      if(this._params.syncTo){
+        let delay = this.waxml.musicEngine.timeTo(this._params.syncTo) * 1000;
         if(this.setSoloTimer){
           clearTimeout(this.setSoloTimer);
         }
@@ -10039,7 +10039,6 @@ class Parser {
 			case "audio":
 			case "waxml":
 			case "gainnode":
-			case "mixer":
 			case "voice":
 			case "include":
 			case "xi:include":
@@ -18781,7 +18780,7 @@ class Music extends EventTarget {
 				}
 				
 				// use setting from parent section if not set for the leadin
-				this.changeOnNext = this.parentObj.divisionToTime(this.parameters.changeOnNext || this.parentObj.parameters.changeOnNext);
+				this.changeOnNext = this.parentObj.divisionToTime(this.parameters.cuePoint || this.parentObj.parameters.cuePoint);
 				this.parameters.length = this.parentObj.divisionToTime(this.parameters.length);
 	
 				// this.parameters.length
@@ -18832,10 +18831,23 @@ class Music extends EventTarget {
 						obj.offset = obj.delay ? this.parentObj.divisionToTime(obj.delay) : obj.offset;
 						obj.offset = obj.upbeat ? -this.parentObj.divisionToTime(obj.upbeat) : obj.offset;
 						
-						if(!obj.offset){
+						// THis is the old way
+						// In WAXML 2.0, the attribute "changeOnNext" is renamed to "cuePoint".
+						// It applies to all Stingers (Motifs and Leadins) and is not related to  
+						// however offset (pos/delay etc.) is set. 
+
+						// if(!obj.offset){
+						// 	// cut in the middle of a file
+						// 	obj.changeOnNext = this.parentObj.divisionToTime(this.parameters.changeOnNext);
+						// }
+
+						if(obj.changeOnNext != "off"){
 							// cut in the middle of a file
-							obj.changeOnNext = this.parentObj.divisionToTime(this.parameters.changeOnNext);
+							obj.changeOnNext = this.parentObj.divisionToTime(this.parameters.cuePoint);
 						}
+
+
+
 					} else {
 	
 						console.error("Motif url is not correct: " + url);
@@ -19108,7 +19120,7 @@ class Music extends EventTarget {
 						
 					waxml.log([label, 
 						description, 
-						"changeOnNext: " + this.parameters.changeOnNext,
+						"changeOnNext: " + this.parameters.cuePoint,
 						posObjectToString(pos)
 					]);
 	
@@ -20348,6 +20360,7 @@ class Music extends EventTarget {
 		defaultParams.upbeat = 0;
 		defaultParams.partLength = "1/1";
 		defaultParams.changeOnNext = "1/1";
+		defaultParams.cuePoint = "off";
 		defaultParams.timeSign = {nominator: 4, denominator: 4};
 		defaultParams.fadeTime = 0.01;
 		defaultParams.offset = 0;
@@ -20376,7 +20389,7 @@ class Music extends EventTarget {
 			params.syncTo = params.syncTo || defaultParams.syncTo;
 			params.fadeTime = typeof params.fadeTime === "undefined" ? defaultParams.fadeTime : params.fadeTime;
 			params.partLength = params.partLength || defaultParams.partLength;
-			params.changeOnNext = params.changeOnNext || defaultParams.changeOnNext;
+			params.cuePoint = params.cuePoint || defaultParams.cuePoint;
 			params.retrig = params.retrig || defaultParams.retrig;
 			params.release = params.release || defaultParams.release;
 	
@@ -20547,6 +20560,7 @@ class Music extends EventTarget {
 	
 	
 				case "changeOnNext":
+				case "cuePoint":
 					
 				if(typeof value === "number"){
 					value /= 1000;
@@ -20897,14 +20911,26 @@ class Music extends EventTarget {
 							// for compatibility with iMusic, we will use a simple loop through all sections
 							// and find the first one that matches the from and to attributes.
 							defaultInstance.sections.forEach(section => {
-								if(section.parameters.from == `#${myInstance.currentSection.idString}` && section.parameters.to == `#${newSection.id}`){
+								if(section.parameters.from == `#${myInstance.currentSection.idString}` && section.parameters.to == `#${newSection.idString}`){
 									interludeSection = section;
 
 									// This is a bit of a hack, but it works for now. We will use the first tag of the interlude section as the interlude selector.
 									// It is used to trigger Stingers in the "from" section that matches the target transition/interlude section.
 									interludeSelector = section.tags[0];
 								}
+
 							});
+
+							if(!interludeSection){
+								// continue searching for interlude section
+								// using the "All"-setting for the "from" attribute.
+								defaultInstance.sections.forEach(section => {
+									if(section.parameters.from == "All" && section.parameters.to == `#${newSection.idString}`){
+										interludeSection = section;
+										interludeSelector = section.tags[0];
+									}
+								});
+							}
 
 						}
 						if(interludeSection && iMus.isPlaying()){

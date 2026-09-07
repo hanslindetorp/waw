@@ -155,13 +155,30 @@ export function createXmlNode(tagName, parentId) {
 	};
 }
 
-// A-Z, then A1/B1/.../Z1, A2/B2/... — per Hans (2026-09-02), every new
-// <Section> gets one of these as its `class` so it's addressable as a
-// PLAY/STOP trigger selector (see player-store.js) without the user having
-// to type one by hand. Picks the first value in that sequence not already
-// used as a `class` token anywhere in the document (space-separated, same as
-// any HTML/XML class attribute), so it stays collision-free against both
-// hand-set classes and previously auto-assigned ones, loaded document or not.
+// A, B, ..., Z, A1, B1, ..., Z1, A2, ... — the first value in that sequence
+// not already present in `used` (optionally prefixed, e.g. "Section-" — the
+// membership check is against the *prefixed* candidate, so `used` must
+// contain full, already-prefixed values too). Shared by generateSectionClass
+// (bare letter, e.g. "B") and backfillElementIds' <Section> id scheme
+// ("Section-B" — see there), per Hans (2026-09-08): the id scheme is
+// deliberately "en numrering matchande de automatiskt tilldelade
+// classNames" (a numbering matching the auto-assigned classNames).
+function nextLetterSequenceValue(used, prefix = "") {
+	for (let n = 0; ; n++) {
+		const letter = String.fromCharCode(65 + (n % 26));
+		const suffix = Math.floor(n / 26);
+		const candidate = prefix + (suffix > 0 ? `${letter}${suffix}` : letter);
+		if (!used.has(candidate)) return candidate;
+	}
+}
+
+// Per Hans (2026-09-02), every new <Section> gets one of these as its
+// `class` so it's addressable as a PLAY/STOP trigger selector (see
+// player-store.js) without the user having to type one by hand. Picks the
+// first value in the sequence above not already used as a `class` token
+// anywhere in the document (space-separated, same as any HTML/XML class
+// attribute), so it stays collision-free against both hand-set classes and
+// previously auto-assigned ones, loaded document or not.
 function usedClassTokens(node, set = new Set()) {
 	(node.attributes.class || "").split(/\s+/).filter(Boolean).forEach((t) => set.add(t));
 	node.children.forEach((c) => usedClassTokens(c, set));
@@ -169,11 +186,63 @@ function usedClassTokens(node, set = new Set()) {
 }
 
 export function generateSectionClass(root) {
-	const used = root ? usedClassTokens(root) : new Set();
-	for (let n = 0; ; n++) {
-		const letter = String.fromCharCode(65 + (n % 26));
-		const suffix = Math.floor(n / 26);
-		const candidate = suffix > 0 ? `${letter}${suffix}` : letter;
+	return nextLetterSequenceValue(root ? usedClassTokens(root) : new Set());
+}
+
+// Every id currently in the tree, any element/tag — used by
+// backfillElementIds' <Section>/transition id schemes so a freshly
+// auto-assigned id never collides with *anything* already present (hand-set
+// or previously auto-assigned, on any tag), guaranteeing real document-wide
+// uniqueness rather than just uniqueness-within-its-own-scheme. Unlike
+// backfillElementIds' other (per-tag numeric) counters — which track the
+// highest number ever used *persistently* across the whole session, so a
+// number is never reused even after its element is deleted — this only
+// ever looks at what's *currently* in the tree: the same "first free value,
+// reuse allowed after deletion" semantics as generateSectionClass itself,
+// which the Section-id scheme below deliberately mirrors.
+function usedIds(node, set = new Set()) {
+	if (node.attributes.id) set.add(node.attributes.id);
+	node.children.forEach((c) => usedIds(c, set));
+	return set;
+}
+
+// A "transition" Section is marked purely by having a `from`/`to` attribute
+// (mirrors section-model.js's own isTransitionSection — duplicated rather
+// than imported, keeping this file dependency-free of any other app
+// module, per its own header comment).
+function isTransitionSectionNode(node) {
+	return node.attributes.from !== undefined || node.attributes.to !== undefined;
+}
+
+// The short "target token" a transition's auto-id embeds — the part after
+// "Section-" in whatever its `to` attribute's #id points at (or that bare
+// id itself, if it doesn't happen to follow the "Section-<letter>" scheme)
+// — e.g. to="#Section-B" -> "B", to="#MyCustomId" -> "MyCustomId". Falls
+// back to "X" for a transition with no #id-shaped `to` at all (a class
+// selector, or missing/malformed — only reachable via hand-edited XML,
+// since the app's own "+" flow always writes a #id), so backfill can still
+// produce *some* valid, readable id rather than failing. Purely
+// string-based — deliberately doesn't need to resolve which actual Section
+// `to` points at.
+function transitionTargetToken(node) {
+	const to = node.attributes.to;
+	if (typeof to !== "string" || !to.startsWith("#")) return "X";
+	const targetId = to.slice(1);
+	return targetId.startsWith("Section-") ? targetId.slice("Section-".length) : targetId;
+}
+
+// "Transition-<targetToken><N>" — e.g. "Transition-B1" for the first
+// backfilled transition targeting "#Section-B", "Transition-B2" for the
+// next one targeting that same Section, per Hans (2026-09-08): "Den
+// avslutande siffran är en autoincrement för transitions kopplade till
+// efterföljande <Section>." N starts at 1 and is the first value not
+// already in `used` (same reuse-after-delete semantics as the rest of this
+// scheme) — checked against the *whole document's* ids (see usedIds), so
+// "id ska vara unikt" holds even against something on a completely
+// unrelated tag.
+function nextTransitionId(used, targetToken) {
+	for (let n = 1; ; n++) {
+		const candidate = `Transition-${targetToken}${n}`;
 		if (!used.has(candidate)) return candidate;
 	}
 }
@@ -213,8 +282,15 @@ export function findNodeById(root, id) {
 // _syncCode) otherwise guarantees. Stripping it here just leaves it
 // missing, which that same backfill pass picks up on the very next sync and
 // assigns a fresh one to, same as any other id-less element.
-export function cloneNode(node, newParentId) {
+//
+// idMap (optional): when passed, every original->new *internal* tree id pair
+// in the cloned subtree (this node and all descendants) is recorded into it —
+// used by xmlStore.copyNode/pasteIntoSelection so wa-xml-tree.js can carry a
+// collapsed node's expand/collapse state over to its fresh clone, which
+// otherwise has no id in common with the original.
+export function cloneNode(node, newParentId, idMap) {
 	const newId = generateNodeId();
+	if (idMap) idMap.set(node.id, newId);
 	const attributes = { ...node.attributes };
 	delete attributes.id;
 	return {
@@ -222,7 +298,7 @@ export function cloneNode(node, newParentId) {
 		id: newId,
 		attributes,
 		parent: newParentId,
-		children: node.children.map((c) => cloneNode(c, newId))
+		children: node.children.map((c) => cloneNode(c, newId, idMap))
 	};
 }
 
@@ -271,20 +347,33 @@ export function renameSrcReferences(root, schema, oldPath, newPath) {
 	};
 }
 
-// Auto-assigns "<TagName>-<N>" to any element missing an id (undefined or
-// empty) — so every element ends up addressable as a trig()/selector target
-// (e.g. "Stinger-1") without the user having to name it by hand, per Hans;
-// still freely editable afterward like any other attribute. The document's
-// own root element is exempt (per Hans) — it never gets an auto id, though
-// one it already has (hand-set, or from before this exemption existed)
-// isn't stripped.
+// Auto-assigns an id to any element missing one (undefined or empty) — so
+// every element ends up addressable as a trig()/selector target (e.g.
+// "Stinger-1") without the user having to name it by hand, per Hans; still
+// freely editable afterward like any other attribute. The document's own
+// root element is exempt (per Hans) — it never gets an auto id, though one
+// it already has (hand-set, or from before this exemption existed) isn't
+// stripped.
+//
+// A regular <Section> is special-cased to "Section-<letter>" (A, B, ..., Z,
+// A1, B1, ...) instead of the generic "TagName-N" scheme every other tag
+// gets — deliberately matching generateSectionClass's own sequence/
+// semantics (first free value *currently* in the tree, reuse allowed after
+// deletion — unlike every other tag's counters below), per Hans
+// (2026-09-08, changing from the previous "Section-1"-style numbering).
+// A transition Section (see isTransitionSectionNode) gets
+// "Transition-<targetToken><N>" instead — see nextTransitionId — so it's
+// visibly distinct from a regular Section's own id at a glance.
 //
 // counters (Map<tagName, highestUsedN>) is deliberately mutable/shared
 // across calls, unlike the rest of this file's pure tree functions — "never
 // reuse a number even after that element is deleted" needs history beyond
 // what the current tree alone can tell you, the same reason generateNodeId
 // above keeps its own persistent counter rather than deriving one fresh
-// from the tree each time.
+// from the tree each time. (A legacy hand-typed or previously-generated
+// "Section-<N>" id still ratchets counters.get("Section") up here, same as
+// any other tag — that's simply dead/unused going forward, since Section no
+// longer draws from it.)
 //
 // Two passes: first ratchet counters up from any ids *already* in the tree
 // that happen to match the "TagName-N" pattern for their own tag (hand-set
@@ -301,13 +390,25 @@ export function backfillElementIds(root, counters) {
 	};
 	ratchet(root);
 
+	const usedIdsSet = usedIds(root);
+
 	const assign = (node, isRoot) => {
 		const hasId = node.attributes.id !== undefined && node.attributes.id !== "";
 		let attributes = node.attributes;
 		if (!hasId && !isRoot) {
-			const n = (counters.get(node.tagName) || 0) + 1;
-			counters.set(node.tagName, n);
-			attributes = { ...node.attributes, id: `${node.tagName}-${n}` };
+			if (node.tagName === "Section" && isTransitionSectionNode(node)) {
+				const newId = nextTransitionId(usedIdsSet, transitionTargetToken(node));
+				usedIdsSet.add(newId);
+				attributes = { ...node.attributes, id: newId };
+			} else if (node.tagName === "Section") {
+				const newId = nextLetterSequenceValue(usedIdsSet, "Section-");
+				usedIdsSet.add(newId);
+				attributes = { ...node.attributes, id: newId };
+			} else {
+				const n = (counters.get(node.tagName) || 0) + 1;
+				counters.set(node.tagName, n);
+				attributes = { ...node.attributes, id: `${node.tagName}-${n}` };
+			}
 		}
 		return { ...node, attributes, children: node.children.map((c) => assign(c, false)) };
 	};

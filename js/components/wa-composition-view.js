@@ -4,11 +4,17 @@ import { playerStore } from "../waxml-integration/player-store.js";
 import {
 	readSectionInfo,
 	getLayers,
+	getSegments,
+	getOptions,
+	readPos,
+	readLength,
 	parseDivision,
 	secondsToLengthString,
 	sectionContentDuration,
 	groupCompositionSections
 } from "../xml-editor/section-model.js";
+import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
+import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 
 // Composition preview (see wa-preview.js) — a sibling of wa-section-view.js
 // at the same visual level (ruler on top, rows below, pinch/button zoom),
@@ -48,33 +54,26 @@ const RULER_HEIGHT = 28;
 // scrolla ut objekten ur vyn om man drar ... så långt till vänster."
 const LEFT_PAD_PX = 4000;
 
-// These three are coupled by design: a freshly-created transition (1 bar)
-// plus its fixed 1-bar left margin occupies exactly the same width as a
-// plain empty gap (2 bars) — don't change one without the others, per
-// Hans (2026-09-05).
 const GAP_BARS_DEFAULT = 2;
 const TRANSITION_LEFT_MARGIN_BARS = 1;
-const DEFAULT_TRANSITION_LENGTH = "1";
+const DEFAULT_TRANSITION_LENGTH = "2"; // bars, per Hans (2026-09-08)
 
 const MIN_TRANSITION_BARS = 0.25; // drag-resize floor, in bars of the transition's own tempo
+const WAVEFORM_COLOR = "#4fa3ff"; // same as wa-section-view.js's own WAVEFORM_COLOR
 
+// label > id > class > tagName, per Hans (2026-09-08, reverting the
+// label/class/id order from 2026-09-07) — class shown as just its first
+// token (a Section's class can hold more than one, same convention as
+// firstSelector below).
 function displayLabel(node) {
-	return node.attributes.label || node.attributes.id || node.attributes.class || node.tagName;
+	const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
+	return node.attributes.label || node.attributes.id || firstClass || node.tagName;
 }
 
 function firstSelector(node) {
 	const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
 	if (firstClass) return `.${firstClass}`;
 	return `#${node.attributes.id}`;
-}
-
-// A regular Section's first class token, falling back to its id if it has
-// no class — used to build a new transition's own `class` (see
-// _handleCreateTransition), not for a live trigger selector (firstSelector
-// above, which prefers a leading "." for that different purpose).
-function firstClassToken(node) {
-	const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
-	return firstClass || node.attributes.id;
 }
 
 // Grid-snapping for a transition edge drag (see _wireEdgeDrag) — same
@@ -179,6 +178,13 @@ template.innerHTML = `
 			align-items: center;
 			gap: 0.15rem;
 		}
+		/* Pushes both zoom groups (H and V) to the toolbar's right edge —
+		   an auto margin on the first flex item absorbs all the leading
+		   space, same technique as wa-section-view.js's own .zoom-controls.
+		   Per Hans (2026-09-08). */
+		.zoom-group:first-of-type {
+			margin-left: auto;
+		}
 		.zoom-label {
 			font-size: 0.7rem;
 			color: var(--waw-muted, #8a8a8a);
@@ -258,8 +264,8 @@ template.innerHTML = `
 			flex-direction: column;
 		}
 		.section-box {
-			background: #202531;
-			border: 1px solid #3a4252;
+			background: #1c2740;
+			border: 1px solid #33436b;
 		}
 		.section-box.selected, .transition-box.selected {
 			border-color: var(--waw-accent, #4fa3ff);
@@ -268,6 +274,33 @@ template.innerHTML = `
 		.transition-box {
 			background: #2a2320;
 			border: 1px solid #5a4a3a;
+		}
+		/* A regular Section can loop indefinitely (its own looping Layers) —
+		   shown as a small glyph in its own bottom-right corner, per Hans
+		   (2026-09-07). */
+		.loop-icon {
+			position: absolute;
+			right: 2px;
+			bottom: 1px;
+			font-size: 0.6rem;
+			line-height: 1;
+			color: #7fa8e8;
+			opacity: 0.8;
+			pointer-events: none;
+		}
+		/* A transition's end (where the shared column end/the "to" Section
+		   begins) gets an extra marker line just inside its right edge, per
+		   Hans (2026-09-07, nudged closer to the edge 2026-09-08) —
+		   distinct from .edge-handle.right, which is the wider invisible
+		   drag-grab area right at the true edge. */
+		.end-marker {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			right: 2px;
+			width: 1px;
+			background: rgba(255, 255, 255, 0.4);
+			pointer-events: none;
 		}
 		.box-label {
 			flex: 0 0 auto;
@@ -287,11 +320,18 @@ template.innerHTML = `
 			min-height: 0;
 		}
 		.layer-chip {
+			position: relative;
 			flex: 1 1 0;
 			background: #3a6ea8;
 			border-radius: 2px;
 			min-height: 2px;
 			opacity: 0.85;
+			overflow: hidden;
+		}
+		.waveform-canvas {
+			position: absolute;
+			top: 0;
+			height: 100%;
 		}
 		.edge-handle {
 			position: absolute;
@@ -389,6 +429,14 @@ template.innerHTML = `
 		.from-popup button:hover {
 			background: rgba(79, 163, 255, 0.15);
 		}
+		.from-popup-label {
+			padding: 0.2rem 0.5rem 0.35rem;
+			font-size: 0.68rem;
+			font-weight: 600;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+			color: var(--waw-muted, #8a8a8a);
+		}
 	</style>
 	<div class="toolbar">
 		<div class="zoom-group">
@@ -435,6 +483,7 @@ export class WaCompositionView extends HTMLElement {
 		this._rafId = null;
 		this._pendingBlinkTimer = null;
 		this._pendingMarkerEl = null;
+		this._bufferCache = new Map(); // resolvedUrl -> Promise<AudioBuffer|null>, same pattern as wa-section-view.js's own _decode
 
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 	}
@@ -510,7 +559,19 @@ export class WaCompositionView extends HTMLElement {
 		cursorOffsetPx = e.clientX - this._scroll.getBoundingClientRect().left;
 		cursorTimeSeconds = this._pxToTime(this._scroll.scrollLeft + cursorOffsetPx);
 
-		const factorX = Math.exp(-e.deltaX * 0.01);
+		// A genuine trackpad pinch synthesizes as ctrl+wheel with only
+		// deltaY ever populated — a pinch isn't a directional X/Y gesture
+		// the way a two-finger swipe is, so deltaX stays ~0 regardless of
+		// pinch direction. Without this fallback, horizontal (time) zoom
+		// was effectively unreachable via the most common "pinch to zoom"
+		// gesture — only vertical (row height) ever responded. Falls back
+		// to deltaY driving both axes together (a uniform zoom) whenever
+		// deltaX is negligible; a genuine horizontal-only gesture (real
+		// deltaX, e.g. a dedicated horizontal scroll wheel) still zooms
+		// just that axis, unaffected. Per Hans (2026-09-08): "nu funkar
+		// bara vertikal".
+		const rawDeltaX = Math.abs(e.deltaX) > 0.01 ? e.deltaX : e.deltaY;
+		const factorX = Math.exp(-rawDeltaX * 0.01);
 		const factorY = Math.exp(-e.deltaY * 0.01);
 		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factorX));
 		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));
@@ -522,6 +583,15 @@ export class WaCompositionView extends HTMLElement {
 		}
 	}
 
+	// Converts an ABSOLUTE time (measured from the timeline's real t=0) to a
+	// page-space pixel offset — i.e. anything used as a `left`/scrollLeft, or
+	// summed with one, needs the LEFT_PAD_PX runway baked in so it lines up
+	// with everything else on the (padded) page. Never use this for a bare
+	// DURATION/width or a position *relative to* an already-positioned
+	// ancestor (e.g. a ruler tick's offset within its own column) — those
+	// aren't page-space coordinates, so the constant pad term would just be
+	// spurious extra pixels tacked onto the value (see _secondsToPx for
+	// that case instead).
 	_timeToPx(seconds) {
 		return seconds * this._pxPerSecond + LEFT_PAD_PX;
 	}
@@ -530,6 +600,17 @@ export class WaCompositionView extends HTMLElement {
 	// way (cursor-anchored zoom, ruler click-to-trigger).
 	_pxToTime(px) {
 		return (px - LEFT_PAD_PX) / this._pxPerSecond;
+	}
+
+	// Pure seconds->pixels scaling, no LEFT_PAD_PX — for a width/duration or
+	// any offset already relative to a `position`ed ancestor (a ruler tick
+	// within its own column, a box's own width). Using _timeToPx for these
+	// instead (an easy mistake once that function existed) tacks a spurious
+	// +LEFT_PAD_PX onto every one of them — the bug behind transitions/
+	// plus-buttons rendering thousands of pixels too wide and the loop icon
+	// scrolling off past the visible area, reported by Hans (2026-09-07).
+	_secondsToPx(seconds) {
+		return seconds * this._pxPerSecond;
 	}
 
 	// --- rendering ---
@@ -546,7 +627,18 @@ export class WaCompositionView extends HTMLElement {
 			return;
 		}
 
-		const totalWidth = Math.max(this._scroll.clientWidth, this._timeToPx(layout.totalSeconds) + 40);
+		// The `clientWidth` term alone (the old formula) only guarantees no
+		// *negative* scrollable width — for a small/sparse composition (few
+		// bars of actual content), that left scrollWidth-clientWidth short
+		// of LEFT_PAD_PX, so the initial-scroll target below (which can be
+		// as large as LEFT_PAD_PX) got silently clamped by the browser to
+		// less than intended, leaving far more of the blank pad visible
+		// than the one-bar lead-in this is supposed to produce — read by
+		// Hans as the view being "scrolled too far to the right". Adding
+		// LEFT_PAD_PX here guarantees the full pad is always scrollable
+		// into, regardless of how little real content exists yet. Per Hans
+		// (2026-09-08).
+		const totalWidth = Math.max(this._scroll.clientWidth + LEFT_PAD_PX, this._timeToPx(layout.totalSeconds) + 40);
 		const totalHeight = layout.maxRows * this._rowHeight;
 
 		this._ruler.innerHTML = "";
@@ -574,8 +666,15 @@ export class WaCompositionView extends HTMLElement {
 		// paint instead of inline here.
 		if (this._needsInitialScroll) {
 			this._needsInitialScroll = false;
+			// Leaves about one bar of the pad visible rather than scrolling
+			// all the way to its edge — landing exactly on LEFT_PAD_PX put
+			// the very first "+" button (and the start of the timeline)
+			// flush against the left edge of the view with zero lead-in,
+			// which read as an odd, arbitrary offset. Per Hans (2026-09-07).
+			const leadInInfo = readSectionInfo(layout.regulars[0], node);
+			const leadInPx = this._secondsToPx(leadInInfo.barDuration);
 			requestAnimationFrame(() => {
-				this._scroll.scrollLeft = LEFT_PAD_PX;
+				this._scroll.scrollLeft = Math.max(0, LEFT_PAD_PX - leadInPx);
 			});
 		}
 
@@ -600,7 +699,7 @@ export class WaCompositionView extends HTMLElement {
 		if (col.kind === "gap") {
 			el.dataset.startSeconds = String(col.startSeconds);
 			el.style.left = `${this._timeToPx(col.startSeconds)}px`;
-			el.style.width = `${this._timeToPx(col.durationSeconds)}px`;
+			el.style.width = `${this._secondsToPx(col.durationSeconds)}px`;
 			return el; // blank, no ticks
 		}
 
@@ -621,7 +720,7 @@ export class WaCompositionView extends HTMLElement {
 
 		el.dataset.startSeconds = String(startSeconds);
 		el.style.left = `${this._timeToPx(startSeconds)}px`;
-		el.style.width = `${this._timeToPx(durationSeconds)}px`;
+		el.style.width = `${this._secondsToPx(durationSeconds)}px`;
 		this._populateRulerTicks(el, info, durationSeconds);
 		return el;
 	}
@@ -641,7 +740,7 @@ export class WaCompositionView extends HTMLElement {
 			if (barTime > durationSeconds + info.barDuration) break;
 			const barTick = document.createElement("div");
 			barTick.className = "ruler-bar";
-			barTick.style.left = `${this._timeToPx(barTime)}px`;
+			barTick.style.left = `${this._secondsToPx(barTime)}px`;
 			const num = document.createElement("span");
 			num.className = "num";
 			num.textContent = String(bar + 1);
@@ -652,7 +751,7 @@ export class WaCompositionView extends HTMLElement {
 				for (let beat = 1; beat < info.timeSign.numerator; beat++) {
 					const beatTick = document.createElement("div");
 					beatTick.className = "ruler-beat";
-					beatTick.style.left = `${this._timeToPx(barTime + beat * info.beatDuration)}px`;
+					beatTick.style.left = `${this._secondsToPx(barTime + beat * info.beatDuration)}px`;
 					el.appendChild(beatTick);
 				}
 			}
@@ -667,7 +766,7 @@ export class WaCompositionView extends HTMLElement {
 		if (xmlStore.selectedNodeId === cell.node.id) box.classList.add("selected");
 		box.style.left = `${this._timeToPx(cell.startSeconds)}px`;
 		box.style.top = "0px";
-		box.style.width = `${Math.max(4, this._timeToPx(cell.durationSeconds))}px`;
+		box.style.width = `${Math.max(4, this._secondsToPx(cell.durationSeconds))}px`;
 		box.style.height = `${this._rowHeight}px`;
 
 		const label = document.createElement("div");
@@ -677,15 +776,87 @@ export class WaCompositionView extends HTMLElement {
 
 		const chips = document.createElement("div");
 		chips.className = "layer-chips";
-		getLayers(cell.node).forEach(() => {
+		getLayers(cell.node).forEach((layer) => {
 			const chip = document.createElement("div");
 			chip.className = "layer-chip";
 			chips.appendChild(chip);
+			this._renderLayerWaveform(chip, layer, cell.info);
 		});
 		box.appendChild(chips);
 
+		const loopIcon = document.createElement("span");
+		loopIcon.className = "loop-icon";
+		loopIcon.textContent = "↻";
+		loopIcon.title = "Loops indefinitely until another Section is triggered";
+		box.appendChild(loopIcon);
+
 		this._wireBoxSelection(box, cell.node);
 		return box;
+	}
+
+	// A quick, static waveform preview inside a Layer's own chip — mirrors
+	// wa-section-view.js's own src-resolution walk (bare Layer src, or each
+	// Segment/Option's own src at its pos/length) but simplified: no drag
+	// preview, no incremental timeline growth, just draw-once-per-render, per
+	// Hans (2026-09-07). A chip is small, so this is a coarse preview, not a
+	// full editing surface.
+	_renderLayerWaveform(chip, layer, info) {
+		const schema = xmlStore.schema;
+		const drawAt = (srcValue, posSeconds, explicitLengthSeconds) => {
+			const resolvedUrl = resolvePlayableUrl(srcValue);
+			if (!resolvedUrl) return;
+			const canvas = document.createElement("canvas");
+			canvas.className = "waveform-canvas";
+			canvas.style.left = `${this._secondsToPx(posSeconds)}px`;
+			chip.appendChild(canvas);
+			this._decode(resolvedUrl).then((buffer) => {
+				if (!buffer || !canvas.isConnected) return;
+				const durationSeconds = explicitLengthSeconds ?? buffer.duration;
+				const widthPx = Math.max(1, this._secondsToPx(durationSeconds));
+				canvas.width = widthPx;
+				canvas.height = Math.max(1, chip.clientHeight);
+				canvas.style.width = `${widthPx}px`;
+				drawWaveform(canvas, buffer, WAVEFORM_COLOR);
+			});
+		};
+
+		const segments = getSegments(layer);
+		const directOptions = getOptions(layer);
+		if (segments.length === 0 && directOptions.length === 0) {
+			const srcAttr = findSrcAttribute(schema, layer);
+			if (srcAttr) drawAt(srcAttr.value, 0, null);
+			return;
+		}
+		directOptions.forEach((option) => {
+			const srcAttr = findSrcAttribute(schema, option);
+			if (srcAttr) drawAt(srcAttr.value, readPos(option, info), readLength(option, info));
+		});
+		segments.forEach((segment) => {
+			const segmentPos = readPos(segment, info);
+			const segmentSrcAttr = findSrcAttribute(schema, segment);
+			if (segmentSrcAttr) drawAt(segmentSrcAttr.value, segmentPos, readLength(segment, info));
+			getOptions(segment).forEach((option) => {
+				const optionSrcAttr = findSrcAttribute(schema, option);
+				if (optionSrcAttr) drawAt(optionSrcAttr.value, segmentPos, readLength(option, info));
+			});
+		});
+	}
+
+	// Decoded buffers are cached by URL across renders (this view fully
+	// rebuilds its DOM on every xmlStore change — see _renderComposition —
+	// so without this, re-selecting/scrolling would re-fetch/re-decode every
+	// audio file every time); canvases themselves are always rebuilt fresh.
+	_decode(url) {
+		if (!this._bufferCache.has(url)) {
+			this._bufferCache.set(
+				url,
+				decodeAudioBuffer(url, playerStore.audioContext).catch((err) => {
+					console.warn("Composition view: could not decode", url, err);
+					return null;
+				})
+			);
+		}
+		return this._bufferCache.get(url);
 	}
 
 	_buildTransitionBox(cell, layout) {
@@ -697,13 +868,17 @@ export class WaCompositionView extends HTMLElement {
 		if (xmlStore.selectedNodeId === cell.node.id) box.classList.add("selected");
 		box.style.left = `${this._timeToPx(cell.startSeconds)}px`;
 		box.style.top = `${cell.row * this._rowHeight}px`;
-		box.style.width = `${Math.max(4, this._timeToPx(cell.durationSeconds))}px`;
+		box.style.width = `${Math.max(4, this._secondsToPx(cell.durationSeconds))}px`;
 		box.style.height = `${this._rowHeight}px`;
 
 		const label = document.createElement("div");
 		label.className = "box-label";
 		label.textContent = displayLabel(cell.node);
 		box.appendChild(label);
+
+		const endMarker = document.createElement("div");
+		endMarker.className = "end-marker";
+		box.appendChild(endMarker);
 
 		const leftHandle = document.createElement("div");
 		leftHandle.className = "edge-handle left";
@@ -762,7 +937,7 @@ export class WaCompositionView extends HTMLElement {
 		btn.title = "Add a transition Section here";
 		btn.style.left = `${this._timeToPx(cell.startSeconds)}px`;
 		btn.style.top = `${cell.row * this._rowHeight + 4}px`;
-		btn.style.width = `${Math.max(16, this._timeToPx(cell.durationSeconds))}px`;
+		btn.style.width = `${Math.max(16, this._secondsToPx(cell.durationSeconds))}px`;
 		btn.style.height = `${this._rowHeight - 8}px`;
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
@@ -777,34 +952,35 @@ export class WaCompositionView extends HTMLElement {
 	// (never a guess) — `#id`, not a class, to stay unambiguous even when
 	// several Sections share a class. The FIRST transition created for a
 	// given target auto-sets `from` to the id of the Section to the left
-	// (no dropdown) — the very first gap has no such predecessor, so `from`
-	// is simply omitted there. Once a target already has a transition, the
-	// next "+" click for that same target opens the dropdown instead (never
-	// auto-guessed past the first one), listing every regular Section's id
-	// plus a leading "All" (omits `from` entirely). Per Hans (2026-09-06,
-	// reversing the "always show the dropdown" instruction from
-	// 2026-09-05). `class` is "<from>-<to>" built from each side's first
-	// class token (falling back to its id if it has none; "All" literally
-	// for the from side when that's what was picked or auto-omitted).
+	// (no dropdown) — EXCEPT for the very first gap (before the first
+	// regular Section), which has no such predecessor to guess from at all,
+	// so it opens the dropdown instead, same as every subsequent "+" click
+	// for a target that already has one. Per Hans (2026-09-08). Once a
+	// target already has a transition, the next "+" click for that same
+	// target opens the dropdown too (never auto-guessed past the first
+	// one), listing every regular Section's id plus a leading "All" (omits
+	// `from` entirely). No `class` is ever set here — a transition stays
+	// classless unless the user adds one by hand, per Hans (2026-09-08).
 	_handleCreateTransition(targetId, compositionNode, anchorEl) {
 		const layout = this._lastLayout;
 		const target = layout.regulars.find((r) => r.id === targetId);
 		if (!target) return;
-		const toLabel = firstClassToken(target);
 		const existing = layout.transitionsByTargetId.get(targetId) || [];
+		const targetIndex = layout.regulars.indexOf(target);
+		const predecessor = targetIndex > 0 ? layout.regulars[targetIndex - 1] : null;
 
-		if (existing.length === 0) {
-			const targetIndex = layout.regulars.indexOf(target);
-			const predecessor = targetIndex > 0 ? layout.regulars[targetIndex - 1] : null;
-			const attrs = { to: `#${target.attributes.id}`, length: DEFAULT_TRANSITION_LENGTH };
-			attrs.class = predecessor ? `${firstClassToken(predecessor)}-${toLabel}` : `All-${toLabel}`;
-			if (predecessor) attrs.from = `#${predecessor.attributes.id}`;
+		if (existing.length === 0 && predecessor) {
+			const attrs = {
+				to: `#${target.attributes.id}`,
+				length: DEFAULT_TRANSITION_LENGTH,
+				from: `#${predecessor.attributes.id}`
+			};
 			this._insertTransition(compositionNode, target, attrs);
 			return;
 		}
 
-		this._openFromPopup(anchorEl, layout.regulars, (fromValue, fromLabel) => {
-			const attrs = { to: `#${target.attributes.id}`, length: DEFAULT_TRANSITION_LENGTH, class: `${fromLabel}-${toLabel}` };
+		this._openFromPopup(anchorEl, layout.regulars, (fromValue) => {
+			const attrs = { to: `#${target.attributes.id}`, length: DEFAULT_TRANSITION_LENGTH };
 			if (fromValue !== null) attrs.from = fromValue;
 			this._insertTransition(compositionNode, target, attrs);
 		});
@@ -817,10 +993,8 @@ export class WaCompositionView extends HTMLElement {
 		xmlStore.insertNewChild(compNow.id, "Section", attrs, targetIndex < 0 ? undefined : targetIndex);
 	}
 
-	// onChoose(fromValue, fromLabel): fromValue is null for "All" (omit
-	// `from` entirely) — fromLabel is always the human/class-token form
-	// ("All", or that Section's first class token/id), used to build the
-	// new transition's own class (see _handleCreateTransition).
+	// onChoose(fromValue): fromValue is null for "All" (omit `from` entirely),
+	// otherwise the picked Section's "#id".
 	_openFromPopup(anchorEl, regulars, onChoose) {
 		const popup = document.createElement("div");
 		popup.className = "from-popup";
@@ -828,11 +1002,16 @@ export class WaCompositionView extends HTMLElement {
 		popup.style.left = `${rect.left}px`;
 		popup.style.top = `${rect.bottom + 4}px`;
 
+		const label = document.createElement("div");
+		label.className = "from-popup-label";
+		label.textContent = "From Section:";
+		popup.appendChild(label);
+
 		const allBtn = document.createElement("button");
 		allBtn.type = "button";
 		allBtn.textContent = "All";
 		allBtn.addEventListener("click", () => {
-			onChoose(null, "All");
+			onChoose(null);
 			popup.remove();
 		});
 		popup.appendChild(allBtn);
@@ -842,7 +1021,7 @@ export class WaCompositionView extends HTMLElement {
 			btn.type = "button";
 			btn.textContent = `#${r.attributes.id}`;
 			btn.addEventListener("click", () => {
-				onChoose(`#${r.attributes.id}`, firstClassToken(r));
+				onChoose(`#${r.attributes.id}`);
 				popup.remove();
 			});
 			popup.appendChild(btn);
@@ -928,12 +1107,46 @@ export class WaCompositionView extends HTMLElement {
 			const scrollFollowsCursor = edge === "left" && isRow0;
 			const initialScrollLeft = this._scroll.scrollLeft;
 
-			const rulerShowsThisRow = (this._lastSelectedTransitionIdByTarget.get(cell.targetId) || siblings[0]?.id) === cell.node.id;
-			const ownRulerCol = rulerShowsThisRow ? this._ruler.querySelector(`.ruler-col[data-target-id="${cell.targetId}"]`) : null;
+			// Whichever row you actually grab an edge on becomes the stack's
+			// "selected for ruler" row right away — previously the ruler (the
+			// one shared timeline strip above a stacked column) only ever
+			// synced to whatever was last *clicked*, so dragging a row that
+			// wasn't already selected silently left the ruler showing a
+			// different row's ticks throughout the whole drag. Per Hans
+			// (2026-09-07): "TimeLine följer inte med" when dragging row 1.
+			this._lastSelectedTransitionIdByTarget.set(cell.targetId, cell.node.id);
+			const ownRulerCol = this._ruler.querySelector(`.ruler-col[data-target-id="${cell.targetId}"]`);
+			// The ruler column is one shared DOM node per stacked target (not
+			// one per row) — its ticks were last populated for whichever row
+			// was selected *before* this drag, so it needs an immediate
+			// resync to this row's own start/duration before onMove's
+			// incremental updates take over.
+			if (ownRulerCol) {
+				ownRulerCol.style.left = `${this._timeToPx(originalStart)}px`;
+				ownRulerCol.style.width = `${Math.max(4, this._secondsToPx(originalDuration))}px`;
+				this._populateRulerTicks(ownRulerCol, info, originalDuration);
+			}
 			const sameColumnElements = [...this._rows.querySelectorAll(`[data-target-id="${cell.targetId}"]`)].filter((el) => el !== box);
 			const others = [...this._rows.querySelectorAll("[data-start-seconds]"), ...this._ruler.querySelectorAll("[data-start-seconds]")].filter(
 				(el) => el.dataset.targetId !== cell.targetId
 			);
+
+			// The .rows/.ruler containers' explicit width is only ever set at
+			// full-render time (see _renderComposition's totalWidth), sized
+			// just barely enough for the content that existed *then* (+40px
+			// margin) — a live behavesAsRightEdge drag can push content well
+			// past that without ever re-running a full render, so the
+			// scrollable area's own max-scroll (governed by that stale
+			// width) gets hit almost immediately and further scrollLeft
+			// writes are silently clamped by the browser itself, well before
+			// this handler's own Math.max(0, ...) floor is ever the limiting
+			// factor. onMove grows these live, on demand, to whatever the
+			// drag currently needs. Per Hans (2026-09-07): dragging row 0's
+			// left edge "följer med bit, sedan släpper den".
+			const growContainersTo = (widthPx) => {
+				if (parseFloat(this._rows.style.width) < widthPx) this._rows.style.width = `${widthPx}px`;
+				if (parseFloat(this._ruler.style.width) < widthPx) this._ruler.style.width = `${widthPx}px`;
+			};
 
 			let committedDuration = originalDuration;
 
@@ -948,18 +1161,26 @@ export class WaCompositionView extends HTMLElement {
 				let newDuration = edge === "left" ? originalDuration - snappedDeltaSeconds : originalDuration + snappedDeltaSeconds;
 				newDuration = Math.max(minDuration, newDuration);
 				committedDuration = newDuration;
+				const endDelta = newDuration - originalDuration;
+
+				if (behavesAsRightEdge) {
+					// Must happen before the scrollLeft write below — growing
+					// the containers *after* would be too late, since the
+					// browser has already clamped that write to whatever the
+					// (still-stale) scrollWidth allowed at that instant.
+					growContainersTo(this._timeToPx(layout.totalSeconds + endDelta) + 40);
+				}
 
 				if (scrollFollowsCursor) {
 					this._scroll.scrollLeft = Math.max(0, initialScrollLeft - (moveEvt.clientX - startClientX));
 				}
 
 				if (behavesAsRightEdge) {
-					const endDelta = newDuration - originalDuration;
 					box.style.left = `${this._timeToPx(originalStart)}px`;
-					box.style.width = `${Math.max(4, this._timeToPx(newDuration))}px`;
+					box.style.width = `${Math.max(4, this._secondsToPx(newDuration))}px`;
 					if (ownRulerCol) {
 						ownRulerCol.style.left = `${this._timeToPx(originalStart)}px`;
-						ownRulerCol.style.width = `${Math.max(4, this._timeToPx(newDuration))}px`;
+						ownRulerCol.style.width = `${Math.max(4, this._secondsToPx(newDuration))}px`;
 						this._populateRulerTicks(ownRulerCol, info, newDuration);
 					}
 					sameColumnElements.forEach((el) => {
@@ -974,10 +1195,10 @@ export class WaCompositionView extends HTMLElement {
 					const startDelta = originalDuration - newDuration;
 					const newStart = originalStart + startDelta;
 					box.style.left = `${this._timeToPx(newStart)}px`;
-					box.style.width = `${Math.max(4, this._timeToPx(newDuration))}px`;
+					box.style.width = `${Math.max(4, this._secondsToPx(newDuration))}px`;
 					if (ownRulerCol) {
 						ownRulerCol.style.left = `${this._timeToPx(newStart)}px`;
-						ownRulerCol.style.width = `${Math.max(4, this._timeToPx(newDuration))}px`;
+						ownRulerCol.style.width = `${Math.max(4, this._secondsToPx(newDuration))}px`;
 						this._populateRulerTicks(ownRulerCol, info, newDuration);
 					}
 					others.forEach((el) => {

@@ -55,10 +55,14 @@ class XmlStore extends EventTarget {
 	// --- selection ---
 
 	// open: true marks this selection as an explicit "open this element's
-	// own dedicated view" request (e.g. double-clicking a Section inside
-	// wa-composition-view.js) rather than a plain "just select it" click —
-	// wa-preview.js reads this off the "change" event's detail to decide
-	// whether to switch panels or stay put. Per Hans (2026-09-05).
+	// own dedicated view" request — double-clicking a Section inside
+	// wa-composition-view.js (2026-09-05), and every plain click in
+	// wa-xml-tree.js (2026-09-08, since a click in the tree is always an
+	// explicit "take me to this element", unlike a plain click *inside* a
+	// preview view itself, e.g. wa-composition-view.js's own single-click,
+	// which omits this and defaults to false) — rather than a plain "just
+	// select it" click. wa-preview.js reads this off the "change" event's
+	// detail to decide whether to switch panels or stay put.
 	selectNode(id, { open = false } = {}) {
 		this.selectedNodeId = id;
 		this.selectedNodeIds = new Set(id ? [id] : []);
@@ -223,14 +227,18 @@ class XmlStore extends EventTarget {
 		return nodes.filter((n) => !nodes.some((other) => other.id !== n.id && ops.isDescendantOf(other, n.id)));
 	}
 
-	// Snapshots clones of the current selection (ids intact for now — see
-	// pasteIntoSelection, which strips them fresh per paste so every paste
-	// of the same copy gets its own unique ids, and a copy can be pasted
-	// more than once).
+	// Snapshots the current selection by reference, ids intact — safe without
+	// cloning because every xml-tree-ops.js mutator is non-mutating (an edit
+	// elsewhere always produces fresh node objects rather than touching these
+	// in place). Keeping the *original* ids here (rather than stripping them
+	// now) is deliberate: pasteIntoSelection re-clones fresh per paste anyway
+	// (so a copy can be pasted more than once, each with its own new ids),
+	// and cloning from the original ids lets it build an old-id->new-id map
+	// wa-xml-tree.js uses to carry over collapsed/expanded state.
 	copySelection() {
 		const nodes = this._topLevelSelection();
 		if (!nodes.length) return false;
-		this._clipboard = { mode: "copy", nodes: nodes.map((n) => ops.cloneNode(n, null)) };
+		this._clipboard = { mode: "copy", nodes };
 		this._emit(false); // lets wa-edit-menu.js re-enable Paste
 		return true;
 	}
@@ -253,6 +261,17 @@ class XmlStore extends EventTarget {
 
 	hasClipboard() {
 		return !!this._clipboard && this._clipboard.nodes.length > 0;
+	}
+
+	// Escape: "let go" of a pending cut — clears the clipboard (and the
+	// "marked for cut" dashed row style in wa-xml-tree.js) without moving
+	// anything, since a cut never touches the document until a paste actually
+	// lands (see cutSelection above). A no-op for a copy clipboard — there's
+	// nothing "cut" to release. Per Hans (2026-09-07).
+	clearPendingCut() {
+		if (this._clipboard?.mode !== "cut") return;
+		this._clipboard = null;
+		this._emit(false);
 	}
 
 	// Read by wa-xml-tree.js to dim/dash the rows currently marked for a
@@ -297,31 +316,39 @@ class XmlStore extends EventTarget {
 				this.root = ops.reparentNode(this.root, n.id, target.id);
 			});
 			this._clipboard = null; // a move is consumed after one paste
+			this._syncCode();
 		} else {
 			// cloneNode strips ids (see its own comment) — _syncCode's
 			// backfill below assigns each one a fresh, unique id, so pasting
-			// the same copy repeatedly never collides either.
+			// the same copy repeatedly never collides either. idMap collects
+			// every original->new internal id pair across the whole pasted
+			// subtree(s), so wa-xml-tree.js can carry over each node's own
+			// collapsed/expanded state to its fresh clone.
+			const idMap = new Map();
 			sourceNodes.forEach((n) => {
-				const clone = ops.cloneNode(n, target.id);
+				const clone = ops.cloneNode(n, target.id, idMap);
 				this.root = ops.insertChild(this.root, target.id, clone);
 			});
+			this._syncCode(true, { idMap });
 		}
 
-		this._syncCode();
 		return { ok: true };
 	}
 
-copyNode(nodeId) {
+// idMap (see cloneNode) lets wa-xml-tree.js carry the duplicated node's own
+	// collapsed/expanded state over to its fresh clone.
+	copyNode(nodeId) {
 		if (!this.root) return;
 		const node = ops.findNodeById(this.root, nodeId);
 		if (!node || !node.parent) return; // can't copy root in place
-		const copy = ops.cloneNode(node, node.parent);
+		const idMap = new Map();
+		const copy = ops.cloneNode(node, node.parent, idMap);
 		const parent = ops.findNodeById(this.root, node.parent);
 		if (!parent) return;
 		const idx = parent.children.findIndex((c) => c.id === nodeId);
 		this.root = ops.insertChild(this.root, node.parent, copy, idx + 1);
 		this.selectedNodeId = copy.id;
-		this._syncCode();
+		this._syncCode(true, { idMap });
 	}
 
 	reparentNode(nodeId, newParentId, index) {
@@ -452,7 +479,7 @@ copyNode(nodeId) {
 	// engine stop): whether this edit could have changed the *shape* the
 	// live waxml audio graph needs (nodes added/removed/reordered/retyped),
 	// as opposed to just a value on an already-existing node.
-	_syncCode(structural = true) {
+	_syncCode(structural = true, extra = {}) {
 		if (this.root) {
 			this.root = ops.backfillElementIds(this.root, this._idCounters);
 			const { xml, lineMap } = ops.generateFullXmlWithLineMap(this.root);
@@ -462,7 +489,7 @@ copyNode(nodeId) {
 			this.codeValue = EMPTY_XML;
 			this.lineMap = new Map();
 		}
-		this._emit(structural);
+		this._emit(structural, extra);
 	}
 
 	_emit(structural = true, extra = {}) {
