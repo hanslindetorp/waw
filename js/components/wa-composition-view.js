@@ -8,6 +8,7 @@ import {
 	getOptions,
 	readPos,
 	readLength,
+	readEffectiveLoopEnd,
 	parseDivision,
 	secondsToLengthString,
 	sectionContentDuration,
@@ -38,8 +39,12 @@ const MIN_PX_PER_SEC = 5;
 const MAX_PX_PER_SEC = 400;
 const DEFAULT_PX_PER_SEC = 30;
 const MIN_ROW_HEIGHT = 28;
-const MAX_ROW_HEIGHT = 120;
-const DEFAULT_ROW_HEIGHT = 48;
+const MAX_ROW_HEIGHT = 240;
+// Starts about double wa-section-view.js's own DEFAULT_ROW_HEIGHT (56) —
+// regular Sections show a loop circle rather than Layer/waveform detail
+// (see _buildSectionBox), which reads better with more room to begin with.
+// Per Hans (2026-09-08).
+const DEFAULT_ROW_HEIGHT = 112;
 const RULER_HEIGHT = 28;
 
 // Blank runway rendered before time 0, purely so there's always somewhere
@@ -275,18 +280,64 @@ template.innerHTML = `
 			background: #2a2320;
 			border: 1px solid #5a4a3a;
 		}
-		/* A regular Section can loop indefinitely (its own looping Layers) —
-		   shown as a small glyph in its own bottom-right corner, per Hans
-		   (2026-09-07). */
-		.loop-icon {
+		/* A regular Section loops indefinitely rather than playing a fixed
+		   linear span — its own Layers/waveforms aren't shown (per Hans,
+		   2026-09-08: "inte ha sina <Layer>s synliga"); instead a spinning
+		   ring/dot represents the loop, one full revolution per the
+		   Section's own loop length (see _loopCycleSeconds), mirroring
+		   Logic/Ableton's loop-clip convention. Only actually spins while
+		   *this* Section is the one really playing (see .spinning /
+		   _updateLoopCircles) — otherwise it sits paused straight up
+		   (rotate(0deg), the animation's own 0% keyframe), per Hans
+		   (2026-09-08). The wrap's padding reserves room for the dot's own
+		   overhang (it sits slightly outside the ring itself) on every
+		   side, since it revolves all the way around; the circle's own
+		   pixel size is computed in JS from the wrap's *actual* measured
+		   content box (_populateLoopCircle) rather than guessed from
+		   rowHeight, so it can never spill past the Section box's own
+		   edges at a small row height (zoomed far out vertically). */
+		.loop-circle-wrap {
+			flex: 1 1 auto;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 0;
+			min-height: 0;
+			padding: 5px;
+		}
+		.loop-circle {
+			/* Shadow DOM doesn't inherit main.css's global "* {box-sizing:
+			   border-box}" reset — without this, the 2px border rendered
+			   *outside* the explicit width/height _populateLoopCircle
+			   computes, inflating the actual size past what was measured
+			   to fit and spilling back out past the Section box's edge
+			   despite that math already accounting for it. Per Hans
+			   (2026-09-08), same underlying class of bug as .section-box/
+			   .transition-box already guard against below. */
+			box-sizing: border-box;
+			position: relative;
+			border-radius: 50%;
+			border: 2px solid rgba(127, 168, 232, 0.35);
+			animation: loop-spin linear infinite;
+			animation-play-state: paused;
+			transform: rotate(0deg);
+		}
+		.loop-circle.spinning {
+			animation-play-state: running;
+		}
+		.loop-circle-dot {
 			position: absolute;
-			right: 2px;
-			bottom: 1px;
-			font-size: 0.6rem;
-			line-height: 1;
-			color: #7fa8e8;
-			opacity: 0.8;
-			pointer-events: none;
+			top: -3px;
+			left: 50%;
+			width: 6px;
+			height: 6px;
+			margin-left: -3px;
+			border-radius: 50%;
+			background: #7fa8e8;
+		}
+		@keyframes loop-spin {
+			from { transform: rotate(0deg); }
+			to { transform: rotate(360deg); }
 		}
 		/* A transition's end (where the shared column end/the "to" Section
 		   begins) gets an extra marker line just inside its right edge, per
@@ -660,10 +711,17 @@ export class WaCompositionView extends HTMLElement {
 		this._rows.style.height = `${totalHeight}px`;
 
 		layout.cells.forEach((cell) => {
-			if (cell.kind === "section") this._rows.appendChild(this._buildSectionBox(cell));
-			else if (cell.kind === "transition") this._rows.appendChild(this._buildTransitionBox(cell, layout));
+			if (cell.kind === "section") {
+				const box = this._buildSectionBox(cell, node);
+				this._rows.appendChild(box);
+				// Sized only once actually connected to the live DOM — see
+				// _populateLoopCircle's own comment for why (clientWidth/
+				// clientHeight of a still-detached element always read 0).
+				this._populateLoopCircle(box.querySelector(".loop-circle-wrap"), cell, node);
+			} else if (cell.kind === "transition") this._rows.appendChild(this._buildTransitionBox(cell, layout));
 			else if (cell.kind === "plus") this._rows.appendChild(this._buildPlusButton(cell, node));
 		});
+		this._updateLoopCircles();
 
 		// Scrolls the fixed pre-roll pad out of view once per newly-selected
 		// Composition — see _wireEdgeDrag's own use of LEFT_PAD_PX for why
@@ -718,27 +776,25 @@ export class WaCompositionView extends HTMLElement {
 		const el = document.createElement("div");
 		el.className = "ruler-col";
 
-		if (col.kind === "gap") {
+		if (col.kind === "gap" || col.kind === "section") {
+			// A regular Section loops indefinitely rather than representing a
+			// fixed linear span of time — a bar/beat ruler above it wouldn't
+			// mean anything, so it stays blank, same as an empty gap. Per
+			// Hans (2026-09-08): "Vanliga <Section> ska inte ha någon
+			// tidlinjal... Det ska bara vara tomt."
 			el.dataset.startSeconds = String(col.startSeconds);
 			el.style.left = `${this._timeToPx(col.startSeconds)}px`;
 			el.style.width = `${this._secondsToPx(col.durationSeconds)}px`;
 			return el; // blank, no ticks
 		}
 
-		el.dataset.targetId = col.kind === "transitions" ? col.targetId : "";
+		el.dataset.targetId = col.targetId;
 
-		let startSeconds, durationSeconds, info;
-		if (col.kind === "transitions") {
-			const selectedId = this._lastSelectedTransitionIdByTarget.get(col.targetId);
-			const selected = col.rowRanges.find((r) => r.node.id === selectedId) || col.rowRanges[0];
-			startSeconds = selected.startSeconds;
-			durationSeconds = selected.durationSeconds;
-			info = selected.info;
-		} else {
-			startSeconds = col.startSeconds;
-			durationSeconds = col.durationSeconds;
-			info = col.info;
-		}
+		const selectedId = this._lastSelectedTransitionIdByTarget.get(col.targetId);
+		const selected = col.rowRanges.find((r) => r.node.id === selectedId) || col.rowRanges[0];
+		const startSeconds = selected.startSeconds;
+		const durationSeconds = selected.durationSeconds;
+		const info = selected.info;
 
 		el.dataset.startSeconds = String(startSeconds);
 		el.style.left = `${this._timeToPx(startSeconds)}px`;
@@ -780,7 +836,14 @@ export class WaCompositionView extends HTMLElement {
 		}
 	}
 
-	_buildSectionBox(cell) {
+	// A regular Section doesn't show its own Layers/waveforms — unlike a
+	// transition (see _buildTransitionBox), it doesn't represent a fixed
+	// linear span of time at all, it loops indefinitely until another
+	// Section is triggered, so a spinning ring stands in for that instead.
+	// Per Hans (2026-09-08): "av en cirkel i mitten som snurrar för att
+	// representera en loop - ungefär som i Logics loop-del eller Ableton
+	// Lives loopade clips."
+	_buildSectionBox(cell, compositionNode) {
 		const box = document.createElement("div");
 		box.className = "section-box";
 		box.dataset.nodeId = cell.node.id;
@@ -796,24 +859,69 @@ export class WaCompositionView extends HTMLElement {
 		label.textContent = displayLabel(cell.node);
 		box.appendChild(label);
 
-		const chips = document.createElement("div");
-		chips.className = "layer-chips";
-		getLayers(cell.node).forEach((layer) => {
-			const chip = document.createElement("div");
-			chip.className = "layer-chip";
-			chips.appendChild(chip);
-			this._renderLayerWaveform(chip, layer, cell.info);
-		});
-		box.appendChild(chips);
-
-		const loopIcon = document.createElement("span");
-		loopIcon.className = "loop-icon";
-		loopIcon.textContent = "↻";
-		loopIcon.title = "Loops indefinitely until another Section is triggered";
-		box.appendChild(loopIcon);
+		// Left empty here — populated by _populateLoopCircle once this box
+		// is actually connected to the DOM (see the render loop that calls
+		// _buildSectionBox), since sizing it correctly needs this wrap's
+		// real, laid-out dimensions.
+		const circleWrap = document.createElement("div");
+		circleWrap.className = "loop-circle-wrap";
+		box.appendChild(circleWrap);
 
 		this._wireBoxSelection(box, cell.node);
 		return box;
+	}
+
+	// Builds the actual spinning ring, sized to exactly fill circleWrap's
+	// *measured* available space (capped at 48px) rather than a guess
+	// derived from rowHeight — the guess broke down at a small row height
+	// (zoomed far out vertically), where the box-label's own height eats a
+	// larger *proportion* of the box, leaving less room than the guess
+	// assumed, and the ring spilled out past the Section box's own bottom
+	// edge. Must run after circleWrap is connected to the live DOM
+	// (clientWidth/clientHeight of a still-detached element always read 0).
+	// Per Hans (2026-09-08).
+	_populateLoopCircle(circleWrap, cell, compositionNode) {
+		if (!circleWrap) return;
+		// clientWidth/clientHeight are the wrap's padding-BOX size (content
+		// + its own padding) — that padding is exactly the clearance
+		// reserved for the dot's overhang (see the CSS comment), so it has
+		// to be subtracted back out here, or the circle ends up sized to
+		// fill the padding too and spills past it right back out again.
+		const style = getComputedStyle(circleWrap);
+		const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+		const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+		const available = Math.max(0, Math.min(circleWrap.clientWidth - paddingX, circleWrap.clientHeight - paddingY));
+		const size = Math.max(6, Math.min(available, 48));
+
+		const circle = document.createElement("div");
+		circle.className = "loop-circle";
+		circle.dataset.sectionId = cell.node.id;
+		circle.style.width = `${size}px`;
+		circle.style.height = `${size}px`;
+		circle.style.animationDuration = `${this._loopCycleSeconds(cell.node, cell.info, compositionNode)}s`;
+		circle.title = "Loops indefinitely until another Section is triggered";
+		const dot = document.createElement("div");
+		dot.className = "loop-circle-dot";
+		circle.appendChild(dot);
+		circleWrap.appendChild(circle);
+	}
+
+	// One revolution = the longest effective loopEnd among this Section's
+	// own Layers (readEffectiveLoopEnd already resolves the
+	// Composition->Section->Layer inheritance chain, per section-model.js)
+	// — falling back to the Section's own raw content duration (cell.info's
+	// caller already computed this as cell.durationSeconds; sectionContentDuration
+	// recomputes the same thing here since only the node/info are on hand)
+	// when no Layer has an explicit loopEnd anywhere in the chain, so the
+	// circle still has *some* sensible, non-zero cycle length.
+	_loopCycleSeconds(sectionNode, info, compositionNode) {
+		let maxLoopEnd = null;
+		getLayers(sectionNode).forEach((layer) => {
+			const loopEnd = readEffectiveLoopEnd(layer, sectionNode, compositionNode, info);
+			if (loopEnd !== null && (maxLoopEnd === null || loopEnd > maxLoopEnd)) maxLoopEnd = loopEnd;
+		});
+		if (maxLoopEnd !== null) return maxLoopEnd;
+		return sectionContentDuration(sectionNode, info) || info.barDuration;
 	}
 
 	// A quick, static waveform preview inside a Layer's own chip — mirrors
@@ -881,6 +989,23 @@ export class WaCompositionView extends HTMLElement {
 		return this._bufferCache.get(url);
 	}
 
+	// A transition plays once, linearly — unlike a regular Section (see
+	// _buildSectionBox), showing its own Layers/waveforms is exactly what's
+	// wanted here. Per Hans (2026-09-08): "Transitions behöver visa sina
+	// <Layer> (som vanliga <Section> gör nu)" — i.e. keep doing what
+	// regular Sections used to do, just move it here.
+	_buildLayerChips(sectionNode, info) {
+		const chips = document.createElement("div");
+		chips.className = "layer-chips";
+		getLayers(sectionNode).forEach((layer) => {
+			const chip = document.createElement("div");
+			chip.className = "layer-chip";
+			chips.appendChild(chip);
+			this._renderLayerWaveform(chip, layer, info);
+		});
+		return chips;
+	}
+
 	_buildTransitionBox(cell, layout) {
 		const box = document.createElement("div");
 		box.className = "transition-box";
@@ -897,6 +1022,8 @@ export class WaCompositionView extends HTMLElement {
 		label.className = "box-label";
 		label.textContent = displayLabel(cell.node);
 		box.appendChild(label);
+
+		box.appendChild(this._buildLayerChips(cell.node, cell.info));
 
 		const endMarker = document.createElement("div");
 		endMarker.className = "end-marker";
@@ -1001,7 +1128,11 @@ export class WaCompositionView extends HTMLElement {
 			return;
 		}
 
-		this._openFromPopup(anchorEl, layout.regulars, (fromValue) => {
+		// A transition can't logically play *from* the very Section it's
+		// transitioning *to* — exclude the target itself from the "from"
+		// choices. Per Hans (2026-09-08).
+		const fromCandidates = layout.regulars.filter((r) => r.id !== target.id);
+		this._openFromPopup(anchorEl, fromCandidates, (fromValue) => {
 			const attrs = { to: `#${target.attributes.id}`, length: DEFAULT_TRANSITION_LENGTH };
 			if (fromValue !== null) attrs.from = fromValue;
 			this._insertTransition(compositionNode, target, attrs);
@@ -1439,6 +1570,7 @@ export class WaCompositionView extends HTMLElement {
 	// Layers) — the pointer mirrors that by jumping back to bar 1 of that
 	// same Section every time it passes sectionContentDuration, per Hans.
 	_updatePlayheadVisual() {
+		this._updateLoopCircles();
 		this.shadowRoot.querySelectorAll(".playhead").forEach((el) => el.remove());
 		if (!this._isPlaying || !this._playingSectionId || !this._lastLayout) return;
 
@@ -1450,6 +1582,20 @@ export class WaCompositionView extends HTMLElement {
 		marker.className = "playhead";
 		marker.style.left = `${this._timeToPx(cell.startSeconds + localTime)}px`;
 		this._rows.appendChild(marker);
+	}
+
+	// Toggles which Section's loop circle (if any) is actually spinning —
+	// running for exactly the one Section currently playing, paused
+	// straight up (see .loop-circle's own base rule) for every other one,
+	// including all of them while nothing is playing at all. Runs every
+	// animation frame (via _updatePlayheadVisual, driven by the position
+	// loop) so it reacts immediately as _playingSectionId changes without
+	// needing a full re-render. Per Hans (2026-09-08).
+	_updateLoopCircles() {
+		this.shadowRoot.querySelectorAll(".loop-circle").forEach((circle) => {
+			const isPlayingThis = this._isPlaying && circle.dataset.sectionId === this._playingSectionId;
+			circle.classList.toggle("spinning", isPlayingThis);
+		});
 	}
 }
 

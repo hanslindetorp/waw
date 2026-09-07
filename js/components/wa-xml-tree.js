@@ -374,6 +374,34 @@ export class WaXmlTree extends HTMLElement {
 		} else {
 			this.render();
 		}
+		if (e?.detail?.reveal === true && xmlStore.selectedNodeId) {
+			this._revealNode(xmlStore.selectedNodeId);
+		}
+	}
+
+	// Expands every collapsed ancestor of `nodeId` and scrolls its row into
+	// view — see xmlStore.selectNode's own `reveal` option for when this
+	// runs. A second render() only happens if something actually needed
+	// expanding; scrolling is deferred a frame since a just-triggered
+	// render() hasn't painted the now-visible row yet.
+	_revealNode(nodeId) {
+		if (!xmlStore.root) return;
+		const node = ops.findNodeById(xmlStore.root, nodeId);
+		if (!node) return;
+		let expanded = false;
+		let parentId = node.parent;
+		while (parentId) {
+			if (this._collapsedIds.has(parentId)) {
+				this._collapsedIds.delete(parentId);
+				expanded = true;
+			}
+			const parentNode = ops.findNodeById(xmlStore.root, parentId);
+			parentId = parentNode ? parentNode.parent : null;
+		}
+		if (expanded) this.render();
+		requestAnimationFrame(() => {
+			this._container.querySelector(`.cell[data-node-id="${nodeId}"]`)?.scrollIntoView({ block: "nearest" });
+		});
 	}
 
 	_updateSelectionHighlight() {

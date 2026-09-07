@@ -27,6 +27,8 @@ import { findSrcAttribute, getSchemaSrcAttributeName, resolvePlayableUrl } from 
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 import { playerStore } from "../waxml-integration/player-store.js";
+import { buildRoutingTree } from "../xml-editor/io-routing.js";
+import { openIoPicker } from "./wa-io-picker.js";
 
 // DAW-style "arrange window" for the <Section> element type: transport bar, a
 // bars/beats ruler derived from the section's own tempo/timeSign, one lane per
@@ -75,7 +77,10 @@ const DEFAULT_PX_PER_SEC = 40;
 const MIN_ROW_HEIGHT = 32;
 const MAX_ROW_HEIGHT = 160;
 const DEFAULT_ROW_HEIGHT = 56;
-const LABEL_WIDTH = 140;
+// Widened from 140 (per Hans, 2026-09-08) to fit the new per-row volume
+// fader/mute/solo/output controls (see _buildLayerControls) alongside the
+// label text — the fader alone needs 50-200px on its own.
+const LABEL_WIDTH = 320;
 const RULER_HEIGHT = 32;
 const FALLBACK_BOX_BARS = 1;
 const WAVEFORM_COLOR = "#4fa3ff";
@@ -312,12 +317,112 @@ template.innerHTML = `
 			border-right: 1px solid var(--waw-border, #2f2f2f);
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
 			cursor: pointer;
 		}
 		.layer-label.selected {
 			background: rgba(79, 163, 255, 0.18);
+		}
+		.layer-label-text {
+			flex: 0 1 auto;
+			max-width: 72px;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		/* The new per-row controls (volume/VU, mute, solo, output) — a
+		   vertical divider shared between the <Layer> and <Stinger> label
+		   areas (both use this same .layer-label/.layer-controls pair), per
+		   Hans (2026-09-08). flex:1 1 auto claims all of .layer-label's
+		   space left over after the (non-growing) text — NOT margin-left:
+		   auto, which would consume that slack as empty margin instead of
+		   space the fader's own flex-grow (see _buildGainFader) can expand
+		   into. justify-content:flex-end keeps M/S/output pinned to the
+		   true right edge for the rare case where the fader has already
+		   hit its own 200px ceiling and space still remains. The cluster's
+		   own overflow:hidden is what makes controls that don't fit (see
+		   _buildGainFader's floor) clip away instead of forcing the row
+		   wider. */
+		.layer-controls {
+			display: flex;
+			align-items: center;
+			justify-content: flex-end;
+			gap: 3px;
+			flex: 1 1 auto;
+			min-width: 0;
+			overflow: hidden;
+			padding-left: 0.4rem;
+			border-left: 1px solid var(--waw-border, #2f2f2f);
+			height: 60%;
+		}
+		.layer-fader {
+			/* Shadow DOM doesn't inherit main.css's global box-sizing reset —
+			   without this the 1px border renders outside min-width/
+			   max-width, same class of bug already guarded against
+			   elsewhere (see wa-composition-view.js's .loop-circle). */
+			box-sizing: border-box;
+			position: relative;
+			flex: 1 1 100px;
+			min-width: 50px;
+			max-width: 200px;
+			height: 14px;
+			background: #101010;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 2px;
+			overflow: hidden;
+			cursor: ew-resize;
+		}
+		.layer-fader-fill {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 0;
+			background: linear-gradient(90deg, #3a6ea8, #4fa3ff);
+			pointer-events: none;
+		}
+		.layer-toggle-btn {
+			box-sizing: border-box;
+			flex: 0 0 auto;
+			width: 18px;
+			height: 18px;
+			border-radius: 3px;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			background: #24272c;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.62rem;
+			font-weight: 700;
+			line-height: 1;
+			padding: 0;
+			cursor: pointer;
+		}
+		.layer-toggle-btn:hover {
+			background: #2f333a;
+		}
+		.mute-btn.active {
+			background: #7a6a1a;
+			color: #ffe066;
+			border-color: #a68a2a;
+		}
+		.solo-btn.active {
+			background: #1a6a2a;
+			color: #66ff8a;
+			border-color: #2aa64a;
+		}
+		.layer-output-btn {
+			box-sizing: border-box;
+			flex: 0 0 auto;
+			width: 18px;
+			height: 18px;
+			border-radius: 3px;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			background: #24272c;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.65rem;
+			line-height: 1;
+			padding: 0;
+			cursor: pointer;
+		}
+		.layer-output-btn:hover {
+			background: #2f333a;
 		}
 		/* Same box as .layer-label, swapped in on double-click (see
 		   _startAttributeEdit) — an actual <input> instead of a <div>, same
@@ -1277,7 +1382,12 @@ export class WaSectionView extends HTMLElement {
 
 	// --- selection & deletion ---
 
-	_handleItemClick(id, e) {
+	// reveal: true (double-click only, see the Layer-label/Segment-box
+	// dblclick handlers below) additionally expands/scrolls this node into
+	// view in the XML tree — a plain click never does, per Hans
+	// (2026-09-08): selecting/dropping in this preview must not jump the
+	// tree's own scroll/collapse state out from under the user.
+	_handleItemClick(id, e, { reveal = false } = {}) {
 		if (e.metaKey || e.ctrlKey) {
 			if (this._selectedIds.has(id)) this._selectedIds.delete(id);
 			else this._selectedIds.add(id);
@@ -1289,7 +1399,7 @@ export class WaSectionView extends HTMLElement {
 		// runs before this call returns — pre-announcing the id here is what
 		// tells it "this change came from me, don't resync/collapse it".
 		this._lastSelfSelectedId = id;
-		xmlStore.selectNode(id);
+		xmlStore.selectNode(id, { reveal });
 		this._updateSelectionHighlight();
 	}
 
@@ -1371,7 +1481,7 @@ export class WaSectionView extends HTMLElement {
 		this._grid.appendChild(this._buildDropZone(node, layers, 0, info, totalWidth, firstFiller));
 
 		layers.forEach((layer, idx) => {
-			this._grid.appendChild(this._buildLayerLabel(layer, rowsPerLayer[idx]));
+			this._grid.appendChild(this._buildLayerLabel(layer, rowsPerLayer[idx], layers));
 			this._grid.appendChild(this._buildLayerLane(layer, node, compositionNode, info, totalWidth, totalDuration, token, rowsPerLayer[idx]));
 			const filler = this._buildDropZoneFiller();
 			this._grid.appendChild(filler);
@@ -1424,7 +1534,7 @@ export class WaSectionView extends HTMLElement {
 		this._stingerGrid.appendChild(this._buildRuler(info, totalWidth, totalDuration));
 
 		stingers.forEach((stinger) => {
-			this._stingerGrid.appendChild(this._buildStingerLabel(stinger));
+			this._stingerGrid.appendChild(this._buildStingerLabel(stinger, stingers));
 			this._stingerGrid.appendChild(this._buildStingerLane(stinger, info, totalWidth, token));
 		});
 
@@ -2156,21 +2266,26 @@ export class WaSectionView extends HTMLElement {
 		return fallback;
 	}
 
-	_buildLayerLabel(layer, rowsNeeded) {
+	_buildLayerLabel(layer, rowsNeeded, siblings) {
 		const label = document.createElement("div");
 		label.className = "layer-label";
 		label.dataset.nodeId = layer.id;
 		label.style.height = `${this._rowHeight * rowsNeeded}px`;
-		label.textContent = this._displayLabel(layer, "Layer");
+		const text = document.createElement("span");
+		text.className = "layer-label-text";
+		text.textContent = this._displayLabel(layer, "Layer");
+		label.appendChild(text);
 		const marks = this._buildCommandMarks(layer);
 		if (marks) label.appendChild(marks);
+		label.appendChild(this._buildLayerControls(layer, siblings));
 		label.addEventListener("click", (e) => {
 			e.stopPropagation();
 			this._handleItemClick(layer.id, e);
 		});
 		label.addEventListener("dblclick", (e) => {
 			e.stopPropagation();
-			this._startAttributeEdit(label, layer, "label", () => this._buildLayerLabel(layer, rowsNeeded), "inline-rename-input", layer.attributes.id || layer.tagName);
+			this._handleItemClick(layer.id, e, { reveal: true });
+			this._startAttributeEdit(label, layer, "label", () => this._buildLayerLabel(layer, rowsNeeded, siblings), "inline-rename-input", layer.attributes.id || layer.tagName);
 		});
 		return label;
 	}
@@ -2180,21 +2295,221 @@ export class WaSectionView extends HTMLElement {
 	// for live preview (formerly also on this same dblclick) is still
 	// reachable via double-clicking its content/box in the lane instead
 	// (_buildStingerLane), so nothing is lost by repurposing this one.
-	_buildStingerLabel(stinger) {
+	_buildStingerLabel(stinger, siblings) {
 		const label = document.createElement("div");
 		label.className = "layer-label";
 		label.dataset.nodeId = stinger.id;
 		label.style.height = `${this._rowHeight}px`;
-		label.textContent = this._displayLabel(stinger, "Stinger");
+		const text = document.createElement("span");
+		text.className = "layer-label-text";
+		text.textContent = this._displayLabel(stinger, "Stinger");
+		label.appendChild(text);
+		label.appendChild(this._buildLayerControls(stinger, siblings));
 		label.addEventListener("click", (e) => {
 			e.stopPropagation();
 			this._handleItemClick(stinger.id, e);
 		});
 		label.addEventListener("dblclick", (e) => {
 			e.stopPropagation();
-			this._startAttributeEdit(label, stinger, "label", () => this._buildStingerLabel(stinger), "inline-rename-input", stinger.attributes.id || stinger.tagName);
+			this._handleItemClick(stinger.id, e, { reveal: true });
+			this._startAttributeEdit(label, stinger, "label", () => this._buildStingerLabel(stinger, siblings), "inline-rename-input", stinger.attributes.id || stinger.tagName);
 		});
 		return label;
+	}
+
+	// Volume fader+VU, Mute/Solo toggles, and an output-routing button —
+	// identical for a <Layer> and a <Stinger> row (same attribute names on
+	// both: gain/mute/solo/output), per Hans (2026-09-08): "<Stinger> ska
+	// ha samma volym, mute, solo och output-funktioner som <Layer>." Shown
+	// left-to-right in priority order (fader, M, S, output) — the fader's
+	// own CSS floor/ceiling (50-200px) plus everything else's fixed size
+	// means whatever doesn't fit in LABEL_WIDTH just clips off the right
+	// end first, per Hans: "visas i tur och ordning från vänster om det
+	// finns plats, annars göms de." None of these interactions select the
+	// node or touch xmlStore.selectedNodeId at all (stopPropagation keeps
+	// them from bubbling to the label's own click handler) — clicking a
+	// mute/solo/output control is a direct edit, not a "look at this in the
+	// XML editor" gesture, matching the same spirit as the Section preview
+	// never auto-opening the tree on its own (see xmlStore.selectNode's
+	// `reveal` option).
+	_buildLayerControls(node, siblings) {
+		const wrap = document.createElement("div");
+		wrap.className = "layer-controls";
+		wrap.appendChild(this._buildGainFader(node));
+		wrap.appendChild(this._buildMuteButton(node, siblings));
+		wrap.appendChild(this._buildSoloButton(node));
+		wrap.appendChild(this._buildOutputButton(node));
+		return wrap;
+	}
+
+	// true/"true"/"1" (and $var expressions are deliberately NOT resolved
+	// here — this is a plain, un-evaluated read of the attribute's literal
+	// XML value, same simplification as the rest of this v1) count as on.
+	_readBoolAttr(raw) {
+		return raw === "true" || raw === "1";
+	}
+
+	// A Layer/Stinger has no persistent "I am silenced by someone else's
+	// solo" attribute of its own — only its *own* mute/solo. "Effectively
+	// muted" (what the M button actually lights up for) is computed fresh
+	// from the whole sibling group each render: own mute, or some sibling
+	// (not self) is soloed while this one isn't. Purely a GUI-level
+	// computation for now — actually silencing audio for this case is an
+	// engine-side concern (waxml.js reading the same mute/solo attributes),
+	// not something this view fakes by writing to sibling nodes' own mute
+	// attribute, which would pollute the XML with side-effects the user
+	// never asked for. Per Hans (2026-09-08): "Solo mutear alla andra
+	// <Layer> utom de andra som är solade... Det ska funka som i vanliga
+	// DAW."
+	_isEffectivelyMuted(node, siblings) {
+		if (this._readBoolAttr(node.attributes.mute)) return true;
+		if (this._readBoolAttr(node.attributes.solo)) return false;
+		return (siblings || []).some((s) => s.id !== node.id && this._readBoolAttr(s.attributes.solo));
+	}
+
+	_buildMuteButton(node, siblings) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "layer-toggle-btn mute-btn";
+		btn.textContent = "M";
+		btn.title = "Mute";
+		const sync = () => btn.classList.toggle("active", this._isEffectivelyMuted(node, siblings));
+		sync();
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+			if (!nodeNow) return;
+			const next = !this._readBoolAttr(nodeNow.attributes.mute);
+			xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, mute: String(next) });
+		});
+		return btn;
+	}
+
+	_buildSoloButton(node) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "layer-toggle-btn solo-btn";
+		btn.textContent = "S";
+		btn.title = "Solo";
+		btn.classList.toggle("active", this._readBoolAttr(node.attributes.solo));
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+			if (!nodeNow) return;
+			const next = !this._readBoolAttr(nodeNow.attributes.solo);
+			xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, solo: String(next) });
+		});
+		return btn;
+	}
+
+	// "gain" (schema type, see schemas/waxml.xsd) is a plain 0-1 decimal, an
+	// "XdB" string, or a $var math expression — this fader only ever reads/
+	// writes the plain-decimal form (dropping any dB formatting the user
+	// may have hand-typed), the same simplification _buildMuteButton/
+	// _buildSoloButton make for mute/solo's own boolean-vs-$var union.
+	_parseGainLinear(raw) {
+		if (raw === undefined || raw === null || raw === "") return 1;
+		const str = String(raw).trim();
+		if (/db$/i.test(str)) {
+			const db = parseFloat(str);
+			return Number.isFinite(db) ? Math.pow(10, db / 20) : 1;
+		}
+		const val = parseFloat(str);
+		return Number.isFinite(val) ? val : 1;
+	}
+
+	// A combined fader+VU strip, Logic-style, per Hans (2026-09-08) — drag
+	// horizontally to set <Layer>/<Stinger>.gain. The "VU" part is a static
+	// fill proportional to the gain value itself, not a live audio-level
+	// meter (an actual live VU would need an AnalyserNode tapped onto this
+	// specific Layer's own live audio graph node — a real engine-side
+	// integration out of scope for this pass, same "GUI now, engine wiring
+	// later" split as the mute/solo cross-fade above). CSS gives it a hard
+	// 50px floor and 200px ceiling (flex-basis/min-width/max-width) so it
+	// either sits somewhere in that range or — if LABEL_WIDTH's remaining
+	// space after the label text and the fixed-size M/S/output buttons
+	// can't fit even the floor — overflows off the right edge, where
+	// .layer-controls' own overflow:hidden clips it away entirely (see
+	// _buildLayerControls' own comment on why nothing more elaborate than
+	// CSS clipping is needed here).
+	//
+	// Committed only on pointerup, not on every drag tick — Layer/Stinger
+	// almost always live inside a <Composition>, where xml-store.js forces
+	// *every* attribute change to a full structural rebuild (no live-nudge
+	// wiring on that side yet — see _isInsideComposition's own comment) —
+	// committing per-tick would rebuild the whole live graph on every
+	// pixel of drag.
+	_buildGainFader(node) {
+		const wrap = document.createElement("div");
+		wrap.className = "layer-fader";
+		wrap.title = "Gain (drag to adjust)";
+		const fill = document.createElement("div");
+		fill.className = "layer-fader-fill";
+		wrap.appendChild(fill);
+
+		const gainToFraction = (gain) => Math.max(0, Math.min(1, gain));
+		const paint = (gain) => {
+			fill.style.width = `${gainToFraction(gain) * 100}%`;
+		};
+		paint(this._parseGainLinear(node.attributes.gain));
+
+		wrap.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			e.stopPropagation();
+			try {
+				wrap.setPointerCapture(e.pointerId);
+			} catch {}
+
+			const rect = wrap.getBoundingClientRect();
+			const updateFromEvent = (moveEvt) => {
+				const fraction = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left) / rect.width));
+				paint(fraction);
+				return fraction;
+			};
+			let committedFraction = updateFromEvent(e);
+
+			const onMove = (moveEvt) => {
+				committedFraction = updateFromEvent(moveEvt);
+			};
+			const onUp = () => {
+				wrap.removeEventListener("pointermove", onMove);
+				wrap.removeEventListener("pointerup", onUp);
+				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+				if (nodeNow) xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, gain: String(Math.round(committedFraction * 1000) / 1000) });
+			};
+			wrap.addEventListener("pointermove", onMove);
+			wrap.addEventListener("pointerup", onUp);
+		});
+
+		return wrap;
+	}
+
+	// Reuses the exact same routing-picker the XML editor's own Inspector
+	// uses for "output" (wa-node-inspector.js's _renderIoSelectorControl) —
+	// same buildRoutingTree/openIoPicker call shape, just writing the
+	// picked value straight to xmlStore instead of into a text field. Per
+	// Hans (2026-09-08): "en liten knapp för output (samma som i XML
+	// Editor). Den gör precis samma jobb."
+	_buildOutputButton(node) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "layer-output-btn";
+		btn.textContent = "🔌";
+		btn.title = "Pick an output target";
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+			if (!nodeNow) return;
+			const tree = buildRoutingTree(xmlStore.schema, xmlStore.root, "output", nodeNow.id);
+			const rect = btn.getBoundingClientRect();
+			openIoPicker(tree, rect).then((picked) => {
+				if (!picked) return;
+				const current = ops.findNodeById(xmlStore.root, node.id);
+				if (current) xmlStore.updateAttributes(current.id, { ...current.attributes, output: picked });
+			});
+		});
+		return btn;
 	}
 
 	// Swaps `displayEl` for an inline text input editing `node`'s own
@@ -2724,6 +3039,7 @@ export class WaSectionView extends HTMLElement {
 			// Layer's loopEnd (see _buildLayerLane) — per Hans (2026-09-03).
 			box.addEventListener("dblclick", (e) => {
 				e.stopPropagation();
+				this._handleItemClick(node.id, e, { reveal: true });
 				const labelEl = box.querySelector(".box-label");
 				if (!labelEl) return;
 				this._startAttributeEdit(labelEl, node, "label", () => {

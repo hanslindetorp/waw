@@ -63,10 +63,18 @@ class XmlStore extends EventTarget {
 	// which omits this and defaults to false) — rather than a plain "just
 	// select it" click. wa-preview.js reads this off the "change" event's
 	// detail to decide whether to switch panels or stay put.
-	selectNode(id, { open = false } = {}) {
+	//
+	// reveal: true additionally asks wa-xml-tree.js to expand every
+	// collapsed ancestor of `id` and scroll it into view — an explicit
+	// "show me this in the XML tree" action, per Hans (2026-09-08):
+	// double-clicking a <Layer>/<Segment> box in wa-section-view.js. Never
+	// implied by a plain select (dropping a file, a single click on a box)
+	// — those must NOT jump the tree's own scroll/collapse state out from
+	// under the user, only this explicit gesture does.
+	selectNode(id, { open = false, reveal = false } = {}) {
 		this.selectedNodeId = id;
 		this.selectedNodeIds = new Set(id ? [id] : []);
-		this._emit(false, { open });
+		this._emit(false, { open, reveal });
 	}
 
 	// Cmd/Ctrl-click: toggles one node in/out of the multi-selection.

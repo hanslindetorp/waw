@@ -16253,15 +16253,18 @@ class Music extends EventTarget {
 			var destination = webAudioDest || o.destination || audioContext.destination;
 	
 			this.output = createGainNode();
-			this.output.gain.value = (typeof o.volume == "number") ? o.volume : 1;
 			
 	
 			this.input = createGainNode();
 			this.voiceGain = createGainNode();
+			this.muteGain = createGainNode();
 			this.input.connect(this.voiceGain);
-			this.voiceGain.connect(this.output);
+			this.voiceGain.connect(this.muteGain);
+			this.muteGain.connect(this.output);
 			this.output.connect(destination);
 	
+			this.muteGain.gain.value = o.mute == 1 ? 0 : 1;
+			this.output.gain.value = (typeof o.gain == "number") ? o.gain : 1;
 	
 			return this;
 		}
@@ -16360,330 +16363,6 @@ class Music extends EventTarget {
 		}
 		Bus.prototype.setVolume = Bus.prototype.volume;
 	
-	
-		Bus.prototype.compression = function(params){
-			if(typeof params == "undefined"){
-				return this.compressor;
-			} else {
-	
-	
-				if(params == false){
-					// disconnect
-	
-				} else {
-	
-					for(var param in params){
-						this.compressor[param].value = params[param];
-					}
-				}
-			}
-		}
-	
-		Bus.prototype.animate = function(parameter, targetVal, time){
-	
-	
-			time = time || 0;
-			switch(parameter){
-	
-				case "pan":
-	
-				if(!this.outputGainList){
-					// default to stereo if not routed yet
-					if(this.channelMerger){
-						this.setOutput([0,1], [0,1]);
-					}
-				}
-	
-				var dist = targetVal - this.parameters.pan;
-				var nrOfOutputs = this.outputGainList.length;
-	
-				// step through animation with 50 states per second
-				var fps = 10;
-	
-				// at least two steps if time is too short
-				var steps = Math.max(2, time * fps);
-	
-				for(var i = 0; i <= steps; i++){
-	
-					var curVal = this.parameters.pan + dist * i/steps;
-	
-					var trgOut = (nrOfOutputs-1)*curVal;
-					var targetOutput1 = Math.floor(trgOut);
-					var offs = trgOut % 1;
-	
-					var t = audioContext.currentTime + time * i/steps;
-	
-					// Loop through all speakers for each step
-					this.outputGainList.forEach(function(output, id){
-						var val;
-						switch(id){
-							case targetOutput1:
-							val = 1 - offs;
-							break;
-	
-							case targetOutput1+1:
-							val = offs;
-							break;
-	
-							default:
-							val = 0;
-							break;
-						}
-						output.gain.linearRampToValueAtTime(val, t);
-					});
-				}
-				this.parameters.pan = targetVal;
-				break;
-	
-	
-	
-				default:
-				var send = this.sends[parameter];
-				if(!send){return;}
-				var t = audioContext.currentTime + time;
-				send.gain.linearRampToValueAtTime(targetVal, time);
-				break;
-			}
-	
-		}
-	
-	
-		Bus.prototype.setFilter = function(val){
-			var t = audioContext.currentTime + 0.01;
-			this.filter.frequency.linearRampToValueAtTime(val, t);
-		}
-	
-		Bus.prototype.addPingPongDelay = function(params){
-	
-			params = params || {};
-			var feedBack = params.feedBack || 10;                    // nr of bounces
-	
-			var delay; // time between bounces
-			if(typeof params.delay === "string"){
-				delay = this.getTime(params.delay);
-			} else {
-				delay = params.delay ? params.delay / 1000 : 0.25;
-			}
-	
-			var outputs = params.outputs || [0,1];                   // array with output numbers
-			var volume = params.volume || 0.5;                       // volume for first delay
-	
-			var delayObj;
-			var gainObj;
-	
-			this.pingPongDelay = createGainNode();
-	
-			// signal is routed in a parallell chain
-			this.output.connect(this.pingPongDelay, 0, 0);
-	
-			// create one delay node for each feedback
-			for(var i=1; i<=feedBack; i++){
-	
-				delayObj = audioContext.createDelay(feedBack*delay);
-				this.pingPongDelay.connect(delayObj, 0);
-				delayObj.delayTime.value = delay*i;
-				gainObj = createGainNode();
-				gainObj.gain.value = volume;
-				volume *= 0.5;
-				gainObj.channelCount = 1;
-				gainObj.channelCountMode = "explicit";
-				gainObj.channelInterpretation = "discrete";
-				delayObj.connect(gainObj, 0, 0);
-	
-				// get random output channel (exclude last to avoid repeated bounces in the same)
-				var id = Math.floor(Math.random()*outputs.length-1);
-				var chNum = outputs.splice(id, 1)[0];
-				outputs.push(chNum);
-	
-				gainObj.connect(this.channelMerger, 0, chNum);
-	
-	
-			}
-	
-		}
-	
-		Bus.prototype.addSerialDelay = function(params){
-	
-			params = params || {};
-			var feedBack = params.feedBack || 10;                    // nr of bounces
-			if(Array.isArray(params.delayTimes)){
-				if(params.delayTimes.length){this.delayTimes = params.delayTimes;}
-			}
-			this.delayTaps = [];
-	
-			var delay; // time between bounces
-			if(typeof params.delay === "string"){
-				delay = this.getTime(params.delay);
-			} else if(typeof params.delay === "number"){
-				if(this.delayTimes){
-					var d = params.delay < this.delayTimes.length ? params.delay : 0;
-					delay = this.delayTimes[d];
-				} else {
-					delay = params.delay / 1000;
-				}
-	
-			} else {
-				delay =  0.25;
-			}
-	
-			var outputs = params.outputs || [0,1];                   // array with output numbers
-			var volume = params.volume || 0.5;                       // volume for first delay
-			var decrease = params.decrease || 0.5;
-			this.delayDecrease = decrease;
-			this.delayVolume = volume;
-			this.delayMaxDelay = 10;
-			var delay = 10;
-	
-			var delayObj;
-			var gainObj;
-	
-			this.pingPongDelay = createGainNode();
-	
-			// signal is routed in a parallell chain
-			this.output.connect(this.pingPongDelay, 0, 0);
-	
-			// create one delay node for each feedback
-			for(var i=1; i<=feedBack; i++){
-	
-				delayObj = audioContext.createDelay(this.delayMaxDelay);
-				this.pingPongDelay.connect(delayObj, 0);
-				delayObj.delayTime.value = delay*i;
-				gainObj = createGainNode();
-				gainObj.gain.value = volume;
-				volume *= decrease;
-				gainObj.channelCount = 1;
-				gainObj.channelCountMode = "explicit";
-				gainObj.channelInterpretation = "discrete";
-				delayObj.connect(gainObj, 0, 0);
-	
-				var chNum = outputs[i % outputs.length];
-				chNum = Math.min(chNum, maxChannelCount-1);
-				gainObj.connect(this.channelMerger, 0, chNum);
-	
-				this.delayTaps.push({delay: delayObj, gainObj: gainObj, id: i});
-	
-			}
-	
-		}
-	
-	
-		Bus.prototype.setDelay = function(params){
-			if(!this.delayTaps){
-				this.addSerialDelay(params);
-			} else {
-				params = typeof params === "object" ? params : {delay: params};
-	
-				var delay; // time between bounces
-				if(typeof params.delay === "string"){
-					delay = this.getTime(params.delay);
-				} else if(typeof params.delay === "number"){
-					if(this.delayTimes){
-						var d = Math.floor(params.delay * this.delayTimes.length);
-						d = Math.max(0, Math.min(d, this.delayTimes.length-1));
-						var delayStr = this.delayTimes[d];
-						delay = this.getTime(delayStr);
-					} else {
-						delay = params.delay / 1000;
-					}
-	
-				}
-	
-				if(params.decrease){
-					this.delayDecrease = params.decrease;
-				}
-	
-				var volume = this.delayVolume;
-				this.delayTaps.forEach((tap)=>{
-					if(delay){
-						tap.delay.delayTime.linearRampToValueAtTime(tap.id * delay, audioContext.currentTime + 0.0000001);
-					}
-	
-					if(params.volume){
-						volume *= this.delayDecrease;
-						tap.gainObj.gain.linearRampToValueAtTime(params.volume * volume, audioContext.currentTime + 0.001);
-					}
-				});
-	
-			}
-		}
-	
-		Bus.prototype.addReverb = function(params){
-	
-			if(!params){return}
-			if(typeof params === "string"){
-				params = {url: params}
-			}
-	
-			if(!params.url){return}
-	
-			if(typeof params.value === "undefined"){params.value = 1}
-	
-			var send = this.sends[params.url];
-			if(!send){
-				send = createGainNode();
-				this.sends[params.url] = send;
-			}
-			send.gain.value = params.value;
-			this.output.connect(send);
-	
-			params.src = send;
-			var convolve = defaultInstance.addReverb(params);
-			return {convolve: convolve, send: send};
-		}
-	
-	
-	
-		Bus.prototype.insertEffect = function(type, initParams){
-	
-			var newFX = audioContext.createBiquadFilter();
-	
-			// last added FX will be first in inserts array
-			var lastFXinChain = this.inserts[0];
-	
-			// disconnect last FX in chain
-			lastFXinChain.disconnect(0);
-	
-	
-	
-			this.inserts.shift(newFX);
-	
-		}
-	
-		Bus.prototype.setPosition = function(newX, newY, newZ){
-	
-			if(!this.panner.active){
-				this.filter.disconnect(0);
-				this.filter.connect(this.panner);
-				this.panner.active = true;
-			}
-	
-			this.panner.setPosition(newX, newY, newZ);
-			//audioContext.listener.setPosition(-newX, -newY, -newZ);
-		}
-	
-	
-		Bus.prototype.addAnalyser = function(fn, interval, fftSize){
-	
-			interval = interval || 100;
-			var analyser = audioContext.createAnalyser();
-			this.input.connect(analyser);
-			analyser.fftSize = fftSize || 2048;
-			var bufferLength = analyser.frequencyBinCount;
-	
-			var dataArray = new Uint8Array(bufferLength);
-			//var dataArray = new Float32Array(bufferLength);
-	
-	
-			setInterval(function(){
-	
-				//analyser.getFloatTimeDomainData(dataArray)
-				analyser.getByteTimeDomainData(dataArray);
-				fn(dataArray, bufferLength);
-	
-			}, interval);
-	
-	
-		}
 	
 	
 	
@@ -18534,6 +18213,9 @@ class Music extends EventTarget {
 			Track.prototype.getTime = getTime;
 			Track.prototype.setVolume = setVolume;
 			Track.prototype.getVolume = getVolume;
+			Track.prototype.setMuteState = setMuteState;
+			Track.prototype.getMuteState = getMuteState;
+
 			Track.prototype.fade = fade;
 			Track.prototype.fadeIn = fadeIn;
 			Track.prototype.fadeOut = fadeOut;
@@ -19340,6 +19022,10 @@ class Music extends EventTarget {
 			Motif.prototype.setActive = setActive;
 			Motif.prototype.setVolume = setVolume;
 			Motif.prototype.getVolume = getVolume;
+
+			Motif.prototype.setMuteState = setMuteState;
+			Motif.prototype.getMuteState = getMuteState;
+
 			Motif.prototype.setParams = setParams;
 			Motif.prototype.set = set;
 			Motif.prototype.map = map;
@@ -19545,7 +19231,7 @@ class Music extends EventTarget {
 		function setVolume(val, dontStore){
 	
 			if(!this.bus){return}
-			this.bus.input.gain.linearRampToValueAtTime(val, audioContext.currentTime + 0.1);
+			this.bus.input.gain.linearRampToValueAtTime(val, audioContext.currentTime + 0.001);
 	
 			if(!this.parameters || dontStore){return}
 			this.parameters.volume = val;
@@ -19557,6 +19243,22 @@ class Music extends EventTarget {
 			if(!this.bus){return -1}
 			return this.bus.output.gain.value;
 		}
+
+		function setMuteState(val){
+	
+			if(!this.bus){return}
+			this.bus.muteGain.gain.linearRampToValueAtTime(val, audioContext.currentTime + 0.001);
+	
+		}
+	
+	
+		function getMuteState(){
+	
+			if(!this.bus){return -1}
+			return this.bus.muteGain.gain.value;
+		}
+
+
 	
 	
 		function setSoloGroup(_param1, _param2){
