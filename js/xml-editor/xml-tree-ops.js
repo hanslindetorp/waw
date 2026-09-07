@@ -324,7 +324,10 @@ export function updateNodeTextContent(root, nodeId, textContent) {
 	return { ...root, children: root.children.map((c) => updateNodeTextContent(c, nodeId, textContent)) };
 }
 
-function isDescendantOf(node, targetId) {
+// Exported (also used by xml-store.js's paste — see pasteIntoSelection)
+// for the same "can't move/paste something into itself or its own
+// descendant" guard reparentNode already needs internally.
+export function isDescendantOf(node, targetId) {
 	if (node.id === targetId) return true;
 	return node.children.some((c) => isDescendantOf(c, targetId));
 }

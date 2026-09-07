@@ -17358,6 +17358,7 @@ class Music extends EventTarget {
 				// concists of (at least) one track
 				// console.log("new Section() id " + o.id);
 				this.id = o.index;
+				this.idString = o.id || "";
 	
 				this.volume = o.volume || 1;
 				if(typeof o.upbeat === "undefined"){
@@ -17384,9 +17385,13 @@ class Music extends EventTarget {
 				o.loopEnd = o.loopEnd || o.end || defaultParams.loopEnd;
 				this.parameters.loopEnd = this.musicalPositionToTime(o.loopEnd);
 				this.parameters.length = this.divisionToTime(o.length);
-				this.parameters.changeOnNextQ = this.divisionToTime(this.parameters.changeOnNext || myInstance.parameters.changeOnNext);
+				this.parameters.changeOnNextQ = this.divisionToTime(this.parameters.syncTo || this.parameters.changeOnNext || myInstance.parameters.changeOnNext);
 	
-	
+				this.parameters.from = o.from || "";
+				this.parameters.to = o.to || "";
+
+				// XXX This is a bit of a hack to make sure that changeOnNext is set if length is specified but not changeOnNext
+				// but is misspelled as changeOnNexts. This should be fixed in the future. Or removed completely.
 				if(this.parameters.length && !o.changeOnNexts){
 					// set this.parameters.changeOnNext by length if not specified separately 
 					this.parameters.changeOnNext = this.parameters.length;
@@ -17669,7 +17674,7 @@ class Music extends EventTarget {
 						// var nextTime = myInstance.currentSection.getNextLegalBreak(maxUpbeat);
 						 
 						nextTime = nextTime || getNextTime(myInstance.currentSection, this, selector || options.interludeSelector);
-	
+
 						 var timeToLegalBreak = nextTime - audioContext.currentTime;
 						// console.log(`timeToLegalBreak: ${timeToLegalBreak.toFixed(2)}, maxUpbeatInThis: ${maxUpbeatInThis.toFixed(2)}, maxLeadInOffset: ${maxLeadInOffset.toFixed(2)}`);
 	
@@ -17924,7 +17929,7 @@ class Music extends EventTarget {
 				this.musicTime = musicTime;
 	
 	
-				var segmentDuration = this.divisionToTime(this.parameters.changeOnNext);
+				var segmentDuration = this.divisionToTime(this.parameters.syncTo || this.parameters.changeOnNext);
 	
 				//segmentDuration = this.getBarDuration();	
 				let nextMusicTime = Math.ceil(musicTime / segmentDuration) * segmentDuration;
@@ -18035,7 +18040,7 @@ class Music extends EventTarget {
 			Section.prototype.getNextLegalBreak = function(offsets){
 	
 				let currentTime = audioContext.currentTime;
-				let Q = this.divisionToTime(this.parameters.changeOnNext);
+				let Q = this.divisionToTime(this.parameters.syncTo || this.parameters.changeOnNext);
 				let localTime = currentTime - myInstance.sectionStart;
 				let lastLegalBreak = Math.floor(localTime / Q) * Q;
 				let b = Q;
@@ -18066,7 +18071,7 @@ class Music extends EventTarget {
 			Section.prototype.addLeadIn = function(params, urls){
 	
 				// används dessa rader alls? kolla addMotif
-				params.quantize = params.quantize || "bar";
+				params.syncTo = params.syncTo || "bar";
 				var leadin = myInstance.addLeadIn(params, urls, this);
 				leadin.parameters.type = "leadIn";
 				this.leadIns.push(leadin);
@@ -18726,7 +18731,7 @@ class Music extends EventTarget {
 	
 				this.parentObj = section || defaultInstance;
 				var beatDuration = this.parentObj.getBeatDuration();
-				o.quantize = getTimeSign(o.quantize || this.parentObj.parameters.quantize || myInstance.parameters.quantize, this.parentObj.parameters.timeSign);
+				o.syncTo = getTimeSign(o.syncTo || o.quantize || this.parentObj.parameters.quantize || myInstance.parameters.quantize, this.parentObj.parameters.timeSign);
 	
 				this.volume = o.volume || 1;
 	
@@ -18909,7 +18914,7 @@ class Music extends EventTarget {
 					me.playing = true;
 					//console.log("Play Motif: " + this.parameters.classList);
 	
-					if(myInstance.currentSection && this.parameters.quantize != "off"){
+					if(myInstance.currentSection && this.parameters.syncTo != "off"){
 	
 						let controllingSection = this.section || myInstance.currentSection;
 	
@@ -18919,7 +18924,11 @@ class Music extends EventTarget {
 						if(this.parameters.type == "leadIn"){
 							Q = this.parentObj.parameters.changeOnNextQ;
 						} else {
-							Q  = this.parameters.quantize.nominator * beatDuration * controllingSection.parameters.timeSign.denominator / this.parameters.quantize.denominator;
+
+							// In WAXML 2.0, Motif and Leadin are merged in one class; "Stinger".
+							// The attribute quantize is renamed to "syncTo".
+							let syncTo = this.parameters.syncTo || this.parameters.quantize;
+							Q  = syncTo.nominator * beatDuration * controllingSection.parameters.timeSign.denominator / syncTo.denominator;
 						}
 	
 						let time = controllingSection.getTime();
@@ -18988,7 +18997,7 @@ class Music extends EventTarget {
 					let crop = 0;
 					let offset = targetSound ? targetSound.offset : this.offset;
 	
-					if(this.parameters.quantize != "off"){
+					if(this.parameters.syncTo != "off"){
 	
 						// move to next legal Q if time is to early
 						let offset = (targetSound ? targetSound.offset : 0);
@@ -20354,10 +20363,7 @@ class Music extends EventTarget {
 		defaultParams.repeat = 1;
 		defaultParams.retrig = "shuffle";
 		defaultParams.release = 0;
-	
-	
-	
-		defaultParams.quantize = "1/8";
+		defaultParams.syncTo = "1/8";
 	
 		function addDefaultParameters(params){
 	
@@ -20367,7 +20373,7 @@ class Music extends EventTarget {
 			params.tempo = params.tempo || defaultParams.tempo;
 			params.timeSign = getTimeSign(params.timeSign || defaultParams.timeSign);
 			params.upbeat = params.upbeat || defaultParams.upbeat;
-			params.quantize = params.quantize || defaultParams.quantize;
+			params.syncTo = params.syncTo || defaultParams.syncTo;
 			params.fadeTime = typeof params.fadeTime === "undefined" ? defaultParams.fadeTime : params.fadeTime;
 			params.partLength = params.partLength || defaultParams.partLength;
 			params.changeOnNext = params.changeOnNext || defaultParams.changeOnNext;
@@ -20707,7 +20713,7 @@ class Music extends EventTarget {
 			params.pos = iMusicHelpers.strToParamValue(str, POSITION);
 			params.variantID = iMusicHelpers.strToParamValue(str, VARIANT);
 			params.upbeat = iMusicHelpers.strToParamValue(str, UPBEAT);
-			params.quantize = iMusicHelpers.strToParamValue(str, QUANTIZE);
+			params.syncTo = iMusicHelpers.strToParamValue(str, QUANTIZE);
 			params.length = iMusicHelpers.strToParamValue(str, LENGTH);
 	
 			return params;
@@ -20869,12 +20875,37 @@ class Music extends EventTarget {
 						let interludeSection, interludeSelection, interludeSelector;
 						if(selection.string && iMus.lastSelectedSectionString){
 							// make interlude selection (i.e. A-B)
-							console.log(iMus.lastSelectedSectionString, "->", selection.string);
-							interludeSelector = `${iMus.lastSelectedSectionString}-${selection.string}`;
+
+							// This is the WAXML 1 way of tagging sections for interludes.
+							// It is built on the assumption that interlude sections are tagged
+							// with the same class as the previous section, and the next section
+							// with the same class as the next section. So, if you play A and then B, 
+							// it will look for a section tagged A-B.
+
+							// console.log(iMus.lastSelectedSectionString, "->", selection.string);
+							// interludeSelector = `${iMus.lastSelectedSectionString}-${selection.string}`;
 							
 	
-							interludeSelection = new Selection(myInstance, ).selectForPlayback(interludeSelector);
-							interludeSection = interludeSelection.sections.pop();
+							// interludeSelection = new Selection(myInstance, ).selectForPlayback(interludeSelector);
+							// interludeSection = interludeSelection.sections.pop();
+
+
+							// WAXML 2.0 is instead using attributes "from" and "to" to tag interlude
+							// So, if you play A and then B, it will look for a section tagged with from="A" and to="B".
+
+							// The real WAXML way of findin would be to use the selector "section[from=A][to=B]", but
+							// for compatibility with iMusic, we will use a simple loop through all sections
+							// and find the first one that matches the from and to attributes.
+							defaultInstance.sections.forEach(section => {
+								if(section.parameters.from == `#${myInstance.currentSection.idString}` && section.parameters.to == `#${newSection.id}`){
+									interludeSection = section;
+
+									// This is a bit of a hack, but it works for now. We will use the first tag of the interlude section as the interlude selector.
+									// It is used to trigger Stingers in the "from" section that matches the target transition/interlude section.
+									interludeSelector = section.tags[0];
+								}
+							});
+
 						}
 						if(interludeSection && iMus.isPlaying()){
 							// if there is a match, first trig leadIns and Motifs now
@@ -21100,7 +21131,7 @@ class Music extends EventTarget {
 	
 					if(section.motifs){
 						section.motifs.forEach(function(motif){
-							iMus(section.id).addMotif(motif.urls, motif.quantize);
+							iMus(section.id).addMotif(motif.urls, motif.syncTo);
 						});
 					}
 	
@@ -21129,19 +21160,19 @@ class Music extends EventTarget {
 	
 			if(data.motifs){
 				data.motifs.forEach(function(motif){
-					defaultInstance.addMotif({quantize: motif.quantize}, motif.urls);
+					defaultInstance.addMotif({syncTo: motif.syncTo}, motif.urls);
 				});
 			}
 	
 			if(data.leadins){
 				data.gs.forEach(function(leadin){
-					defaultInstance.addLeadIn({quantize: "bar"}, leadin.urls);
+					defaultInstance.addLeadIn({syncTo: "bar"}, leadin.urls);
 				});
 			}
 	
 			if(data.sounds){
 				data.sounds.forEach(function(sound){
-					defaultInstance.addMotif({quantize: "off"}, sound.urls);
+					defaultInstance.addMotif({syncTo: "off"}, sound.urls);
 				});
 			}
 		}
@@ -21226,8 +21257,8 @@ class Music extends EventTarget {
 					motif.id = params.motifID;
 					motif.urls = motif.urls || [];
 					motif.urls.push(url);
-					if(params.quantize){
-						motif.quantize = params.quantize;
+					if(params.syncTo){
+						motif.syncTo = params.syncTo;
 					}
 				}
 	
@@ -21244,7 +21275,7 @@ class Music extends EventTarget {
 					leadin.id = params.motifID;
 					leadin.urls = motif.urls || [];
 					leadin.urls.push(url);
-					leadin.quantize = "bar";
+					leadin.syncTo = "bar";
 				}
 	
 				if(params.soundID){
@@ -21316,7 +21347,7 @@ class Music extends EventTarget {
 					var leadin = defaultInstance.addLeadIn({url:urls});
 					return new Selection(myInstance, LEADIN + "-" + leadinID);
 				} else if(soundID != undefined){
-					var sound = defaultInstance.addMotif({quantize:"off"}, urls);
+					var sound = defaultInstance.addMotif({syncTo:"off"}, urls);
 					return new Selection(myInstance, SOUND + "-" + soundID);
 				}
 	
@@ -21953,169 +21984,169 @@ MusicParser.parseXML = function(iMusObj, root){
 	if(root){
 		iMus.setParams(root.attributes);
 
-	let schemaLocation = root.attributes["xsi:schemaLocation"];
-	if(schemaLocation){
-		let schemaFile = schemaLocation.value.split(" ").pop();
-		if(schemaFile != expectedSchemaFile){
-			console.warn(`Wrong iMusic XML Schema File. ${expectedSchemaFile} is expected`);
-			waxml.log({
-				type: "error",
-				data: `Wrong iMusic XML Schema File, ${expectedSchemaFile} is expected`
-			});
+		let schemaLocation = root.attributes["xsi:schemaLocation"];
+		if(schemaLocation){
+			let schemaFile = schemaLocation.value.split(" ").pop();
+			if(schemaFile != expectedSchemaFile){
+				console.warn(`Wrong iMusic XML Schema File. ${expectedSchemaFile} is expected`);
+				waxml.log({
+					type: "error",
+					data: `Wrong iMusic XML Schema File, ${expectedSchemaFile} is expected`
+				});
+			}
 		}
-	}
-    var url, params, part;
-    var selectKeys = [];
+		var url, params, part;
+		var selectKeys = [];
 
-	this.tags = [];
+		this.tags = [];
 
-    var arrangements = root.querySelectorAll("arrangement, Section");
-    arrangements.forEach((arr, _index) => {
+		var arrangements = root.querySelectorAll("arrangement, Section");
+		arrangements.forEach((arr, _index) => {
 
-        var id = arr.getAttribute("select-value"); // change in the future XXX
-        url = arr.getAttribute("src");
-        if(url == null){url = undefined}
+			var id = arr.getAttribute("select-value"); // change in the future XXX
+			url = arr.getAttribute("src");
+			if(url == null){url = undefined}
 
-        let params = iMusicHelpers.attributesToObject(arr.attributes);
-        params.tags = params.tags || id; // this is to make select-value work. Not stable.
-    if(params["select-variable"]){
-        if(params["select-variable"].substr(0, 7) != "window."){params["select-variable"] = "window." + params["select-variable"]}
-        }
-        if(params["select-value"]){
-            params["select-value"] = params["select-value"].split(",").map(str => str.trim());
-        }
+			let params = iMusicHelpers.attributesToObject(arr.attributes);
+			params.tags = params.tags || id; // this is to make select-value work. Not stable.
+		if(params["select-variable"]){
+			if(params["select-variable"].substr(0, 7) != "window."){params["select-variable"] = "window." + params["select-variable"]}
+			}
+			if(params["select-value"]){
+				params["select-value"] = params["select-value"].split(",").map(str => str.trim());
+			}
 
-        var section = iMusObj.addSection(params, url);
-        //section.setParams(arr.attributes); Is this needed when params are passed on creation of section?
+			var section = iMusObj.addSection(params, url);
+			//section.setParams(arr.attributes); Is this needed when params are passed on creation of section?
 
-        // check selected
-        if(arr.getAttribute("selected") == "true" || _index == 0){
-            iMusObj.currentSection = section;
-        }
+			// check selected
+			if(arr.getAttribute("selected") == "true" || _index == 0){
+				iMusObj.currentSection = section;
+			}
 
 
-		var tracks = arr.querySelectorAll("track, Layer");
-		tracks.forEach((track) => {
+			var tracks = arr.querySelectorAll("track, Layer");
+			tracks.forEach((track) => {
 
-			var urls = [];
-			url = track.getAttribute("src");
-			if(url){urls.push(url)}
+				var urls = [];
+				url = track.getAttribute("src");
+				if(url){urls.push(url)}
 
-			var regions = track.querySelectorAll("region, Segment");
+				var regions = track.querySelectorAll("region, Segment");
 
-			params = iMusicHelpers.attributesToObject(track.attributes);
+				params = iMusicHelpers.attributesToObject(track.attributes);
 
-			regions.forEach((region) => {
-				part = iMusicHelpers.attributesToObject(region.attributes);
-				url = region.getAttribute("src");
+				regions.forEach((region) => {
+					part = iMusicHelpers.attributesToObject(region.attributes);
+					url = region.getAttribute("src");
 
-				if(!url){
-					url = [];
-					var sources = region.querySelectorAll("source, Option");
-					sources.forEach((source) => {
-						var src = source.getAttribute("src");
-						if(src){url.push(src)}
-					});
+					if(!url){
+						url = [];
+						var sources = region.querySelectorAll("source, Option");
+						sources.forEach((source) => {
+							var src = source.getAttribute("src");
+							if(src){url.push(src)}
+						});
+					}
+
+					part.url = url;
+
+					urls.push(part);
+				});
+				var stem = section.addStem(params, urls);
+
+				if(stem){
+					// WAXML nodes
+					if(window.webAudioXML){
+						let envelopeNodes = track.querySelectorAll("envelope");
+						let envelopes = [];
+						envelopeNodes.forEach(xmlNode => {
+							let env = window.webAudioXML.createObject(xmlNode);
+							envelopes.push(env);
+						});
+						stem.addEnvelopes(envelopes);
+
+
+						let commandNodes = track.querySelectorAll("command");
+						let commands = [];
+						commandNodes.forEach(xmlNode => {
+							let command = waxml.createObject(xmlNode);
+							// stupid conversion from string value = "-1/4"
+							command.pos = section.musicalPositionToTime(command.pos);
+							commands.push(command);
+						});
+						stem.commands = commands;
+						
+					}
+				}
+				
+
+
+				// the solo-function needs to be reworked xxx
+				if(track.hasAttribute("select-group")){
+					var key = track.getAttribute("select-group");
+					var value = track.getAttribute("select-value");
+					// store solo values
+					stem.setSoloGroup(key, value);
+				}
+				if(track.hasAttribute("select-variable")){
+					var key = track.getAttribute("select-variable");
+					var value = track.getAttribute("select-value");
+
+					let win = "window.";
+					if(key.substr(0, 7) != win){key = win + key}
+
+					// store solo values
+					stem.setSoloGroup(key, value);
 				}
 
-				part.url = url;
+				// 2022-09-15 update
+				// It's NOT a good way of including variable-names as part of the attribute name
+				// We should instead allow for multiple variables to be specified in the attribute value
+				// separated with semicolon. And it should not be 'follow'. I'll try "filter"
+				// i.e. filter="intensity=1; mood=happy; place=1,2..4,8"
 
-				urls.push(part);
-			});
-			var stem = section.addStem(params, urls);
+				iMusicHelpers.getFollowRules(track.getAttribute("filter")).forEach(entry => {
+					stem.setSoloGroup(entry.key, entry.value);
+				});
 
-			if(stem){
-				// WAXML nodes
-				if(window.webAudioXML){
-					let envelopeNodes = track.querySelectorAll("envelope");
-					let envelopes = [];
-					envelopeNodes.forEach(xmlNode => {
-						let env = window.webAudioXML.createObject(xmlNode);
-						envelopes.push(env);
-					});
-					stem.addEnvelopes(envelopes);
-
-
-					let commandNodes = track.querySelectorAll("command");
-					let commands = [];
-					commandNodes.forEach(xmlNode => {
-						let command = waxml.createObject(xmlNode);
-						// stupid conversion from string value = "-1/4"
-						command.pos = section.musicalPositionToTime(command.pos);
-						commands.push(command);
-					});
-					stem.commands = commands;
-					
-				}
-			}
-			
-
-
-			// the solo-function needs to be reworked xxx
-			if(track.hasAttribute("select-group")){
-				var key = track.getAttribute("select-group");
-				var value = track.getAttribute("select-value");
-				// store solo values
-				stem.setSoloGroup(key, value);
-			}
-			if(track.hasAttribute("select-variable")){
-				var key = track.getAttribute("select-variable");
-				var value = track.getAttribute("select-value");
-
-				let win = "window.";
-				if(key.substr(0, 7) != win){key = win + key}
-
-				// store solo values
-				stem.setSoloGroup(key, value);
-			}
-
-			// 2022-09-15 update
-			// It's NOT a good way of including variable-names as part of the attribute name
-			// We should instead allow for multiple variables to be specified in the attribute value
-			// separated with semicolon. And it should not be 'follow'. I'll try "filter"
-			// i.e. filter="intensity=1; mood=happy; place=1,2..4,8"
-
-			iMusicHelpers.getFollowRules(track.getAttribute("filter")).forEach(entry => {
-				stem.setSoloGroup(entry.key, entry.value);
 			});
 
+
+			let motifs = arr.querySelectorAll("motif, leadin, Stinger");
+			motifs.forEach(motif => MusicParser.parseMotif(iMusObj, motif, section));
+		});
+
+		// add support for non-section motifs
+		let motifs = [...root.children].filter(el => el.nodeName == "motif" || el.nodeName == "leadin" || el.nodeName.toLowerCase() == "stinger");
+		motifs.forEach(motif => MusicParser.parseMotif(iMusObj, motif));
+
+		root.querySelectorAll("*[selected='true']").forEach((obj) => {
+
+			let key = obj.getAttribute("select-group");
+			if(!key){
+				key = obj.getAttribute("select-variable");
+					let win = "window.";
+					if(key.substr(0, 7) != win){key = win + key}
+			}
+			if(!key){return}
+			let value = obj.getAttribute("select-value");
+			if(!value){return}
+			iMus.select(key, value);
 		});
 
 
-		let motifs = arr.querySelectorAll("motif, leadin, Stinger");
-		motifs.forEach(motif => MusicParser.parseMotif(iMusObj, motif, section));
-	});
 
-	// add support for non-section motifs
-	let motifs = [...root.children].filter(el => el.nodeName == "motif" || el.nodeName == "leadin" || el.nodeName.toLowerCase() == "stinger");
-	motifs.forEach(motif => MusicParser.parseMotif(iMusObj, motif));
+		// add variable watchers for all objects with defined values
+		root.querySelectorAll("*[select-variable]").forEach((obj) => {
+			// XXX This is a very bad design. Don't refer back to iMusObj
+			// Also, merge function with new WAXML code
+			iMusObj.variableWatcher.addVariable(obj.getAttribute("select-variable"));
+		});
 
-	root.querySelectorAll("*[selected='true']").forEach((obj) => {
+		console.log("XML parse time: " + (Date.now() - XMLtimeStamp));
 
-		let key = obj.getAttribute("select-group");
-		if(!key){
-			key = obj.getAttribute("select-variable");
-				let win = "window.";
-				if(key.substr(0, 7) != win){key = win + key}
-		}
-		if(!key){return}
-		let value = obj.getAttribute("select-value");
-		if(!value){return}
-		iMus.select(key, value);
-	});
-
-
-
-	// add variable watchers for all objects with defined values
-	root.querySelectorAll("*[select-variable]").forEach((obj) => {
-        // XXX This is a very bad design. Don't refer back to iMusObj
-        // Also, merge function with new WAXML code
-		iMusObj.variableWatcher.addVariable(obj.getAttribute("select-variable"));
-	});
-
-	console.log("XML parse time: " + (Date.now() - XMLtimeStamp));
-
-	iMus.connectToHTML();
+		iMus.connectToHTML();
 
 	}
 

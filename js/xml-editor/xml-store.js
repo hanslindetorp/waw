@@ -18,6 +18,8 @@ class XmlStore extends EventTarget {
 		this.schema = null;
 		this.schemaFileName = "";
 		this.selectedNodeId = null;
+		this.selectedNodeIds = new Set(); // multi-select (Cmd/Ctrl-click, Shift-click — see wa-xml-tree.js); always contains selectedNodeId when it's non-null
+		this._clipboard = null; // { mode: "copy", nodes: XmlNode[] } | { mode: "cut", nodes: id[] } — see copySelection/cutSelection/pasteIntoSelection
 		this.codeValue = EMPTY_XML;
 		this.lineMap = new Map();
 		this._idCounters = new Map(); // tagName -> highest "TagName-N" used so far this project (see ops.backfillElementIds)
@@ -52,8 +54,49 @@ class XmlStore extends EventTarget {
 
 	// --- selection ---
 
-	selectNode(id) {
+	// open: true marks this selection as an explicit "open this element's
+	// own dedicated view" request (e.g. double-clicking a Section inside
+	// wa-composition-view.js) rather than a plain "just select it" click —
+	// wa-preview.js reads this off the "change" event's detail to decide
+	// whether to switch panels or stay put. Per Hans (2026-09-05).
+	selectNode(id, { open = false } = {}) {
 		this.selectedNodeId = id;
+		this.selectedNodeIds = new Set(id ? [id] : []);
+		this._emit(false, { open });
+	}
+
+	// Cmd/Ctrl-click: toggles one node in/out of the multi-selection.
+	// Becomes the new primary (Inspector/Preview target) when added; when
+	// removing the current primary, falls back to another still-selected
+	// member (or null if the set is now empty). Per Hans (2026-09-06).
+	toggleNodeSelection(id) {
+		if (!id) return;
+		const next = new Set(this.selectedNodeIds);
+		if (next.has(id)) {
+			next.delete(id);
+			this.selectedNodeIds = next;
+			if (this.selectedNodeId === id) {
+				const remaining = [...next];
+				this.selectedNodeId = remaining.length ? remaining[remaining.length - 1] : null;
+			}
+		} else {
+			next.add(id);
+			this.selectedNodeIds = next;
+			this.selectedNodeId = id;
+		}
+		this._emit(false);
+	}
+
+	// Shift-click: replaces the multi-selection outright with this exact
+	// ordered id list — the *visible tree row* range between the click
+	// anchor and the just-clicked row (wa-xml-tree.js computes the actual
+	// ordering, since that depends on which rows are currently expanded,
+	// something this store has no notion of). The last id becomes the new
+	// primary. Per Hans (2026-09-06).
+	selectRange(ids) {
+		if (!ids || !ids.length) return;
+		this.selectedNodeIds = new Set(ids);
+		this.selectedNodeId = ids[ids.length - 1];
 		this._emit(false);
 	}
 
@@ -121,9 +164,13 @@ class XmlStore extends EventTarget {
 	insertNewChild(parentId, tagName, attributes, index) {
 		if (!this.root) return;
 		let child = ops.createXmlNode(tagName, parentId);
-		// Every new <Section> gets a unique `class` so it's usable as a
-		// PLAY/STOP trigger selector right away — see generateSectionClass.
-		if (tagName === "Section" && !attributes?.class) {
+		// Every new *regular* <Section> gets a unique `class` so it's usable
+		// as a PLAY/STOP trigger selector right away — see
+		// generateSectionClass. Not for a "transition" Section (has its own
+		// from/to instead, see wa-composition-view.js) — per Hans
+		// (2026-09-05), those should stay classless.
+		const isTransitionSection = attributes?.from !== undefined || attributes?.to !== undefined;
+		if (tagName === "Section" && !attributes?.class && !isTransitionSection) {
 			attributes = { ...attributes, class: ops.generateSectionClass(this.root) };
 		}
 		// Every new <Var> gets a name (see generateVarName — required for
@@ -159,6 +206,109 @@ class XmlStore extends EventTarget {
 		}
 		this.root = ops.removeNode(this.root, nodeId);
 		this._syncCode();
+	}
+
+	// --- copy / cut / paste (see wa-edit-menu.js, wa-xml-tree.js) ---
+
+	// The current selection, with any node that's itself a descendant of
+	// another *also-selected* node dropped — copying/cutting a parent
+	// already brings its selected children along with it; including them a
+	// second time as their own top-level entries would duplicate them under
+	// the paste target. Falls back to the single primary selection when
+	// nothing is multi-selected.
+	_topLevelSelection() {
+		if (!this.root) return [];
+		const ids = this.selectedNodeIds.size ? this.selectedNodeIds : new Set(this.selectedNodeId ? [this.selectedNodeId] : []);
+		const nodes = [...ids].map((id) => ops.findNodeById(this.root, id)).filter(Boolean);
+		return nodes.filter((n) => !nodes.some((other) => other.id !== n.id && ops.isDescendantOf(other, n.id)));
+	}
+
+	// Snapshots clones of the current selection (ids intact for now — see
+	// pasteIntoSelection, which strips them fresh per paste so every paste
+	// of the same copy gets its own unique ids, and a copy can be pasted
+	// more than once).
+	copySelection() {
+		const nodes = this._topLevelSelection();
+		if (!nodes.length) return false;
+		this._clipboard = { mode: "copy", nodes: nodes.map((n) => ops.cloneNode(n, null)) };
+		this._emit(false); // lets wa-edit-menu.js re-enable Paste
+		return true;
+	}
+
+	// Deferred removal, per Hans (2026-09-06): cutting doesn't touch the
+	// document at all yet — it only marks the selection as "pending move"
+	// (stored as ids, re-resolved fresh from this.root at paste time, so
+	// any edit made before the eventual paste is reflected). The actual
+	// removal only happens as part of a *successful* paste (see
+	// pasteIntoSelection) — a paste that fails schema validation leaves the
+	// document completely untouched, and the cut content is still sitting
+	// in the clipboard to retry pasting somewhere else.
+	cutSelection() {
+		const nodes = this._topLevelSelection();
+		if (!nodes.length) return false;
+		this._clipboard = { mode: "cut", nodes: nodes.map((n) => n.id) };
+		this._emit(false); // lets wa-xml-tree.js show the "marked for cut" style
+		return true;
+	}
+
+	hasClipboard() {
+		return !!this._clipboard && this._clipboard.nodes.length > 0;
+	}
+
+	// Read by wa-xml-tree.js to dim/dash the rows currently marked for a
+	// pending cut (see cutSelection's own comment on why nothing is
+	// actually removed yet).
+	get clipboardCutIds() {
+		return this._clipboard?.mode === "cut" ? new Set(this._clipboard.nodes) : new Set();
+	}
+
+	// Pastes the clipboard as new children of the current primary selection.
+	// Validates every clipboard node's tag against the target's own
+	// schema.allowedChildren *before* touching the document at all — same
+	// validation depth this app's drag-and-drop reorder already uses
+	// (wa-xml-tree.js's _isSchemaValidReparent: "is this tag permitted as an
+	// immediate child here", not full XSD conformance — maxOccurs/ordering
+	// aren't checked anywhere else in this app either) — and never partially
+	// applies: either every clipboard node lands, or none of them do.
+	// Returns { ok: true } or { ok: false, reason }.
+	pasteIntoSelection() {
+		if (!this.root) return { ok: false, reason: "No document open" };
+		if (!this._clipboard || !this._clipboard.nodes.length) return { ok: false, reason: "Nothing to paste" };
+		const target = this.selectedNodeId ? ops.findNodeById(this.root, this.selectedNodeId) : null;
+		if (!target) return { ok: false, reason: "Select an element to paste into first" };
+
+		const { mode, nodes } = this._clipboard;
+		const sourceNodes = mode === "cut" ? nodes.map((id) => ops.findNodeById(this.root, id)).filter(Boolean) : nodes;
+		if (!sourceNodes.length) return { ok: false, reason: "Nothing to paste" };
+
+		if (this.schema) {
+			const allowedChildren = this.schema.elements[target.tagName]?.allowedChildren || [];
+			const invalid = sourceNodes.find((n) => !allowedChildren.includes(n.tagName));
+			if (invalid) return { ok: false, reason: `<${invalid.tagName}> isn't allowed inside <${target.tagName}>` };
+		}
+
+		if (mode === "cut") {
+			const selfOrDescendant = sourceNodes.find((n) => n.id === target.id || ops.isDescendantOf(n, target.id));
+			if (selfOrDescendant) return { ok: false, reason: "Can't paste an element into itself or its own descendant" };
+			// reparentNode preserves the node's own id/structure exactly — a
+			// cut+paste never collides, so ids are never regenerated here,
+			// per Hans.
+			sourceNodes.forEach((n) => {
+				this.root = ops.reparentNode(this.root, n.id, target.id);
+			});
+			this._clipboard = null; // a move is consumed after one paste
+		} else {
+			// cloneNode strips ids (see its own comment) — _syncCode's
+			// backfill below assigns each one a fresh, unique id, so pasting
+			// the same copy repeatedly never collides either.
+			sourceNodes.forEach((n) => {
+				const clone = ops.cloneNode(n, target.id);
+				this.root = ops.insertChild(this.root, target.id, clone);
+			});
+		}
+
+		this._syncCode();
+		return { ok: true };
 	}
 
 copyNode(nodeId) {
@@ -315,8 +465,8 @@ copyNode(nodeId) {
 		this._emit(structural);
 	}
 
-	_emit(structural = true) {
-		this.dispatchEvent(new CustomEvent("change", { detail: { structural } }));
+	_emit(structural = true, extra = {}) {
+		this.dispatchEvent(new CustomEvent("change", { detail: { structural, ...extra } }));
 	}
 }
 

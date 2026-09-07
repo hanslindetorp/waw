@@ -6,6 +6,7 @@ import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 import "./wa-section-view.js";
 import "./wa-mixer-view.js";
 import "./wa-wam-view.js";
+import "./wa-composition-view.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
 // (panel 2) / XML code (panel 4) — they all share xmlStore's selectedNodeId.
@@ -129,6 +130,10 @@ template.innerHTML = `
 		<wa-section-view></wa-section-view>
 	</div>
 
+	<div class="state" data-state="composition">
+		<wa-composition-view></wa-composition-view>
+	</div>
+
 	<div class="state" data-state="mixer">
 		<wa-mixer-view></wa-mixer-view>
 	</div>
@@ -178,11 +183,11 @@ export class WaPreview extends HTMLElement {
 	connectedCallback() {
 		this._playBtn.addEventListener("click", () => bridge.play());
 		this._stopBtn.addEventListener("click", () => bridge.stop());
-		xmlStore.addEventListener("change", () => this._onStoreChange());
+		xmlStore.addEventListener("change", (e) => this._onStoreChange(e));
 		this._onStoreChange();
 	}
 
-	_onStoreChange() {
+	_onStoreChange(e) {
 		const node = xmlStore.getSelectedNode();
 
 		if (!node) {
@@ -192,7 +197,30 @@ export class WaPreview extends HTMLElement {
 			return;
 		}
 
+		if (node.tagName === "Composition") {
+			// wa-composition-view listens to xmlStore itself and stays mounted
+			// the whole time — we just need to make its state visible, same
+			// shape as wa-section-view/wa-mixer-view below.
+			this._showState("composition");
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
 		if (node.tagName === "Section") {
+			// A plain click on a Section inside an already-open Composition
+			// preview only selects it (for the XML tree/Code panel) — it must
+			// NOT yank the panel away to the Section arrange view underneath
+			// the user, same "sticky active view" reasoning as the Mixer
+			// carve-out below. Only an explicit "open" (double-click, see
+			// xmlStore.selectNode's own `open` option) forces the switch.
+			// Per Hans (2026-09-05).
+			const forceOpen = e?.detail?.open === true;
+			if (!forceOpen && this._activeState === "composition" && isDescendantOfTag(node, "Composition")) {
+				this._lastNodeId = node.id;
+				this._lastResolvedUrl = null;
+				return;
+			}
 			// wa-section-view listens to xmlStore itself and stays mounted
 			// the whole time — we just need to make its state visible.
 			this._showState("section");
@@ -225,7 +253,10 @@ export class WaPreview extends HTMLElement {
 		// Inspector or for multi-delete) shouldn't yank the whole panel away
 		// to a bare waveform view out from under the user — wa-section-view
 		// tracks its own active Section independently and keeps rendering it.
-		if (COMPOSITION_CONTEXT_TAGS.has(node.tagName) && this._activeState === "section") {
+		if (
+			COMPOSITION_CONTEXT_TAGS.has(node.tagName) &&
+			(this._activeState === "section" || (this._activeState === "composition" && isDescendantOfTag(node, "Composition")))
+		) {
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;

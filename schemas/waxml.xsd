@@ -1083,10 +1083,19 @@
 
   <xs:simpleType name="length">
     <xs:annotation>
-      <xs:documentation>Musical length: 'bar', 'beat', nr of bars, 4/4, 3/4, 6/8, 5/8 etc</xs:documentation>
+      <xs:documentation>Musical length: 'bar', 'beat', nr of bars, 4/4, 3/4, 6/8, 5/8 etc. Never negative — a negative number here was a schema mistake (per Hans, 2026-09-05).</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string">
-      <xs:pattern value="bar|beat|-?\d+|-?\d+(\.\d+)?\/\d+|-?\d+(\.\d+)?(ms|s)"/>
+      <xs:pattern value="bar|beat|\d+|\d+(\.\d+)?\/\d+|\d+(\.\d+)?(ms|s)"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="syncTo">
+    <xs:annotation>
+      <xs:documentation>Sync point for a &lt;Section&gt; change — a merger of (and replacement for) quantize and changeOnNext's value forms: 'off', 'bar', 'beat', nr of bars, a note-fraction like 1/8, or a time in ms/s. Never negative, same as length.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="off|bar|beat|\d+|\d+(\.\d+)?\/\d+|\d+(\.\d+)?(ms|s)"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -1954,7 +1963,13 @@
     <xs:attribute name="voice" type="voice"/>
     <xs:attribute name="output" type="ioSelector"/>
     <xs:attribute name="src" type="fileName"/>
-    <xs:attribute name="quantize" type="quantize"/>
+    <!-- "quantize" renamed to "cuePoint" (per Hans, 2026-09-07): this governs
+         at which musical timepoints the Stinger is allowed to be cut into
+         the middle of the currently playing audio, distinct from "syncTo"
+         (scheduling when an object itself starts/changes) and "quantize"
+         (grid resolution) elsewhere in this schema. Still uses the same
+         grid-value type as before. -->
+    <xs:attribute name="cuePoint" type="quantize"/>
     <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="upbeat" type="length"/>
     <xs:attribute name="length" type="length"/>
@@ -2003,11 +2018,31 @@
     <xs:attribute name="tempo" type="tempo"/>
     <xs:attribute name="timeSign" type="meter"/>
     <xs:attribute name="suffix" type="suffix"/>
-    <xs:attribute name="changeOnNext" type="length"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
     <xs:attribute name="loopEnd" type="musicalLoopEnd"/>
+    <!-- length: a transition Section's own duration (Bars.Beats.Subbeats or
+         a time value) — it starts immediately (no syncTo of its own) and
+         plays for exactly this long before handing off to the Section it
+         leads "to". Meaningless on a regular Section, which has no
+         predetermined length. -->
     <xs:attribute name="length" type="length"/>
     <xs:attribute name="src" type="fileName"/>
+    <!-- syncTo replaces changeOnNext (and unifies it with quantize's value
+         forms, see the syncTo type) for <Section> specifically — the
+         *outgoing* Section's own syncTo decides when a change to a newly
+         triggered Section actually happens, per Hans (2026-09-05). -->
+    <xs:attribute name="syncTo" type="syncTo"/>
+    <!-- from/to mark this Section as a "transition section": a CSS selector
+         matching the Section played most recently ("from") and/or the one
+         about to play next ("to"). When both a regular Section change and a
+         transition Section whose from/to match that exact change exist, the
+         transition plays automatically in between, at the outgoing
+         Section's syncTo point. "to" alone is a valid generic "intro" (played
+         before any Section matching "to"); "from" alone is allowed but
+         redundant, per Hans — it'd have no different effect than just
+         triggering that Section directly. -->
+    <xs:attribute name="from" type="xs:string"/>
+    <xs:attribute name="to" type="xs:string"/>
   </xs:complexType>
 
   <xs:complexType name="CompositionContentType">

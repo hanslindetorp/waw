@@ -1,4 +1,6 @@
-import { undo, redo, canUndo, canRedo, addHistoryChangeListener } from "../project/edit-history.js";
+import { undo, redo, canUndo, canRedo, addHistoryChangeListener, isEditableContext } from "../project/edit-history.js";
+import { xmlStore } from "../xml-editor/xml-store.js";
+import { showToast } from "../ui/toast.js";
 
 // Mac gets the ⌘ glyph in the shortcut hint; everyone else gets "Ctrl" — a
 // label-only distinction, edit-history.js's own keydown handler already
@@ -6,6 +8,9 @@ import { undo, redo, canUndo, canRedo, addHistoryChangeListener } from "../proje
 const IS_MAC = navigator.platform?.toUpperCase().includes("MAC") ?? false;
 const UNDO_HINT = IS_MAC ? "⌘Z" : "Ctrl+Z";
 const REDO_HINT = IS_MAC ? "⇧⌘Z" : "Ctrl+Y";
+const COPY_HINT = IS_MAC ? "⌘C" : "Ctrl+C";
+const CUT_HINT = IS_MAC ? "⌘X" : "Ctrl+X";
+const PASTE_HINT = IS_MAC ? "⌘V" : "Ctrl+V";
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -41,6 +46,11 @@ template.innerHTML = `
 			box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 			min-width: 12rem;
 			padding: 0.3rem;
+		}
+		.menu-divider {
+			height: 1px;
+			margin: 0.3rem 0.2rem;
+			background: var(--waw-border, #2f2f2f);
 		}
 		.menu-item {
 			display: flex;
@@ -79,6 +89,19 @@ template.innerHTML = `
 			<span>Redo</span>
 			<span class="hint">${REDO_HINT}</span>
 		</button>
+		<div class="menu-divider"></div>
+		<button class="menu-item" type="button" data-action="copy">
+			<span>Copy</span>
+			<span class="hint">${COPY_HINT}</span>
+		</button>
+		<button class="menu-item" type="button" data-action="cut">
+			<span>Cut</span>
+			<span class="hint">${CUT_HINT}</span>
+		</button>
+		<button class="menu-item" type="button" data-action="paste">
+			<span>Paste</span>
+			<span class="hint">${PASTE_HINT}</span>
+		</button>
 	</div>
 `;
 
@@ -91,7 +114,12 @@ export class WaEditMenu extends HTMLElement {
 		this._dropdown = this.shadowRoot.querySelector(".menu-dropdown");
 		this._undoBtn = this.shadowRoot.querySelector('[data-action="undo"]');
 		this._redoBtn = this.shadowRoot.querySelector('[data-action="redo"]');
+		this._copyBtn = this.shadowRoot.querySelector('[data-action="copy"]');
+		this._cutBtn = this.shadowRoot.querySelector('[data-action="cut"]');
+		this._pasteBtn = this.shadowRoot.querySelector('[data-action="paste"]');
 		this._onHistoryChange = () => this._updateDisabledState();
+		this._onXmlStoreChange = () => this._updateDisabledState();
+		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
 	connectedCallback() {
@@ -112,15 +140,71 @@ export class WaEditMenu extends HTMLElement {
 			this._close();
 		});
 
+		this._copyBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._copy();
+			this._close();
+		});
+
+		this._cutBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._cut();
+			this._close();
+		});
+
+		this._pasteBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._paste();
+			this._close();
+		});
+
 		this._onDocumentClick = () => this._close();
 		document.addEventListener("click", this._onDocumentClick);
+		document.addEventListener("keydown", this._onKeyDown);
 
 		addHistoryChangeListener(this._onHistoryChange);
+		xmlStore.addEventListener("change", this._onXmlStoreChange);
 		this._updateDisabledState();
 	}
 
 	disconnectedCallback() {
 		document.removeEventListener("click", this._onDocumentClick);
+		document.removeEventListener("keydown", this._onKeyDown);
+		xmlStore.removeEventListener("change", this._onXmlStoreChange);
+	}
+
+	// Cmd/Ctrl+C/X/V — skipped whenever a text field has focus
+	// (isEditableContext, same guard edit-history.js's own Undo/Redo uses)
+	// so normal text copy/cut/paste in the Inspector, Code panel, rename
+	// fields etc. is never hijacked into an XML-node operation. Per Hans
+	// (2026-09-06).
+	_onKeyDown(e) {
+		if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+		if (isEditableContext()) return;
+		const key = e.key.toLowerCase();
+		if (key === "c") {
+			e.preventDefault();
+			this._copy();
+		} else if (key === "x") {
+			e.preventDefault();
+			this._cut();
+		} else if (key === "v") {
+			e.preventDefault();
+			this._paste();
+		}
+	}
+
+	_copy() {
+		xmlStore.copySelection();
+	}
+
+	_cut() {
+		xmlStore.cutSelection();
+	}
+
+	_paste() {
+		const result = xmlStore.pasteIntoSelection();
+		if (!result.ok) showToast(result.reason, { kind: "warning" });
 	}
 
 	_open() {
@@ -137,6 +221,10 @@ export class WaEditMenu extends HTMLElement {
 	_updateDisabledState() {
 		this._undoBtn.disabled = !canUndo();
 		this._redoBtn.disabled = !canRedo();
+		const hasSelection = xmlStore.selectedNodeIds.size > 0 || !!xmlStore.selectedNodeId;
+		this._copyBtn.disabled = !hasSelection;
+		this._cutBtn.disabled = !hasSelection;
+		this._pasteBtn.disabled = !xmlStore.hasClipboard() || !xmlStore.selectedNodeId;
 	}
 }
 

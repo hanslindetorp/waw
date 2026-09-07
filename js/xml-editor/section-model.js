@@ -311,3 +311,110 @@ export function readStingerOffset(node, info) {
 export function readUpbeatSeconds(node, info) {
 	return parseDivision(node.attributes.upbeat, info);
 }
+
+// ============================================================= //
+// Composition-level helpers (see wa-composition-view.js).       //
+// ============================================================= //
+
+// Same fallback-box-width idea as wa-section-view.js's own
+// FALLBACK_BOX_BARS (kept as a separate constant here rather than
+// imported — this module stays dependency-free of any component file).
+const CONTENT_FALLBACK_BOX_BARS = 1;
+
+// A regular Section's displayed width in wa-composition-view.js: the
+// raw, un-looped extent of its longest Layer. Deliberately the OPPOSITE
+// of wa-section-view.js's own _estimateMaxEnd, which skips a looping
+// Layer's own Segments so a short loop doesn't drive that view's
+// timeline outward — here the whole point is showing "how long is this
+// before it starts repeating", so looping Layers are measured exactly
+// like non-looping ones. Per Hans (2026-09-05).
+export function sectionContentDuration(sectionNode, info) {
+	let end = 0;
+	const measure = (lengthSeconds, absPos) => {
+		end = Math.max(end, absPos + (lengthSeconds ?? info.barDuration * CONTENT_FALLBACK_BOX_BARS));
+	};
+
+	getLayers(sectionNode).forEach((layer) => {
+		const segments = getSegments(layer);
+		const directOptions = getOptions(layer);
+		if (segments.length === 0 && directOptions.length === 0) {
+			// A bare <Layer src="..."> with no Segment/Option children at all —
+			// its real duration only becomes known once its audio decodes
+			// (an async, DOM-driven concern wa-section-view.js handles via its
+			// own _maxDecodedEnd/_growTimelineTo), which this pure/synchronous
+			// function can't do. Falls back to the same placeholder box width
+			// as everything else here rather than reporting zero width.
+			measure(null, 0);
+			return;
+		}
+		directOptions.forEach((option) => measure(readLength(option, info), readPos(option, info)));
+		segments.forEach((segment) => {
+			const segmentPos = readPos(segment, info);
+			measure(readLength(segment, info), segmentPos);
+			getOptions(segment).forEach((option) => measure(readLength(option, info), segmentPos));
+		});
+	});
+
+	return end;
+}
+
+// A "transition" Section is marked purely by having a `from` and/or `to`
+// attribute — see schemas/waxml.xsd's sectionContentType.
+export function isTransitionSection(node) {
+	return node.attributes.from !== undefined || node.attributes.to !== undefined;
+}
+
+// Resolves a from/to value (a bare "#id" or ".class", per the schema's
+// intent — "en giltig CSS selector") against the Composition's own
+// regular Sections. Neither `id` nor `class` is schema-unique
+// (iMusicId/iMusicClass are plain xs:string), so first-document-order
+// match is the defined tie-break; anything else (a compound/tag
+// selector, or a selector matching nothing) returns null — the caller
+// treats that as an orphan. Per Hans (2026-09-05).
+export function resolveSectionSelector(selectorStr, regularSections) {
+	if (typeof selectorStr !== "string") return null;
+	const trimmed = selectorStr.trim();
+	if (trimmed.startsWith("#")) {
+		const id = trimmed.slice(1);
+		return regularSections.find((s) => s.attributes.id === id) || null;
+	}
+	if (trimmed.startsWith(".")) {
+		const className = trimmed.slice(1);
+		return regularSections.find((s) => (s.attributes.class || "").split(/\s+/).includes(className)) || null;
+	}
+	return null;
+}
+
+// Splits a <Composition>'s direct <Section> children into regular
+// Sections (document order — this order IS their playback-sequence
+// position) and transitions, each transition grouped by which regular
+// Section its `to` resolves to (document order within a group = stacking
+// row order, per Hans: "Om det redan finns en transition ... visas
+// ytterligare en rad under"). A transition's `from` never affects this
+// grouping/stacking (confirmed with Hans) — it's pure engine-matching
+// metadata, only `to` decides where it's drawn. A transition whose `to`
+// is missing or doesn't resolve to any regular Section (a dangling
+// reference, a compound selector, or a `from`-only transition) can only
+// come from hand-edited XML — this app's own "+" flow always sets a
+// resolvable `to` — and is reported separately as an orphan so it still
+// renders (in an overflow strip) rather than silently disappearing.
+export function groupCompositionSections(compositionNode) {
+	const children = compositionNode.children.filter((c) => c.tagName === "Section");
+	const regulars = [];
+	const transitions = [];
+	children.forEach((c) => (isTransitionSection(c) ? transitions : regulars).push(c));
+
+	const transitionsByTargetId = new Map();
+	const orphans = [];
+	transitions.forEach((t) => {
+		const target = t.attributes.to !== undefined ? resolveSectionSelector(t.attributes.to, regulars) : null;
+		if (!target) {
+			orphans.push(t);
+			return;
+		}
+		if (!transitionsByTargetId.has(target.id)) transitionsByTargetId.set(target.id, []);
+		transitionsByTargetId.get(target.id).push(t);
+	});
+
+	return { regulars, transitionsByTargetId, orphans };
+}

@@ -107,6 +107,20 @@ template.innerHTML = `
 		.cell.selected {
 			background: var(--waw-tree-node-selected, #234b73);
 		}
+		/* Cmd/Ctrl-click / Shift-click multi-selection — a lighter tint than
+		   the primary .selected so the "focused"/primary row (Inspector
+		   target) still stands out within the group. */
+		.cell.multi-selected {
+			background: rgba(79, 163, 255, 0.15);
+		}
+		/* Marked for a pending Cut — nothing is actually removed yet (see
+		   xmlStore.cutSelection), just visually dimmed/dashed so it's clear
+		   something is queued to move on the next Paste. */
+		.cell.cut-marked {
+			opacity: 0.5;
+			outline: 1px dashed var(--waw-muted, #8a8a8a);
+			outline-offset: -1px;
+		}
 		.cell.dragging {
 			opacity: 0.4;
 		}
@@ -310,6 +324,7 @@ export class WaXmlTree extends HTMLElement {
 		this._openColumnMenuEl = null;
 		this._creatingCustomRoot = false;
 		this._activeColumns = [...DEFAULT_COLUMNS];
+		this._selectionAnchorId = null; // last plain-clicked row — the fixed end for a subsequent Shift-click range (see _handleRowClick)
 	}
 
 	connectedCallback() {
@@ -354,9 +369,42 @@ export class WaXmlTree extends HTMLElement {
 	}
 
 	_updateSelectionHighlight() {
+		const cutIds = xmlStore.clipboardCutIds;
 		this._container.querySelectorAll(".cell[data-node-id]").forEach((cell) => {
-			cell.classList.toggle("selected", cell.dataset.nodeId === xmlStore.selectedNodeId);
+			const id = cell.dataset.nodeId;
+			cell.classList.toggle("selected", id === xmlStore.selectedNodeId);
+			cell.classList.toggle("multi-selected", xmlStore.selectedNodeIds.has(id) && id !== xmlStore.selectedNodeId);
+			cell.classList.toggle("cut-marked", cutIds.has(id));
 		});
+	}
+
+	// Cmd/Ctrl-click toggles this row in/out of the multi-selection and
+	// becomes the new Shift-click anchor. Shift-click selects the *visible*
+	// row range from the last plain-clicked anchor to this row — _flatten()
+	// already respects collapsed state, same ordering the tree itself
+	// renders in, matching the usual file-manager/tree convention. A plain
+	// click behaves as before (select just this one) and sets a fresh
+	// anchor. Per Hans (2026-09-06).
+	_handleRowClick(e, node) {
+		if (e.shiftKey && this._selectionAnchorId) {
+			const orderedIds = this._flatten(xmlStore.root)
+				.filter((entry) => entry.kind === "node")
+				.map((entry) => entry.node.id);
+			const anchorIndex = orderedIds.indexOf(this._selectionAnchorId);
+			const clickedIndex = orderedIds.indexOf(node.id);
+			if (anchorIndex !== -1 && clickedIndex !== -1) {
+				const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
+				xmlStore.selectRange(orderedIds.slice(from, to + 1));
+				return;
+			}
+		}
+		if (e.metaKey || e.ctrlKey) {
+			xmlStore.toggleNodeSelection(node.id);
+			this._selectionAnchorId = node.id;
+			return;
+		}
+		this._selectionAnchorId = node.id;
+		xmlStore.selectNode(node.id);
 	}
 
 	render() {
@@ -596,6 +644,8 @@ export class WaXmlTree extends HTMLElement {
 	_renderNodeRow({ node, depth, isRoot, hasChildren, canHaveChildren, allowedChildren, parentAllowedChildren }) {
 		const schema = xmlStore.schema;
 		const isSelected = xmlStore.selectedNodeId === node.id;
+		const isMultiSelected = xmlStore.selectedNodeIds.has(node.id) && !isSelected;
+		const isCutMarked = xmlStore.clipboardCutIds.has(node.id);
 		const srcAttrName = getSchemaSrcAttributeName(schema, node.tagName);
 		// Manual (schemaless) mode always allows file-drop, defaulting to "src";
 		// with a schema loaded, only elements that declare a src/source attribute do.
@@ -659,7 +709,9 @@ export class WaXmlTree extends HTMLElement {
 		const cells = [nameCell, ...attrCells];
 
 		if (isSelected) cells.forEach((c) => c.classList.add("selected"));
-		cells.forEach((c) => c.addEventListener("click", () => xmlStore.selectNode(node.id)));
+		if (isMultiSelected) cells.forEach((c) => c.classList.add("multi-selected"));
+		if (isCutMarked) cells.forEach((c) => c.classList.add("cut-marked"));
+		cells.forEach((c) => c.addEventListener("click", (e) => this._handleRowClick(e, node)));
 
 		this._wireDragEvents(cells, node, { isRoot, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, fileHint });
 
