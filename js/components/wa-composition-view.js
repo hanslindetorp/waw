@@ -36,6 +36,18 @@ const MAX_ROW_HEIGHT = 120;
 const DEFAULT_ROW_HEIGHT = 48;
 const RULER_HEIGHT = 28;
 
+// Blank runway rendered before time 0, purely so there's always somewhere
+// to scroll *into* — a row-0 transition's own left edge never actually
+// moves (see _wireEdgeDrag's "scrollFollowsCursor"), so dragging it keeps
+// scrolling the whole timeline instead; without this pad, scrollLeft hits
+// its hard 0 floor the moment time-0 content is already at the left edge
+// of the viewport, and the illusion of "the edge follows your cursor"
+// visibly breaks. Fixed rather than grown live during a drag (simpler,
+// and a single mouse gesture can't physically travel further than the
+// screen it's on anyway) — per Hans (2026-09-07): "jag tycker den ska
+// scrolla ut objekten ur vyn om man drar ... så långt till vänster."
+const LEFT_PAD_PX = 4000;
+
 // These three are coupled by design: a freshly-created transition (1 bar)
 // plus its fixed 1-bar left margin occupies exactly the same width as a
 // plain empty gap (2 bars) — don't change one without the others, per
@@ -413,6 +425,7 @@ export class WaCompositionView extends HTMLElement {
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
 		this._lastCompositionId = null;
+		this._needsInitialScroll = true; // scrolls LEFT_PAD_PX into view once per newly-selected Composition — see _onStoreChange/_renderComposition
 		this._lastSelectedTransitionIdByTarget = new Map();
 		this._lastLayout = null;
 		this._isPlaying = false;
@@ -450,6 +463,7 @@ export class WaCompositionView extends HTMLElement {
 		if (selected && selected.tagName === "Composition" && selected.id !== this._lastCompositionId) {
 			this._lastCompositionId = selected.id;
 			this._lastSelectedTransitionIdByTarget.clear();
+			this._needsInitialScroll = true; // see _renderComposition's own use of this flag
 		}
 		if (!this._lastCompositionId) return;
 
@@ -494,7 +508,7 @@ export class WaCompositionView extends HTMLElement {
 		let cursorTimeSeconds = null;
 		let cursorOffsetPx = null;
 		cursorOffsetPx = e.clientX - this._scroll.getBoundingClientRect().left;
-		cursorTimeSeconds = (this._scroll.scrollLeft + cursorOffsetPx) / this._pxPerSecond;
+		cursorTimeSeconds = this._pxToTime(this._scroll.scrollLeft + cursorOffsetPx);
 
 		const factorX = Math.exp(-e.deltaX * 0.01);
 		const factorY = Math.exp(-e.deltaY * 0.01);
@@ -504,12 +518,18 @@ export class WaCompositionView extends HTMLElement {
 		this._renderComposition(node);
 
 		if (cursorTimeSeconds !== null) {
-			this._scroll.scrollLeft = Math.max(0, cursorTimeSeconds * this._pxPerSecond - cursorOffsetPx);
+			this._scroll.scrollLeft = Math.max(0, this._timeToPx(cursorTimeSeconds) - cursorOffsetPx);
 		}
 	}
 
 	_timeToPx(seconds) {
-		return seconds * this._pxPerSecond;
+		return seconds * this._pxPerSecond + LEFT_PAD_PX;
+	}
+
+	// Inverse of _timeToPx, for the two places that need to go the other
+	// way (cursor-anchored zoom, ruler click-to-trigger).
+	_pxToTime(px) {
+		return (px - LEFT_PAD_PX) / this._pxPerSecond;
 	}
 
 	// --- rendering ---
@@ -542,6 +562,22 @@ export class WaCompositionView extends HTMLElement {
 			else if (cell.kind === "transition") this._rows.appendChild(this._buildTransitionBox(cell, layout));
 			else if (cell.kind === "plus") this._rows.appendChild(this._buildPlusButton(cell, node));
 		});
+
+		// Scrolls the fixed pre-roll pad out of view once per newly-selected
+		// Composition — see _wireEdgeDrag's own use of LEFT_PAD_PX for why
+		// the pad exists. Deferred a frame: this render can run while
+		// wa-preview.js's own panel-switch to "composition" (display:none ->
+		// block) hasn't visually applied yet in the same synchronous
+		// "change" dispatch — a scrollLeft write to a not-yet-laid-out
+		// element is silently clamped to 0 and does NOT get honored once it
+		// becomes visible a moment later, so this has to happen on the next
+		// paint instead of inline here.
+		if (this._needsInitialScroll) {
+			this._needsInitialScroll = false;
+			requestAnimationFrame(() => {
+				this._scroll.scrollLeft = LEFT_PAD_PX;
+			});
+		}
 
 		this._orphanStrip.innerHTML = "";
 		layout.orphans.forEach((orphan) => {
@@ -880,6 +916,18 @@ export class WaCompositionView extends HTMLElement {
 			const isRow0 = siblings[0]?.id === cell.node.id;
 			const behavesAsRightEdge = edge === "right" || isRow0;
 
+			// Row 0's own box never actually moves (its left edge — bar 1 of
+			// its own ruler — is pinned to columnStart, see the class
+			// comment above _wireEdgeDrag) — so when the LEFT handle is the
+			// one being dragged, the cursor would otherwise visibly detach
+			// from the edge it's supposedly holding. Scrolling the whole
+			// timeline by the raw (unsnapped) pixel delta instead keeps that
+			// fixed edge visually glued under the cursor, left or right, per
+			// Hans (2026-09-07) — a pure viewport scroll, not a layout
+			// change, so it never touches _pxPerSecond or any stored data.
+			const scrollFollowsCursor = edge === "left" && isRow0;
+			const initialScrollLeft = this._scroll.scrollLeft;
+
 			const rulerShowsThisRow = (this._lastSelectedTransitionIdByTarget.get(cell.targetId) || siblings[0]?.id) === cell.node.id;
 			const ownRulerCol = rulerShowsThisRow ? this._ruler.querySelector(`.ruler-col[data-target-id="${cell.targetId}"]`) : null;
 			const sameColumnElements = [...this._rows.querySelectorAll(`[data-target-id="${cell.targetId}"]`)].filter((el) => el !== box);
@@ -900,6 +948,10 @@ export class WaCompositionView extends HTMLElement {
 				let newDuration = edge === "left" ? originalDuration - snappedDeltaSeconds : originalDuration + snappedDeltaSeconds;
 				newDuration = Math.max(minDuration, newDuration);
 				committedDuration = newDuration;
+
+				if (scrollFollowsCursor) {
+					this._scroll.scrollLeft = Math.max(0, initialScrollLeft - (moveEvt.clientX - startClientX));
+				}
 
 				if (behavesAsRightEdge) {
 					const endDelta = newDuration - originalDuration;
@@ -985,11 +1037,14 @@ export class WaCompositionView extends HTMLElement {
 			const layout = this._lastLayout;
 			if (!layout) return;
 			const scrollRect = this._scroll.getBoundingClientRect();
-			const clickSeconds = (e.clientX - scrollRect.left + this._scroll.scrollLeft) / this._pxPerSecond;
-			const col = layout.columns.find((c) => clickSeconds >= c.startSeconds && clickSeconds < c.startSeconds + c.durationSeconds);
+			const clickSeconds = this._pxToTime(e.clientX - scrollRect.left + this._scroll.scrollLeft);
+			const col = layout.columns.find((c) => {
+				const [start, duration] = c.kind === "transitions" ? [c.rowRanges[0].startSeconds, c.rowRanges[0].durationSeconds] : [c.startSeconds, c.durationSeconds];
+				return clickSeconds >= start && clickSeconds < start + duration;
+			});
 			if (!col || col.kind === "gap") return;
 
-			const targetNode = col.kind === "section" ? col.node : col.transitions[0];
+			const targetNode = col.kind === "section" ? col.node : col.rowRanges[0].node;
 			this._triggerSection(targetNode);
 		});
 	}
@@ -1036,11 +1091,18 @@ export class WaCompositionView extends HTMLElement {
 	_showPendingBlink(targetNode) {
 		const layout = this._lastLayout;
 		if (!layout) return;
-		const col = layout.columns.find((c) => (c.kind === "section" ? c.node.id === targetNode.id : c.kind === "transitions" && c.transitions.some((t) => t.id === targetNode.id)));
-		if (!col) return;
+		let startSeconds = null;
+		layout.columns.forEach((c) => {
+			if (c.kind === "section" && c.node.id === targetNode.id) startSeconds = c.startSeconds;
+			else if (c.kind === "transitions") {
+				const row = c.rowRanges.find((r) => r.node.id === targetNode.id);
+				if (row) startSeconds = row.startSeconds;
+			}
+		});
+		if (startSeconds === null) return;
 		const marker = document.createElement("div");
 		marker.className = "pending-marker";
-		marker.style.left = `${this._timeToPx(col.startSeconds)}px`;
+		marker.style.left = `${this._timeToPx(startSeconds)}px`;
 		this._rows.appendChild(marker);
 		this._pendingMarkerEl = marker;
 	}
