@@ -20933,7 +20933,11 @@ class Music extends EventTarget {
 							}
 
 						}
-						if(interludeSection && iMus.isPlaying()){
+
+						// XXX
+						// temporarily disabled 2026-09-07
+						
+						if(interludeSection && iMus.isPlaying() && false){
 							// if there is a match, first trig leadIns and Motifs now
 							[...interludeSelection.motifs,...interludeSelection.leadIns].forEach(obj => obj.play(options, arg2, arg3));
 	

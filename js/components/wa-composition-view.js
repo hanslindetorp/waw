@@ -613,6 +613,16 @@ export class WaCompositionView extends HTMLElement {
 		return seconds * this._pxPerSecond;
 	}
 
+	// Grows (never shrinks) .rows/.ruler to at least widthPx — used both by
+	// a live edge-drag (_wireEdgeDrag) and by the initial-scroll rAF
+	// callback (_renderComposition) to correct a totalWidth that was baked
+	// in using a stale/zero clientWidth (measured while the panel was still
+	// display:none — see both call sites for why).
+	_growContainersTo(widthPx) {
+		if (parseFloat(this._rows.style.width) < widthPx) this._rows.style.width = `${widthPx}px`;
+		if (parseFloat(this._ruler.style.width) < widthPx) this._ruler.style.width = `${widthPx}px`;
+	}
+
 	// --- rendering ---
 
 	_renderComposition(node) {
@@ -674,6 +684,18 @@ export class WaCompositionView extends HTMLElement {
 			const leadInInfo = readSectionInfo(layout.regulars[0], node);
 			const leadInPx = this._secondsToPx(leadInInfo.barDuration);
 			requestAnimationFrame(() => {
+				// The SAME "not-yet-laid-out" problem above also bit the
+				// totalWidth computed a moment ago: while this whole panel
+				// was still display:none, this._scroll.clientWidth read as
+				// 0, so totalWidth's clientWidth+LEFT_PAD_PX safety margin
+				// (see above) baked in a container far narrower than what
+				// the panel actually has room for once visible — clamping
+				// this very scrollLeft write to less than the intended
+				// one-bar lead-in, and reading as the view being "scrolled
+				// too far to the right" (Hans, 2026-09-08). Re-measure and
+				// grow the containers now, with layout guaranteed settled,
+				// before scrolling.
+				this._growContainersTo(this._scroll.clientWidth + LEFT_PAD_PX);
 				this._scroll.scrollLeft = Math.max(0, LEFT_PAD_PX - leadInPx);
 			});
 		}
@@ -1143,11 +1165,6 @@ export class WaCompositionView extends HTMLElement {
 			// factor. onMove grows these live, on demand, to whatever the
 			// drag currently needs. Per Hans (2026-09-07): dragging row 0's
 			// left edge "följer med bit, sedan släpper den".
-			const growContainersTo = (widthPx) => {
-				if (parseFloat(this._rows.style.width) < widthPx) this._rows.style.width = `${widthPx}px`;
-				if (parseFloat(this._ruler.style.width) < widthPx) this._ruler.style.width = `${widthPx}px`;
-			};
-
 			let committedDuration = originalDuration;
 
 			const onMove = (moveEvt) => {
@@ -1168,7 +1185,7 @@ export class WaCompositionView extends HTMLElement {
 					// the containers *after* would be too late, since the
 					// browser has already clamped that write to whatever the
 					// (still-stale) scrollWidth allowed at that instant.
-					growContainersTo(this._timeToPx(layout.totalSeconds + endDelta) + 40);
+					this._growContainersTo(this._timeToPx(layout.totalSeconds + endDelta) + 40);
 				}
 
 				if (scrollFollowsCursor) {
