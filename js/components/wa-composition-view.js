@@ -1369,7 +1369,8 @@ export class WaCompositionView extends HTMLElement {
 		if (isPlaying) {
 			this._cursorTime = 0;
 			this._playStartAudioTime = playerStore.audioContext.currentTime;
-			this._playingSectionId = playerStore.activeSectionId;
+			const compositionNode = this._getActiveCompositionNode();
+			this._playingSectionId = (compositionNode && this._readPlayingSectionId(compositionNode)) || playerStore.activeSectionId;
 			this._startPositionLoop();
 		} else {
 			this._stopPositionLoop();
@@ -1387,10 +1388,40 @@ export class WaCompositionView extends HTMLElement {
 		return null;
 	}
 
+	// The Section actually sounding right now, per the live engine —
+	// NOT playerStore.activeSectionId, which only reflects the last
+	// Section the *app* explicitly triggered and never updates as the
+	// engine auto-advances on its own (e.g. from a transition into its
+	// target Section). waxml.js tracks this as
+	// window.iMus.instance.interludeSection (a transition Section
+	// actively bridging two regular ones — cleared back to null once its
+	// target actually starts sounding) or, the rest of the time,
+	// .currentSection. Both are waxml.js Section *instances*, not
+	// XmlNodes — .idString is their own copy of the XML `id` attribute,
+	// mapped back to our internal tree id via _findSectionIdByXmlId
+	// (a different id namespace entirely). Per Hans (2026-09-08).
+	_readPlayingSectionId(compositionNode) {
+		const instance = window.iMus?.instance;
+		if (!instance) return null;
+		const playing = instance.interludeSection || instance.currentSection;
+		return playing ? this._findSectionIdByXmlId(compositionNode, playing.idString) : null;
+	}
+
+	_findSectionIdByXmlId(compositionNode, xmlId) {
+		if (!xmlId) return null;
+		const match = compositionNode.children.find((c) => c.tagName === "Section" && c.attributes.id === xmlId);
+		return match ? match.id : null;
+	}
+
 	_startPositionLoop() {
 		this._stopPositionLoop();
 		const step = () => {
 			if (!this._isPlaying) return;
+			const compositionNode = this._getActiveCompositionNode();
+			if (compositionNode) {
+				const livePlayingId = this._readPlayingSectionId(compositionNode);
+				if (livePlayingId) this._playingSectionId = livePlayingId;
+			}
 			const enginePos = this._readEnginePosition();
 			this._cursorTime = enginePos !== null ? Math.max(0, enginePos) : playerStore.audioContext.currentTime - this._playStartAudioTime;
 			this._updatePlayheadVisual();

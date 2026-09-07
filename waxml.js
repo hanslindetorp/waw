@@ -20931,15 +20931,17 @@ class Music extends EventTarget {
 									}
 								});
 							}
+							defaultInstance.interludeSection = interludeSection;
 
 						}
 
-						// XXX
-						// temporarily disabled 2026-09-07
-						
-						if(interludeSection && iMus.isPlaying() && false){
+
+						if(interludeSection && iMus.isPlaying()){
 							// if there is a match, first trig leadIns and Motifs now
-							[...interludeSelection.motifs,...interludeSelection.leadIns].forEach(obj => obj.play(options, arg2, arg3));
+
+							// XXX
+							// temporarily disabled 2026-09-07
+							// [...interludeSelection.motifs,...interludeSelection.leadIns].forEach(obj => obj.play(options, arg2, arg3));
 	
 							// then play interlude and store time until it changes
 							options.interludeSelector = interludeSelector;
@@ -20954,7 +20956,7 @@ class Music extends EventTarget {
 							iMus.playAfterInterlude = setTimeout(() => {
 								iMus.lastSelectedSectionString = selection.string;
 								returnValues = selection.play(options, arg2, selector).returnVal;
-	
+								defaultInstance.interludeSection = null;
 								let delay = waxml.toSignificant(returnValues.delay);
 								waxml.log(`AUTO-TRIG->${selector}, delay: ${delay}`);
 							}, delay * 1000);
