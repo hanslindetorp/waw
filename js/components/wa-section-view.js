@@ -523,6 +523,11 @@ template.innerHTML = `
 		.layer-output-btn:hover {
 			background: #2f333a;
 		}
+		.layer-output-btn.active {
+			background: #1a4a6a;
+			color: #66c6ff;
+			border-color: #2a7aa6;
+		}
 		/* Same box as .layer-label, swapped in on double-click (see
 		   _startAttributeEdit) — an actual <input> instead of a <div>, same
 		   idea as wa-mixer-view.js's own channel-strip rename. */
@@ -2875,6 +2880,12 @@ export class WaSectionView extends HTMLElement {
 		const btn = document.createElement("button");
 		btn.type = "button";
 		btn.className = "layer-output-btn";
+		// Lit up whenever `output` has an explicit value — an `output`
+		// change always forces a full structural rebuild (see xml-store.js's
+		// ROUTING_REBUILD_ATTRS), so this button is always freshly recreated
+		// with the current attribute rather than needing a live update of
+		// its own. Per Hans (2026-09-09).
+		btn.classList.toggle("active", !!node.attributes.output);
 		btn.textContent = "🔌";
 		btn.title = "Pick an output target";
 		btn.addEventListener("click", (e) => {

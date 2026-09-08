@@ -1022,6 +1022,11 @@ export class WaNodeInspector extends HTMLElement {
 		const pickBtn = document.createElement("button");
 		pickBtn.type = "button";
 		pickBtn.className = "toggle-btn pencil-btn";
+		// Reuses .pencil-btn.active's existing accent-lit look (normally
+		// "this mode was manually cycled" — see _renderUnionControl) for a
+		// different, simpler meaning here: lit whenever this attribute
+		// (output/input) actually has a value. Per Hans (2026-09-09).
+		pickBtn.classList.toggle("active", !!value);
 		pickBtn.textContent = "🔌";
 		pickBtn.title = `Pick a target from available ${complementNoun(attrName)}`;
 		pickBtn.addEventListener("click", () => {
