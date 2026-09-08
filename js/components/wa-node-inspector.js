@@ -893,15 +893,20 @@ export class WaNodeInspector extends HTMLElement {
 			}
 		};
 
-		customInput.addEventListener("input", () => {
+		// Commits on blur/Enter, not per keystroke — same reasoning as
+		// _renderStringControl's own commit timing. Per Hans (2026-09-09).
+		let lastCommitted = value ?? "";
+		const commitCustom = () => {
+			if (customInput.value === lastCommitted) return;
+			lastCommitted = customInput.value;
 			onChange(customInput.value);
-			updateValidity(customInput.value);
-		});
-		// Same as _renderStringControl's own Enter handling — nothing left
-		// to commit (already live per keystroke above), just drop focus.
+		};
+		customInput.addEventListener("input", () => updateValidity(customInput.value));
+		customInput.addEventListener("blur", commitCustom);
 		customInput.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
 				e.preventDefault();
+				commitCustom();
 				customInput.blur();
 			}
 		});
@@ -979,16 +984,26 @@ export class WaNodeInspector extends HTMLElement {
 			numberInput.value = curve.displayRound(v);
 			onChange(curve.format(v));
 		});
+		// The slider (above) stays a live per-tick drag, but the *typed*
+		// number field commits on blur/Enter instead — same reasoning as
+		// _renderStringControl's own commit timing, per Hans (2026-09-09):
+		// typing is a "finish, then commit" gesture, unlike dragging.
+		let lastCommittedNumber = numberInput.value;
+		const commitNumberInput = () => {
+			if (numberInput.value === lastCommittedNumber) return;
+			lastCommittedNumber = numberInput.value;
+			const v = parseFloat(numberInput.value);
+			onChange(numberInput.value === "" ? "" : curve.format(v));
+		};
 		numberInput.addEventListener("input", () => {
 			const v = parseFloat(numberInput.value);
 			if (numberInput.value !== "" && Number.isFinite(v)) slider.value = curve.valueToPosition(v);
-			onChange(numberInput.value === "" ? "" : curve.format(v));
 		});
-		// Same as _renderStringControl's own Enter handling — nothing left
-		// to commit (already live per keystroke above), just drop focus.
+		numberInput.addEventListener("blur", commitNumberInput);
 		numberInput.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
 				e.preventDefault();
+				commitNumberInput();
 				numberInput.blur();
 			}
 		});
@@ -1069,7 +1084,22 @@ export class WaNodeInspector extends HTMLElement {
 		input.style.minWidth = "0";
 		input.value = resolved.value;
 		input.title = resolved.source === "default" ? "Using the built-in default — type a value to override" : `Inherited from the nearest <${resolved.source}> — type a value to override`;
-		input.addEventListener("input", () => onChange(input.value));
+		// Commits on blur/Enter, not per keystroke — same reasoning as
+		// _renderStringControl's own commit timing. Per Hans (2026-09-09).
+		let lastCommitted = resolved.value;
+		const commit = () => {
+			if (input.value === lastCommitted) return;
+			lastCommitted = input.value;
+			onChange(input.value);
+		};
+		input.addEventListener("blur", commit);
+		input.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commit();
+				input.blur();
+			}
+		});
 
 		frag.appendChild(input);
 		return frag;
@@ -1111,17 +1141,25 @@ export class WaNodeInspector extends HTMLElement {
 		};
 
 		const mark = document.createElement("span");
-		input.addEventListener("input", () => {
+		// Commits on blur/Enter, not per keystroke — per Hans (2026-09-09):
+		// a free-text field can land on any attribute, including ones
+		// xml-store.js has to fall back to a full engine reload for (no live
+		// .set() case — see LIVE_NUDGE_ALLOWED_ATTRS), and reloading (which
+		// also briefly stops playback) on every single character typed was
+		// the actual bug, not just the wrong value landing. Validity styling
+		// still updates live — that's local, no xmlStore write involved.
+		let lastCommitted = value ?? "";
+		const commit = () => {
+			if (input.value === lastCommitted) return;
+			lastCommitted = input.value;
 			onChange(input.value);
-			updateValidity();
-		});
-		// Already committed live on every keystroke (above) — Enter has
-		// nothing left to *do*, but per Hans (2026-09-05) it should still
-		// drop focus so the field's blue focus ring goes away, same as
-		// hitting Enter/Return in any normal form field.
+		};
+		input.addEventListener("input", () => updateValidity());
+		input.addEventListener("blur", commit);
 		input.addEventListener("keydown", (e) => {
 			if (e.key === "Enter") {
 				e.preventDefault();
+				commit();
 				input.blur();
 			}
 		});

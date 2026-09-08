@@ -1,5 +1,6 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
+import { isEditableContext } from "../project/edit-history.js";
 
 // One knob per root-level <Var> — lets you nudge a global variable live
 // while playing, right from the player bar (per Hans, top-right, next to
@@ -68,6 +69,9 @@ template.innerHTML = `
 			cursor: default;
 			opacity: 0.4;
 		}
+		.var-knob.selected {
+			box-shadow: 0 0 0 2px var(--waw-accent, #4fa3ff), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
+		}
 		.var-knob-dial {
 			position: absolute;
 			left: 50%;
@@ -119,17 +123,36 @@ export class WaVarKnobs extends HTMLElement {
 		this._wasDocumentLoaded = false;
 		this._onXmlStoreChange = () => this._render();
 		this._onPlayerStoreChange = () => this._onPlayerChange();
+		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
 	connectedCallback() {
 		xmlStore.addEventListener("change", this._onXmlStoreChange);
 		playerStore.addEventListener("change", this._onPlayerStoreChange);
+		document.addEventListener("keydown", this._onKeyDown);
 		this._render();
 	}
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("change", this._onXmlStoreChange);
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
+		document.removeEventListener("keydown", this._onKeyDown);
+	}
+
+	// Backspace/Delete removes the currently selected root-level <Var> —
+	// same selectable/deletable treatment as everywhere else in the XML
+	// editor, per Hans (2026-09-09). Only acts when the selection is
+	// genuinely one of *this* component's own knobs, same guard
+	// wa-player-bar.js's own Command deletion uses.
+	_onKeyDown(e) {
+		if (e.key !== "Backspace" && e.key !== "Delete") return;
+		if (isEditableContext()) return;
+		const selectedId = xmlStore.selectedNodeId;
+		if (!selectedId || !xmlStore.root) return;
+		const isOwnVar = xmlStore.root.children.some((c) => c.tagName === "Var" && c.id === selectedId);
+		if (!isOwnVar) return;
+		e.preventDefault();
+		xmlStore.removeNode(selectedId);
 	}
 
 	// Re-pushes every knob's own current value the moment the graph
@@ -171,6 +194,14 @@ export class WaVarKnobs extends HTMLElement {
 
 		const knob = document.createElement("div");
 		knob.className = "var-knob";
+		knob.classList.toggle("selected", xmlStore.selectedNodeId === node.id);
+		// Selects this <Var> (so the XML tree/Code panel highlight it too —
+		// see xmlStore.selectNode's existing sync), per Hans (2026-09-09):
+		// selectable/deletable now, same as everything else in the XML
+		// editor. A plain click still fires normally alongside _wireDrag's
+		// own pointerdown-based drag handling below (stopPropagation there
+		// only blocks bubbling, not this element's own later "click").
+		knob.addEventListener("click", () => xmlStore.selectNode(node.id));
 		const dial = document.createElement("div");
 		dial.className = "var-knob-dial";
 		knob.appendChild(dial);

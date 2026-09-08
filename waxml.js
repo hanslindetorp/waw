@@ -17455,6 +17455,14 @@ class Music extends EventTarget {
 							waxml.dispatchEvent(new CustomEvent(tag));
 						}, timeToLegalBreak * 1000);
 	
+						waxml.dispatchEvent(new CustomEvent('section-trig', {
+							detail: {
+								selector: selector,
+								section: this,
+								time: nextTime,
+								delay: delay
+							}
+						}));
 	
 						setTimeout(() => {
 							// this will make the queue change to this section after
@@ -20595,7 +20603,9 @@ class Music extends EventTarget {
 
 				// remove # and . from selector
 				// iMusic doesn't use these characters in the selector, but they are used in WAXML. So, for compatibility, we remove them here.
-				selector = selector.replace(/[#.]/g, "");
+				
+				// Removed 2024-06-10 to unify with WAXML. iMusic should use the same selector syntax as WAXML.
+				// selector = selector.replace(/[#.]/g, "");
 				
 				// get new selection
 				var selection = new Selection(myInstance).selectForPlayback(selector);
@@ -21456,6 +21466,10 @@ class Music extends EventTarget {
 					myInstance.sections = [];
 					myInstance.motifs = [];
 
+					myInstance.parameters.tempo = parseFloat(musicStructure.getAttribute("tempo")) || 120;
+					myInstance.parameters.timeSign = getTimeSign(musicStructure.getAttribute("timeSign") || "4/4");
+
+
 					// WAXML already parsed the XML and passed it as a Node
 					MusicParser.parseXML(myInstance, musicStructure);
 
@@ -22090,9 +22104,26 @@ class Selection{
             selectors.forEach(selector => {
                 let inThisSection = obj.section == this.iMusObj.currentSection;
                 let inNoSection = !obj.section;
-                if((inThisSection || inNoSection) && iMusicHelpers.inArray(selector, obj.parameters.classList)){
-                    this.motifs.push(obj);
-                    this.objects.push(obj);
+                if(inThisSection || inNoSection){
+
+                    // if the selector is a class name
+                    if(selector.substr(0, 1) == "."){
+                        selector = selector.substr(1);
+                        if(iMusicHelpers.inArray(selector, obj.parameters.classList)){
+                            this.motifs.push(obj);
+                            this.objects.push(obj);
+                        }
+                    }
+
+                    // if the selector is an id name
+                    if(selector.substr(0, 1) == "#"){
+                        selector = selector.substr(1);
+                        if(obj.parameters.id == selector){
+                            this.motifs.push(obj);
+                            this.objects.push(obj);
+                        }
+                    }
+
                 }
             });
         });
@@ -22100,10 +22131,25 @@ class Selection{
         // find next section
         this.iMusObj.sections.forEach(obj => {
             selectors.forEach(selector => {
-                if(iMusicHelpers.inArray(selector, obj.parameters.classList)){
-                    this.sections.push(obj);
-                    this.objects.push(obj);
-                    this.string = selector;
+
+                // if the selector is a class name
+                if(selector.substr(0, 1) == "."){
+                    selector = selector.substr(1);
+                    if(iMusicHelpers.inArray(selector, obj.parameters.classList)){
+                        this.sections.push(obj);
+                        this.objects.push(obj);
+                        this.string = selector;
+                    }
+                }
+
+                // if the selector is an id name
+                if(selector.substr(0, 1) == "#"){
+                    selector = selector.substr(1);
+                    if(obj.parameters.id == selector){
+                        this.sections.push(obj);
+                        this.objects.push(obj);
+                        this.string = selector;
+                    }
                 }
             });
         });

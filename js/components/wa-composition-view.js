@@ -66,24 +66,17 @@ const DEFAULT_TRANSITION_LENGTH = "2"; // bars, per Hans (2026-09-08)
 const MIN_TRANSITION_BARS = 0.25; // drag-resize floor, in bars of the transition's own tempo
 const WAVEFORM_COLOR = "#4fa3ff"; // same as wa-section-view.js's own WAVEFORM_COLOR
 
-// A Section's class can hold more than one space-separated token — every
-// caller here (displayLabel, firstSelector, transitionClass) only ever
-// wants the first.
-function firstClassToken(node) {
-	return (node.attributes.class || "").trim().split(/\s+/)[0];
-}
+// Shared with player-store.js/wa-player-bar.js/wa-section-view.js now — see
+// xml-tree-ops.js's own doc comments. Local aliases so every existing call
+// site here (displayLabel, transitionClass, _triggerSection) stays
+// unchanged.
+const { firstClassToken, firstSelector } = ops;
 
 // label > id > class > tagName, per Hans (2026-09-08, reverting the
 // label/class/id order from 2026-09-07).
 function displayLabel(node) {
 	const firstClass = firstClassToken(node);
 	return node.attributes.label || node.attributes.id || firstClass || node.tagName;
-}
-
-function firstSelector(node) {
-	const firstClass = firstClassToken(node);
-	if (firstClass) return `.${firstClass}`;
-	return `#${node.attributes.id}`;
 }
 
 // A newly created transition's own `class`: "[fromClass]-[toClass]", each
@@ -592,6 +585,7 @@ export class WaCompositionView extends HTMLElement {
 		this._bufferCache = new Map(); // resolvedUrl -> Promise<AudioBuffer|null>, same pattern as wa-section-view.js's own _decode
 
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
+		this._onSectionTrig = this._onSectionTrig.bind(this);
 	}
 
 	connectedCallback() {
@@ -602,6 +596,13 @@ export class WaCompositionView extends HTMLElement {
 		this._wireRulerClickOnce();
 		xmlStore.addEventListener("change", () => this._onStoreChange());
 		playerStore.addEventListener("change", this._onPlayerStoreChange);
+		// The real "which Section, and when" signal — see _onSectionTrig.
+		// Per Hans (2026-09-09): "waxml.addEventListener('section-trig', ...)"
+		// dispatches {selector, section, time, delay} for every trig, own
+		// UI-driven or the engine's own auto-advance alike, replacing the
+		// old window.iMus-instance-reading guesswork this file used to do
+		// (see the removed _readPlayingSectionId).
+		window.waxml?.addEventListener("section-trig", this._onSectionTrig);
 		this._onStoreChange();
 	}
 
@@ -609,6 +610,40 @@ export class WaCompositionView extends HTMLElement {
 		this._stopPositionLoop();
 		this._clearPendingBlink();
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
+		window.waxml?.removeEventListener("section-trig", this._onSectionTrig);
+	}
+
+	// waxml.js's own authoritative "a Section is about to sound" signal —
+	// `section` is the live waxml Section instance (not our XmlNode;
+	// .idString is its own copy of the XML `id` attribute, same mapping
+	// _findSectionIdByXmlId already used for the old guesswork), `time` is
+	// the AudioContext time it actually starts at, `delay` how many seconds
+	// from now that is (0 for "right now"). Per Hans (2026-09-09) — no more
+	// guessing which Section is playing, or client-side-estimating a
+	// pending trig's wait time (see the removed _estimateSyncWaitSeconds):
+	// this event *is* the real schedule.
+	_onSectionTrig({ detail: { section, delay } }) {
+		const compositionNode = this._getActiveCompositionNode();
+		if (!compositionNode) return;
+		const sectionId = this._findSectionIdByXmlId(compositionNode, section?.idString);
+		if (!sectionId) return; // not a Section in the Composition currently shown
+
+		this._clearPendingBlink();
+		const applyNowPlaying = () => {
+			this._playingSectionId = sectionId;
+			this._updatePlayheadVisual();
+		};
+		if (delay > 0) {
+			const targetNode = ops.findNodeById(xmlStore.root, sectionId);
+			if (targetNode) this._showPendingBlink(targetNode);
+			this._pendingBlinkTimer = setTimeout(() => {
+				this._pendingBlinkTimer = null;
+				this._clearPendingBlink();
+				applyNowPlaying();
+			}, delay * 1000);
+		} else {
+			applyNowPlaying();
+		}
 	}
 
 	// --- selection / sticky active Composition (same idea as wa-section-view's _lastSectionId) ---
@@ -1506,43 +1541,14 @@ export class WaCompositionView extends HTMLElement {
 		});
 	}
 
+	// Just trig — no more client-side wait-estimating/blink-then-trig dance
+	// (waxml.js's own trig() already resolves syncTo internally and dispatch
+	// the real schedule as "section-trig" — see _onSectionTrig, which now
+	// owns showing the pending blink and marking a Section as actually
+	// playing, driven by that event's real `delay` instead of a client
+	// guess). Per Hans (2026-09-09).
 	_triggerSection(targetNode) {
-		const selector = firstSelector(targetNode);
-		this._clearPendingBlink();
-
-		const outgoingId = this._playingSectionId;
-		const compositionNode = this._getActiveCompositionNode();
-		const outgoing = outgoingId && compositionNode ? ops.findNodeById(xmlStore.root, outgoingId) : null;
-
-		if (!playerStore.isPlaying || !outgoing) {
-			playerStore.trigShortcut(selector);
-			return;
-		}
-
-		const outgoingInfo = readSectionInfo(outgoing, compositionNode);
-		const waitSeconds = this._estimateSyncWaitSeconds(outgoing, outgoingInfo, this._cursorTime);
-		this._showPendingBlink(targetNode);
-		this._pendingBlinkTimer = setTimeout(() => {
-			this._pendingBlinkTimer = null;
-			this._clearPendingBlink();
-			playerStore.trigShortcut(selector);
-		}, Math.max(0, waitSeconds) * 1000);
-	}
-
-	// v1 estimate only — waxml.js doesn't yet dispatch a live event for "a
-	// Section trig is scheduled and waiting on syncTo" (unlike Mixer's solo,
-	// see wa-mixer-view.js's _wireMixerUpdateListener/.standby for the real
-	// thing). Mirrors the *shape* of waxml.js's own quantize-delay math
-	// (Q = syncTo in seconds; wait = time left until the next Q-boundary),
-	// reimplemented client-side with parseDivision (already handles syncTo's
-	// exact grammar, "off" included). Swap for a real waxml.js event once
-	// Hans's engine work adds one. syncTo is read only from the outgoing
-	// Section's own attribute — no Composition-level inheritance (confirmed
-	// with Hans, unlike tempo/timeSign).
-	_estimateSyncWaitSeconds(outgoingSectionNode, outgoingInfo, elapsedSeconds) {
-		const q = parseDivision(outgoingSectionNode.attributes.syncTo, outgoingInfo);
-		if (!Number.isFinite(q) || q <= 0) return 0;
-		return (q - (elapsedSeconds % q)) % q;
+		playerStore.trigShortcut(firstSelector(targetNode), targetNode.id);
 	}
 
 	_showPendingBlink(targetNode) {
@@ -1588,8 +1594,11 @@ export class WaCompositionView extends HTMLElement {
 		if (isPlaying) {
 			this._cursorTime = 0;
 			this._playStartAudioTime = playerStore.audioContext.currentTime;
-			const compositionNode = this._getActiveCompositionNode();
-			this._playingSectionId = (compositionNode && this._readPlayingSectionId(compositionNode)) || playerStore.activeSectionId;
+			// A "section-trig" event (see _onSectionTrig) for this same trig
+			// has very likely already landed by now — bridge.trig() dispatches
+			// it synchronously, before playerStore's own "change" reaches this
+			// listener — this is just a fallback for the rare case it hasn't.
+			if (!this._playingSectionId) this._playingSectionId = playerStore.activeSectionId;
 			this._startPositionLoop();
 		} else {
 			this._stopPositionLoop();
@@ -1607,25 +1616,9 @@ export class WaCompositionView extends HTMLElement {
 		return null;
 	}
 
-	// The Section actually sounding right now, per the live engine —
-	// NOT playerStore.activeSectionId, which only reflects the last
-	// Section the *app* explicitly triggered and never updates as the
-	// engine auto-advances on its own (e.g. from a transition into its
-	// target Section). waxml.js tracks this as
-	// window.iMus.instance.interludeSection (a transition Section
-	// actively bridging two regular ones — cleared back to null once its
-	// target actually starts sounding) or, the rest of the time,
-	// .currentSection. Both are waxml.js Section *instances*, not
-	// XmlNodes — .idString is their own copy of the XML `id` attribute,
-	// mapped back to our internal tree id via _findSectionIdByXmlId
-	// (a different id namespace entirely). Per Hans (2026-09-08).
-	_readPlayingSectionId(compositionNode) {
-		const instance = window.iMus?.instance;
-		if (!instance) return null;
-		const playing = instance.interludeSection || instance.currentSection;
-		return playing ? this._findSectionIdByXmlId(compositionNode, playing.idString) : null;
-	}
-
+	// .idString (a live waxml Section instance's own copy of the XML `id`
+	// attribute) -> our internal tree id, for the Section currently shown in
+	// this Composition — shared by _onSectionTrig.
 	_findSectionIdByXmlId(compositionNode, xmlId) {
 		if (!xmlId) return null;
 		const match = compositionNode.children.find((c) => c.tagName === "Section" && c.attributes.id === xmlId);
@@ -1636,11 +1629,10 @@ export class WaCompositionView extends HTMLElement {
 		this._stopPositionLoop();
 		const step = () => {
 			if (!this._isPlaying) return;
-			const compositionNode = this._getActiveCompositionNode();
-			if (compositionNode) {
-				const livePlayingId = this._readPlayingSectionId(compositionNode);
-				if (livePlayingId) this._playingSectionId = livePlayingId;
-			}
+			// _playingSectionId itself is maintained by _onSectionTrig now,
+			// not re-guessed every frame — this loop only advances the
+			// playhead's *position within* whichever Section that already
+			// says is playing.
 			const enginePos = this._readEnginePosition();
 			this._cursorTime = enginePos !== null ? Math.max(0, enginePos) : playerStore.audioContext.currentTime - this._playStartAudioTime;
 			this._updatePlayheadVisual();
@@ -1657,12 +1649,16 @@ export class WaCompositionView extends HTMLElement {
 	// A regular Section with no fixed length loops audibly (its own looping
 	// Layers) — the pointer mirrors that by jumping back to bar 1 of that
 	// same Section every time it passes sectionContentDuration, per Hans.
+	// Only drawn over a *transition* now — a regular Section shows its own
+	// spinning ring instead (see _updateLoopCircles), and the position
+	// pointer line would just be redundant clutter on top of it. Per Hans
+	// (2026-09-09).
 	_updatePlayheadVisual() {
 		this._updateLoopCircles();
 		this.shadowRoot.querySelectorAll(".playhead").forEach((el) => el.remove());
 		if (!this._isPlaying || !this._playingSectionId || !this._lastLayout) return;
 
-		const cell = this._lastLayout.cells.find((c) => (c.kind === "section" || c.kind === "transition") && c.node.id === this._playingSectionId);
+		const cell = this._lastLayout.cells.find((c) => c.kind === "transition" && c.node.id === this._playingSectionId);
 		if (!cell) return;
 
 		const localTime = cell.durationSeconds > 0 ? this._cursorTime % cell.durationSeconds : this._cursorTime;

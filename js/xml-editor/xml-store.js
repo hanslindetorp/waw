@@ -394,15 +394,35 @@ class XmlStore extends EventTarget {
 	// the "liveNudge" change-event detail below.
 	static LIVE_NUDGEABLE_COMPOSITION_TAGS = new Set(["Section", "Layer", "Stinger"]);
 
-	// `mute` is excluded from the generic nudge below on purpose: it has no
-	// "mute" case in waxml.js's own .set(param, value) switch (mute is a
-	// dedicated setMuteState(0|1) method, called separately by whichever UI
-	// writes it — see wa-section-view.js's _writeMute) — a generic nudge
-	// would fall through to that switch's `default` case instead, animating
-	// some unrelated bus parameter with a "0"/"1" string. `output` is
-	// likewise excluded, redundantly with ROUTING_REBUILD_ATTRS already
-	// forcing structural=true for it.
-	static LIVE_NUDGE_EXCLUDED_ATTRS = new Set(["mute", "output", "input", "bus"]);
+	// An ALLOWLIST, not a denylist — per Hans (2026-09-09): `length` (no
+	// case in waxml.js's own .set(param, value) switch) silently failed to
+	// reach the live engine both when typed in the Inspector and when
+	// dragging a transition's edge in Composition preview, because the
+	// previous design treated *every* attribute on these tags as safe to
+	// nudge unless explicitly denylisted — `length` was simply never added
+	// to that denylist, and nothing would have caught the next such gap
+	// either. The safer default is the other way around: force a full
+	// rebuild unless an attribute is *known* to be handled live. Every name
+	// here is a real case in that switch (verified against its source);
+	// anything else — `length` included — falls back to a full rebuild
+	// instead of risking that switch's `default:` catch-all silently
+	// misapplying the value to some unrelated bus parameter.
+	static LIVE_NUDGE_ALLOWED_ATTRS = new Set([
+		"gain", // aliased to "volume" below — see _buildLiveNudge
+		"loopEnd",
+		"changeOnNext",
+		"cuePoint",
+		"randomOffset",
+		"upbeat",
+		"active",
+		"fadeTime",
+		"tags",
+		"blockRetrig",
+		"release",
+		"pan",
+		"filter",
+		"delay"
+	]);
 
 	// structural=false (the common case): an attribute value changing never
 	// adds/removes/reorders a node, so it can't change what a live waxml
@@ -434,7 +454,14 @@ class XmlStore extends EventTarget {
 		for (const name of Object.keys(nextAttributes)) {
 			const value = nextAttributes[name];
 			if (value === node.attributes[name]) continue;
-			if (XmlStore.LIVE_NUDGE_EXCLUDED_ATTRS.has(name)) continue;
+			// `mute` reaches here as non-structural too (see
+			// _attributeChangeNeedsRebuild) but is deliberately skipped from
+			// the generic nudge itself — it has its own dedicated
+			// setMuteState(0|1) call, made separately by whichever UI writes
+			// it (see wa-section-view.js's _writeMute); nudging it again here
+			// via the generic switch would hit that switch's `default:` case
+			// instead, since it has no "mute" case of its own.
+			if (name === "mute") continue;
 			// waxml.js's generic .set(param, value) expects "volume" (a plain
 			// linear float), while the XML `gain` attribute is written as a
 			// 0-1 ratio or an "XdB" string (see waxml.xsd's `gain` union type)
@@ -464,6 +491,17 @@ class XmlStore extends EventTarget {
 		if (this._isInsideComposition(node)) {
 			if (!XmlStore.LIVE_NUDGEABLE_COMPOSITION_TAGS.has(node.tagName)) return true;
 			if (!node.attributes.id) return true;
+			// Every *changed* attribute has to be one this tag can actually
+			// nudge live (LIVE_NUDGE_ALLOWED_ATTRS, or `mute` — see
+			// _buildLiveNudge) — one unrecognized attribute (e.g. `length`)
+			// in the same write forces a full rebuild for the whole call,
+			// same as the routing/oscillator-type checks above. Per Hans
+			// (2026-09-09).
+			for (const name of Object.keys(nextAttributes)) {
+				if (nextAttributes[name] === node.attributes[name]) continue;
+				if (name === "mute") continue;
+				if (!XmlStore.LIVE_NUDGE_ALLOWED_ATTRS.has(name)) return true;
+			}
 		}
 		// An attribute whose value newly becomes (or stops being) a "$name"
 		// <Var> reference needs a full reload too, for the same "live nudge

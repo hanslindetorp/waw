@@ -757,8 +757,8 @@ template.innerHTML = `
 			transform: translateX(-50%);
 		}
 		/* A triggered Stinger's own live position pointer — see
-		   _handleStingerDoubleClick/_updateStingerPointers. Same look as the
-		   main .playhead, scoped to just this Stinger's own row. */
+		   _triggerStinger/_updateStingerPointers. Same look as the main
+		   .playhead, scoped to just this Stinger's own row. */
 		.stinger-pointer {
 			position: absolute;
 			top: 0;
@@ -766,6 +766,39 @@ template.innerHTML = `
 			border-left: 2px solid #ff5a5a;
 			z-index: 7;
 			pointer-events: none;
+		}
+		/* A round, YouTube-style play button centered on a Stinger's own
+		   content — same look as wa-composition-view.js's own
+		   .section-play-btn, replacing the old double-click-to-trigger
+		   gesture. Per Hans (2026-09-09). A child of the Stinger's own box
+		   or bare-waveform canvas (both already position: absolute — see
+		   _buildStingerLane/_renderWaveformOnly/_renderTimedBox), so
+		   top/left:50% centers it on that element's own box, not the whole
+		   (much wider, scrollable) lane. */
+		.stinger-play-btn {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			border-radius: 50%;
+			border: none;
+			background: rgba(0, 0, 0, 0.55);
+			color: #fff;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+			cursor: pointer;
+			z-index: 4;
+		}
+		.stinger-play-btn:hover {
+			background: rgba(0, 0, 0, 0.75);
+		}
+		.stinger-play-btn svg {
+			width: 46%;
+			height: 46%;
+			margin-left: 8%;
+			fill: currentColor;
 		}
 		/* The rest of a Stinger's own box/content (and its nested Options)
 		   drags to reposition relative to the anchor — gets the horizontal
@@ -1032,7 +1065,7 @@ export class WaSectionView extends HTMLElement {
 		// report.
 		this._isLocalEdit = false;
 		this._dragState = null; // {kind, nodeId, grabOffsetSeconds} for an in-progress Option/Segment drag — set at dragstart since dataTransfer.getData() isn't readable until drop; grabOffsetSeconds is where within the box the drag started, so the box keeps that same offset from the cursor instead of snapping its left edge under it
-		this._activeStingerTriggers = new Map(); // stingerId -> {triggerAudioTime, startOffsetSeconds, durationSeconds, el} — see _handleStingerDoubleClick
+		this._activeStingerTriggers = new Map(); // stingerId -> {triggerAudioTime, startOffsetSeconds, durationSeconds, el} — see _triggerStinger
 
 		this._onKeyDown = this._onKeyDown.bind(this);
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
@@ -1566,11 +1599,16 @@ export class WaSectionView extends HTMLElement {
 
 	// --- Stinger triggering & live position pointer ---
 
-	// Double-click a Stinger (its label, or its own content/box) to trigger
-	// it live during Section Preview playback — mirrors the "double-click to
-	// preview a sound" gesture common in DAWs; single click stays reserved
-	// for selection. Only meaningful while the Section is actually playing,
-	// since there's no "current position" to compute against otherwise.
+	// A round play button centered on a Stinger's own content triggers it
+	// live — per Hans (2026-09-09), replacing the old double-click gesture.
+	// Goes through playerStore.trigShortcut (same waxml.trig(selector) path,
+	// and the same .class-else-#id priority, as every other trig source
+	// now) rather than bridge.trigNode's own [id='...'] selector, so this
+	// trig is also reflected in the player bar's own selector field.
+	//
+	// The live position-pointer bookkeeping below only makes sense while
+	// *this* Section is actually playing (there's no "current position" to
+	// compute against otherwise) — the trig itself always fires regardless.
 	//
 	// waxml.js starts a triggered Stinger's own audio mid-sample — its
 	// internal position pointer picks up at (elapsed Section time) mod (its
@@ -1578,12 +1616,13 @@ export class WaSectionView extends HTMLElement {
 	// The pointer this animates mirrors that: it starts at the Stinger's own
 	// resolved position (basePos, i.e. where its waveform is actually drawn)
 	// plus that same remainder, then advances in real time from there.
-	_handleStingerDoubleClick(stinger, info) {
-		if (!this._isPlaying) return;
+	_triggerStinger(stinger, info) {
 		const stingerNow = ops.findNodeById(xmlStore.root, stinger.id);
-		if (!stingerNow || !stingerNow.attributes.id) return;
+		if (!stingerNow) return;
 
-		bridge.trigNode(stingerNow.attributes.id);
+		playerStore.trigShortcut(ops.firstSelector(stingerNow));
+
+		if (!this._isPlaying) return;
 
 		const quantizeDurationSeconds = parseDivision(stingerNow.attributes.quantize, info);
 		const startOffsetSeconds = quantizeDurationSeconds > 0 ? this._cursorTime % quantizeDurationSeconds : 0;
@@ -1597,6 +1636,25 @@ export class WaSectionView extends HTMLElement {
 
 		const node = this._getActiveSectionNode();
 		if (node) this._renderSection(node);
+	}
+
+	// Builds the round play button itself — see the .stinger-play-btn CSS
+	// comment for why it's a child of `content` (the Stinger's own box or
+	// bare-waveform canvas) rather than the lane.
+	_buildStingerPlayButton(stinger, info) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "stinger-play-btn";
+		const size = Math.max(18, Math.min(this._rowHeight * 0.5, 32));
+		btn.style.width = `${size}px`;
+		btn.style.height = `${size}px`;
+		btn.title = "Play this Stinger";
+		btn.innerHTML = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>`;
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._triggerStinger(stinger, info);
+		});
+		return btn;
 	}
 
 	// Best-effort playback-duration estimate for a triggered Stinger, used
@@ -2085,10 +2143,10 @@ export class WaSectionView extends HTMLElement {
 		this._wireStingerLaneDropTarget(lane, stinger, info, ghost, basePos);
 
 		// Live position pointer for this Stinger, only present while it's
-		// actually been triggered (double-click) during playback — see
-		// _handleStingerDoubleClick/_updateStingerPointers. Rebuilt on every
-		// render (like the main .playhead) so zoom/scroll changes don't
-		// leave it stale; the animation loop just repositions it in place.
+		// actually been triggered during playback — see
+		// _triggerStinger/_updateStingerPointers. Rebuilt on every render
+		// (like the main .playhead) so zoom/scroll changes don't leave it
+		// stale; the animation loop just repositions it in place.
 		const activeTrigger = this._activeStingerTriggers.get(stinger.id);
 		if (activeTrigger) {
 			const pointerEl = document.createElement("div");
@@ -2113,20 +2171,26 @@ export class WaSectionView extends HTMLElement {
 				// children) using the same lane-absolute coordinates the
 				// canvas and anchor already use.
 				this._renderChangeOnNextMarks(lane, stinger, info, basePos, quantizePos, (s) => this._timeToPx(s, info));
-				content.addEventListener("dblclick", (e) => {
-					e.stopPropagation();
-					this._handleStingerDoubleClick(stinger, info);
-				});
+				// Same reasoning as the marks above — a canvas can't usefully
+				// contain a DOM child, so the play button appends to `lane`
+				// instead, positioned from `content`'s own *current* rendered
+				// box (its real width isn't known until decode resolves, but
+				// this reads whatever's true right now — close enough, and
+				// self-corrects on the next full re-render once it does).
+				const playBtn = this._buildStingerPlayButton(stinger, info);
+				const contentRect = content.getBoundingClientRect();
+				const laneRect = lane.getBoundingClientRect();
+				playBtn.style.left = `${contentRect.left - laneRect.left + contentRect.width / 2}px`;
+				playBtn.style.top = "50%";
+				playBtn.style.transform = "translate(-50%, -50%)";
+				lane.appendChild(playBtn);
 			}
 			return lane;
 		}
 
 		const box = content;
 		this._wireStingerContentDrag(box, stinger, info, quantizePos, basePos);
-		box.addEventListener("dblclick", (e) => {
-			e.stopPropagation();
-			this._handleStingerDoubleClick(stinger, info);
-		});
+		box.appendChild(this._buildStingerPlayButton(stinger, info));
 
 		// Each Option's own pos=0 sits at the *Stinger's* resolved position
 		// (basePos), not the raw quantize point — its offset stacks on top

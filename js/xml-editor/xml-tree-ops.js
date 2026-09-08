@@ -266,6 +266,36 @@ export function generateVarName(root) {
 	}
 }
 
+// Root-level trigger-shortcut <Command>s created via the player bar's own
+// "+" button (see wa-player-bar.js) get a "Cmd-N" id — same reuse-after-
+// delete / whole-document-uniqueness semantics as generateVarName/
+// nextTransitionId above.
+export function generateCommandId(root) {
+	const used = root ? usedIds(root) : new Set();
+	for (let n = 1; ; n++) {
+		const candidate = `Cmd-${n}`;
+		if (!used.has(candidate)) return candidate;
+	}
+}
+
+// A Section's (or any element's) class can hold more than one
+// space-separated token — every caller here only ever wants the first.
+export function firstClassToken(node) {
+	return (node.attributes.class || "").trim().split(/\s+/)[0];
+}
+
+// The selector to trig() a given element by — per Hans (2026-09-09): its
+// own first class token (prefixed "."), or its id (prefixed "#") if it has
+// no class at all. Used everywhere something needs to tell waxml.js "play
+// this element" (the player bar's PLAY field, a trigger-shortcut Command,
+// a Section's or Stinger's own play button, ...) so every one of those
+// paths derives the same selector for the same element.
+export function firstSelector(node) {
+	const firstClass = firstClassToken(node);
+	if (firstClass) return `.${firstClass}`;
+	return `#${node.attributes.id}`;
+}
+
 export function findNodeById(root, id) {
 	if (root.id === id) return root;
 	for (const child of root.children) {

@@ -102,18 +102,6 @@ export class WaxmlBridge {
 		this.waxml.setVariable(name, value);
 	}
 
-	// Triggers one specific node (by its auto-assigned `id` attribute)
-	// within the document already loaded for preview — used to trigger an
-	// individual <Stinger> live during Section Preview playback, distinct
-	// from play()'s whole-preview-target trig(). An explicit [id='...']
-	// attribute selector is used rather than "#id" shorthand: a plain XML
-	// document has no DTD, so the browser doesn't know which attribute is of
-	// type ID for "#" to match against, but a plain attribute selector works
-	// regardless.
-	trigNode(nodeId) {
-		this.waxml.trig(`[id='${nodeId}']`);
-	}
-
 	// Resolves a selector to the live runtime object(s) (not XML DOM nodes —
 	// waxml's own querySelectorAll on the engine itself already returns the
 	// attached .obj/.audioObject wrapper directly) for whatever's currently

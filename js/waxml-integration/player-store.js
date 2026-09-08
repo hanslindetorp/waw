@@ -1,4 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
+import { firstSelector } from "../xml-editor/xml-tree-ops.js";
 import { WaxmlBridge } from "./waxml-bridge.js";
 
 const bridge = new WaxmlBridge();
@@ -161,20 +162,19 @@ class PlayerStore extends EventTarget {
 		this._reloadInFlight = false;
 	}
 
-	// Per Hans (2026-09-01): waxml.js's sectionStart only ends up set
-	// correctly when trig() is called with a *class* selector, not an
-	// [id='...'] one — so the PLAY/STOP field now auto-follows "the first
-	// class of the most recently selected element that actually had one",
-	// instead of the id of whatever <Section> was last viewed. An element
-	// with no class leaves the field exactly as it was (not cleared) —
-	// runs on every xmlStore change, not just a fresh selection, so editing
-	// the currently-armed element's own class attribute updates it too.
+	// Per Hans (2026-09-01, refined 2026-09-09): waxml.js's sectionStart only
+	// ends up set correctly when trig() is called with a *class* selector,
+	// not an [id='...'] one — so the PLAY/STOP field auto-follows the most
+	// recently selected element's own trig selector (firstSelector: its
+	// first class, "." prefixed, or its id, "#" prefixed, if it has no
+	// class at all — same priority used everywhere else a trig selector is
+	// derived now). Runs on every xmlStore change, not just a fresh
+	// selection, so editing the currently-armed element's own class/id
+	// updates it too.
 	_maybeUpdateTriggerSelectorFromSelection() {
 		const node = xmlStore.getSelectedNode();
-		if (!node) return;
-		const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
-		if (!firstClass) return;
-		const selector = `.${firstClass}`;
+		if (!node || !node.attributes.id) return; // firstSelector needs at least an id to fall back to
+		const selector = firstSelector(node);
 		if (selector === this.triggerSelector) return;
 		this.setTriggerSelector(selector, node.tagName === "Section" ? node.id : null);
 	}
@@ -223,15 +223,23 @@ class PlayerStore extends EventTarget {
 		this._emit();
 	}
 
-	// Fires a one-off trig for an arbitrary selector (the trigger-shortcut
-	// buttons, i.e. root-level <Command type="trig">) without touching
-	// isPlaying/triggerSelector — these are independent quick-triggers, not
-	// "what PLAY targets". Loads the document first if it isn't already, so
-	// a shortcut works even before the main PLAY button has ever been
-	// pressed.
-	async trigShortcut(selector) {
+	// Fires a one-off trig for an arbitrary selector (a trigger-shortcut
+	// Command button, a Section's/Stinger's own round play button, a ruler
+	// click, ...). Per Hans (2026-09-09): whatever selector actually gets
+	// sent to waxml.js is always reflected in the PLAY field too — no matter
+	// which of those triggered it — so the field is always an honest record
+	// of "what was last told to play", not just "what the main PLAY button
+	// itself targets". `sectionId`, when the caller knows the selector
+	// resolves to an actual <Section> (e.g. wa-composition-view.js's own
+	// _triggerSection), keeps activeSectionId in sync the same way
+	// setTriggerSelector's own selection-driven path does; omit it (null)
+	// for anything else. Loads the document first if it isn't already, so a
+	// shortcut works even before the main PLAY button has ever been pressed.
+	async trigShortcut(selector, sectionId = null) {
 		if (!selector || !xmlStore.root) return;
 		if (!this._documentLoaded) await this._reloadDocument();
+		this.triggerSelector = selector;
+		this.activeSectionId = sectionId;
 		bridge.trig(selector);
 		this.isPlaying = true;
 		this._emit();
