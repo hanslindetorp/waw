@@ -16486,7 +16486,8 @@ class Music extends EventTarget {
 	
 			// Music instance
 			this.loadFile = loadFile;
-	
+
+
 	
 			this.init = function(){
 				initAudioContextTimer(this);
@@ -16671,8 +16672,6 @@ class Music extends EventTarget {
 			this.parameters.destination = myInstance.master.input;
 			this.parameters.channelMerger = myInstance.channelMerger;
 	
-			myInstance.sfxBus = new Bus(this.parameters);
-			myInstance.motifBus = new Bus(this.parameters);
 	
 	
 	
@@ -18434,6 +18433,10 @@ class Music extends EventTarget {
 				if(typeof this.tags === "string"){this.tags = this.tags.split(" ")};
 				this.tags = this.tags.concat(iMusicHelpers.urlsToTags(o.urls));
 	
+
+				// XXX this is a hack to make sure that there is a motifBus in the instance. It should be created in the instance constructor instead.
+				myInstance.motifBus = myInstance.motifBus || new Bus(this.parameters);
+
 				this.parameters.destination = myInstance.motifBus.input;
 				this.parameters.channelMerger = myInstance.channelMerger;
 				this.bus = new Bus(this.parameters);
@@ -20027,7 +20030,26 @@ class Music extends EventTarget {
 		function initParameters(values, inheritedValues){
 	
 			// values = Object.create(values);
+			// XXX This is a hack to make sure that the values object is not a reference to the original object.
+			// It does not work for functions and objects which is a problem i.e. for destination and bus
+			// It definitely needs a better solution.
+
+			let destination, bus, channelMerger, output;
+			try {
+				destination = values.destination || inheritedValues.destination;
+				bus = values.bus || inheritedValues.bus;
+				channelMerger = values.channelMerger || inheritedValues.channelMerger;
+				output = values.output || inheritedValues.output;
+			} catch(e){}
+
 			inheritedValues = typeof inheritedValues === "undefined" ? {} : (JSON.parse(JSON.stringify(inheritedValues)));
+
+			try {
+				inheritedValues.destination = destination;
+				inheritedValues.bus = bus;
+				inheritedValues.channelMerger = channelMerger;
+				inheritedValues.output = output;
+			} catch(e){}
 	
 			// overwrite with local values
 			if(typeof values === "object"){

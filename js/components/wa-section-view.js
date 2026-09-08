@@ -353,12 +353,29 @@ template.innerHTML = `
 			overflow: hidden;
 			cursor: pointer;
 		}
+		/* Opaque, not a translucent rgba() tint — .layer-label is
+		   position:sticky, floating over this row's own horizontally
+		   scrolling lane (Segment boxes, waveforms, the loop marker, the
+		   playhead). A translucent selected background let all of that
+		   scrolled content show straight through the label/fader/M-S/output
+		   area whenever its row was selected. Pre-mixed with the panel's own
+		   background color (--waw-panel-bg's default #1a1a1a) at the same
+		   18% blue as before, since a plain rgba() here can't stay opaque.
+		   Per Hans (2026-09-08) bug report. */
 		.layer-label.selected {
-			background: rgba(79, 163, 255, 0.18);
+			background: #243343;
 		}
 		.layer-label-text {
-			flex: 0 1 auto;
-			max-width: 72px;
+			/* flex:0 0 72px (a fixed basis, no grow/shrink) instead of the
+			   old max-width:72px — that let a short label (e.g. "B1") size
+			   down to just its own content width, handing the leftover
+			   space to .layer-controls (flex:1 1 auto) instead, which made
+			   the volume fader a different length on every row depending on
+			   how many characters its label/id/class happened to have. A
+			   fixed-width label cell means every row's .layer-controls gets
+			   the exact same amount of space, and the fader is the same
+			   length everywhere. Per Hans (2026-09-09) bug report. */
+			flex: 0 0 72px;
 			overflow: hidden;
 			text-overflow: ellipsis;
 			white-space: nowrap;
@@ -522,6 +539,17 @@ template.innerHTML = `
 			padding: 0 0.4rem;
 		}
 		.layer-lane {
+			/* Contains this lane's own stacking order (loop-marker z-index:5,
+			   stinger-anchor z-index:6, stinger-pointer z-index:7, ...) so
+			   none of it can out-rank .layer-label's z-index:4 in the outer
+			   context — without this, those higher z-index values compared
+			   directly against the label (a DOM sibling, not an ancestor, so
+			   nothing here contained them), meaning a loop marker/stinger
+			   anchor/pointer whose scrolled position happened to land under
+			   the sticky label rendered ON TOP of it instead of being hidden
+			   behind its opaque background. Per Hans (2026-09-08) bug
+			   report/screenshot. */
+			isolation: isolate;
 			position: relative;
 			width: 100%;
 			border-bottom: 1px solid var(--waw-border, #2f2f2f);
@@ -988,6 +1016,16 @@ export class WaSectionView extends HTMLElement {
 		this._openSegmentIds = new Set();
 		this._selectedIds = new Set(); // multi-select for bulk delete (Layer/Segment/Option ids)
 		this._lastSelfSelectedId = null; // see _onStoreChange's external-selection sync
+		// Set around this view's own xmlStore.updateAttributes writes (see
+		// _commitAttributes) so _onStoreChange's own full _renderSection
+		// rebuild doesn't run in response to them — same guard/reasoning as
+		// wa-mixer-view.js's own _isLocalEdit. Without it, a continuous-commit
+		// drag (the gain fader, see _buildGainFader) rebuilt the whole
+		// Section's DOM on every pointermove tick, destroying and replacing
+		// the very element the pointer was captured on mid-drag — the drag
+		// then "stuck" after the first tick, per Hans (2026-09-09) bug
+		// report.
+		this._isLocalEdit = false;
 		this._dragState = null; // {kind, nodeId, grabOffsetSeconds} for an in-progress Option/Segment drag — set at dragstart since dataTransfer.getData() isn't readable until drop; grabOffsetSeconds is where within the box the drag started, so the box keeps that same offset from the cursor instead of snapping its left edge under it
 		this._activeStingerTriggers = new Map(); // stingerId -> {triggerAudioTime, startOffsetSeconds, durationSeconds, el} — see _handleStingerDoubleClick
 
@@ -1088,6 +1126,7 @@ export class WaSectionView extends HTMLElement {
 	// same section (e.g. clicking one of its own boxes) still leaves
 	// _lastSectionId untouched, same as before.
 	_onStoreChange() {
+		if (this._isLocalEdit) return;
 		const selected = xmlStore.getSelectedNode();
 		const targetSection = selected ? nearestSection(selected) : null;
 
@@ -2731,6 +2770,21 @@ export class WaSectionView extends HTMLElement {
 		return Number.isFinite(val) ? val : 1;
 	}
 
+	// Same _isLocalEdit guard/reasoning as wa-mixer-view.js's own
+	// _commitAttributes — wraps a write this view makes to its *own*
+	// currently-rendered DOM so _onStoreChange's full _renderSection rebuild
+	// doesn't run in response to it. Required for any call site that commits
+	// on every drag tick (see _buildGainFader) — without it, the element the
+	// drag's pointer capture is on gets torn down and replaced mid-gesture.
+	_commitAttributes(nodeId, attributes) {
+		this._isLocalEdit = true;
+		try {
+			xmlStore.updateAttributes(nodeId, attributes);
+		} finally {
+			this._isLocalEdit = false;
+		}
+	}
+
 	// A real fader+VU strip, Logic-style, per Hans (2026-09-09): a thin
 	// *handle* marks the gain position — not a filled bar, which read as
 	// un-Logic-like — over a live level meter reading straight off
@@ -2740,7 +2794,9 @@ export class WaSectionView extends HTMLElement {
 	// wa-mixer-view.js's own fader — xmlStore.updateAttributes' live nudge
 	// (see xml-store.js's LIVE_NUDGEABLE_COMPOSITION_TAGS) makes this
 	// audible in real time instead of only on release, per Hans
-	// (2026-09-08).
+	// (2026-09-08). Uses _commitAttributes (not a bare xmlStore call) so
+	// this view's own full-rebuild render doesn't run mid-drag — see
+	// _isLocalEdit.
 	_buildGainFader(node) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-fader";
@@ -2793,7 +2849,7 @@ export class WaSectionView extends HTMLElement {
 				const fraction = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left) / rect.width));
 				paint(fraction);
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (nodeNow) xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, gain: String(Math.round(fraction * 1000) / 1000) });
+				if (nodeNow) this._commitAttributes(nodeNow.id, { ...nodeNow.attributes, gain: String(Math.round(fraction * 1000) / 1000) });
 			};
 			commitFromEvent(e);
 
