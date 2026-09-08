@@ -201,7 +201,15 @@ class XmlStore extends EventTarget {
 		if (attributes) child = { ...child, attributes };
 		this.root = ops.insertChild(this.root, parentId, child, index);
 		this.selectedNodeId = child.id;
-		this._syncCode();
+		this.selectedNodeIds = new Set([child.id]);
+		// newNodeId (see wa-xml-tree.js's _onStoreChange): a freshly created
+		// element always starts collapsed, per Hans (2026-09-08) — otherwise a
+		// Section-preview drop that cascades several insertNewChild calls
+		// (Layer -> Segment -> Option) leaves the whole chain expanded in the
+		// tree even though nothing was ever manually opened. Opening the
+		// *parent* so the new child's row is actually visible is a separate,
+		// already-existing behavior (wa-xml-tree.js's own "+" button flow).
+		this._syncCode(true, { newNodeId: child.id });
 		return child;
 	}
 

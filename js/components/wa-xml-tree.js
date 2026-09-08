@@ -369,6 +369,13 @@ export class WaXmlTree extends HTMLElement {
 				if (this._collapsedIds.has(oldId)) this._collapsedIds.add(newId);
 			}
 		}
+		// newNodeId (see xmlStore.insertNewChild): a freshly created element
+		// always starts collapsed, per Hans (2026-09-08) — opening its parent
+		// (so the new row is actually visible) is handled separately, at the
+		// "+" button click sites below.
+		if (e?.detail?.newNodeId) {
+			this._collapsedIds.add(e.detail.newNodeId);
+		}
 		if (xmlStore.root === this._lastRoot && xmlStore.schema === this._lastSchema) {
 			this._updateSelectionHighlight();
 		} else {

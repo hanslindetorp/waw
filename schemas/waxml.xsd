@@ -118,17 +118,6 @@
     <xs:restriction base="xs:boolean"/>
   </xs:simpleType>
 
-  <xs:simpleType name="solo">
-    <xs:annotation>
-      <xs:documentation>Whether this element is soloed (silencing every sibling that isn't also soloed). Either a boolean value (true/false), or a mathematical expression (see mathExpression).</xs:documentation>
-    </xs:annotation>
-    <xs:union memberTypes="soloValue mathExpression"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="soloValue">
-    <xs:restriction base="xs:boolean"/>
-  </xs:simpleType>
-
 
   <xs:simpleType name="voices">
     <xs:annotation>
@@ -1998,7 +1987,6 @@
     <xs:attribute name="fadeTime" type="fadeTime"/>
     <xs:attribute name="gain" type="gain"/>
     <xs:attribute name="mute" type="mute"/>
-    <xs:attribute name="solo" type="solo"/>
   </xs:complexType>
 
   <xs:complexType name="layerContentType">
@@ -2024,7 +2012,6 @@
     <xs:attribute name="loopActive" type="loopActive"/>
     <xs:attribute name="gain" type="gain"/>
     <xs:attribute name="mute" type="mute"/>
-    <xs:attribute name="solo" type="solo"/>
   </xs:complexType>
 
   <xs:complexType name="sectionContentType">

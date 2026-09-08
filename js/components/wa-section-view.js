@@ -29,6 +29,7 @@ import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { buildRoutingTree } from "../xml-editor/io-routing.js";
 import { openIoPicker } from "./wa-io-picker.js";
+import { applyLiveMethodCall } from "../waxml-integration/live-property.js";
 
 // DAW-style "arrange window" for the <Section> element type: transport bar, a
 // bars/beats ruler derived from the section's own tempo/timeSign, one lane per
@@ -77,14 +78,24 @@ const DEFAULT_PX_PER_SEC = 40;
 const MIN_ROW_HEIGHT = 32;
 const MAX_ROW_HEIGHT = 160;
 const DEFAULT_ROW_HEIGHT = 56;
-// Widened from 140 (per Hans, 2026-09-08) to fit the new per-row volume
-// fader/mute/solo/output controls (see _buildLayerControls) alongside the
-// label text — the fader alone needs 50-200px on its own.
-const LABEL_WIDTH = 320;
+// Widened from a fixed 140 (per Hans, 2026-09-08) to fit the new per-row
+// volume fader/mute/solo/output controls (see _buildLayerControls)
+// alongside the label text — the fader alone needs 50-200px on its own —
+// and made user-resizable via a drag handle (see _wireLabelResize) rather
+// than a fixed constant, since the right width depends on how long a
+// project's own Layer/Stinger labels tend to be.
+const DEFAULT_LABEL_WIDTH = 320;
+const MIN_LABEL_WIDTH = 140;
+const MAX_LABEL_WIDTH = 560;
 const RULER_HEIGHT = 32;
 const FALLBACK_BOX_BARS = 1;
 const WAVEFORM_COLOR = "#4fa3ff";
 const DROPZONE_HEIGHT = 10;
+// Same VU-meter dB range/release-smoothing constants as wa-mixer-view.js's
+// own meters (mirrored, not shared — see _startMeterLoop).
+const VU_MIN_DB = -48;
+const VU_MAX_DB = 0;
+const VU_RELEASE = 0.85;
 // Selectable grid resolutions (the little menu next to the zoom buttons) —
 // straight subdivisions (1/4, 1/8, 1/16, 1/32) plus the two common triplet
 // ones (1/12, 1/24), each expressed in *beats* since this engine always
@@ -245,6 +256,27 @@ template.innerHTML = `
 			cursor: row-resize;
 			touch-action: none;
 		}
+		/* A normal divider between the label+volume+M/S+output column and
+		   the graphical Segment arrange area, per Hans (2026-09-09) —
+		   spans .scroll-area's own visible height (it's a direct child, not
+		   nested in .layer-scroll/.stinger-scroll, so it stays put through
+		   both areas' independent horizontal scrolling, same reasoning as
+		   .layer-label's own position:sticky). left is set from
+		   this._labelWidth (see _applyLabelWidth), not this constant. */
+		.label-resize-handle {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: ${DEFAULT_LABEL_WIDTH}px;
+			width: 6px;
+			margin-left: -3px;
+			cursor: ew-resize;
+			touch-action: none;
+			z-index: 6;
+		}
+		.label-resize-handle:hover {
+			background: rgba(79, 163, 255, 0.25);
+		}
 		.empty-hint {
 			color: var(--waw-muted, #8a8a8a);
 			text-align: center;
@@ -253,7 +285,9 @@ template.innerHTML = `
 		.grid {
 			position: relative;
 			display: grid;
-			grid-template-columns: ${LABEL_WIDTH}px 1fr;
+			/* Set per-instance via --label-width (see _applyLabelWidth) —
+			   user-resizable now, not a fixed constant. */
+			grid-template-columns: var(--label-width, ${DEFAULT_LABEL_WIDTH}px) 1fr;
 			width: max-content;
 			min-width: 100%;
 		}
@@ -364,19 +398,55 @@ template.innerHTML = `
 			flex: 1 1 100px;
 			min-width: 50px;
 			max-width: 200px;
-			height: 14px;
-			background: #101010;
-			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 2px;
+			height: 10px;
+			background: #2a2a2a;
+			border-radius: 999px;
 			overflow: hidden;
 			cursor: ew-resize;
 		}
-		.layer-fader-fill {
+		/* The gain *set-point* — always visible (unlike the VU below, which
+		   sits at 0 whenever nothing's actually playing) so the track shows
+		   a sensible filled/empty split even at rest, macOS-slider-style.
+		   Per Hans (2026-09-09). */
+		.layer-fader-track-fill {
 			position: absolute;
 			top: 0;
 			bottom: 0;
 			left: 0;
-			background: linear-gradient(90deg, #3a6ea8, #4fa3ff);
+			width: 0%;
+			background: #6b6b6b;
+			pointer-events: none;
+		}
+		/* Live level meter (see _connectMeters/_startMeterLoop), layered on
+		   top of the track fill — width driven straight off an AnalyserNode
+		   tapped onto the live Layer/Stinger's own [object].bus.output, per
+		   Hans (2026-09-09). Only actually visible while real signal is
+		   passing through; the grey track fill above shows through
+		   otherwise. */
+		.layer-fader-vu {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 0;
+			width: 0%;
+			background: linear-gradient(90deg, #2d5a8a, #3a6ea8);
+			pointer-events: none;
+		}
+		/* The gain position's own handle — a round knob overlapping the
+		   track's top/bottom edges, macOS-slider-style (per Hans,
+		   2026-09-09, reference screenshot), not the thin vertical line
+		   this used to be. */
+		.layer-fader-handle {
+			position: absolute;
+			top: 50%;
+			left: 0%;
+			width: 16px;
+			height: 16px;
+			margin-left: -8px;
+			margin-top: -8px;
+			border-radius: 50%;
+			background: #c9c9c9;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 			pointer-events: none;
 		}
 		.layer-toggle-btn {
@@ -830,6 +900,7 @@ template.innerHTML = `
 			<div class="grid stinger-grid"></div>
 		</div>
 		<div class="empty-hint">Select a &lt;Section&gt; element to see it here.</div>
+		<div class="label-resize-handle" hidden></div>
 	</div>
 `;
 
@@ -866,9 +937,21 @@ export class WaSectionView extends HTMLElement {
 		this._emptyHint = this.shadowRoot.querySelector(".empty-hint");
 		this._positionEl = this.shadowRoot.querySelector(".tp-position");
 		this._infoEl = this.shadowRoot.querySelector(".tp-info");
+		this._labelResizeHandle = this.shadowRoot.querySelector(".label-resize-handle");
 
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
+		// User-resizable width of the label+volume+M/S+output column (see
+		// _wireLabelResize/_applyLabelWidth) — per Hans (2026-09-09).
+		this._labelWidth = DEFAULT_LABEL_WIDTH;
+		// Live VU meters, keyed by Layer/Stinger internal tree id — see
+		// _connectMeters/_startMeterLoop.
+		this._meterState = new Map();
+		this._meterRafId = null;
+		// Solo is never persisted (see _buildSoloButton) — purely in-memory,
+		// keyed by tagName ("Layer"/"Stinger" are separate solo pools):
+		// tagName -> { soloedIds: Set<internal id>, preSoloMute: Map<internal id, boolean> }.
+		this._soloState = new Map();
 		// Share of the Layer/Stinger area's vertical space given to Layers
 		// (Stingers gets the rest) — user-draggable via .stinger-divider (see
 		// _onDividerResizeStart), 80/20 initially per Hans (2026-09-02).
@@ -895,6 +978,8 @@ export class WaSectionView extends HTMLElement {
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 		this._onDividerResizeMove = this._onDividerResizeMove.bind(this);
 		this._onDividerResizeEnd = this._onDividerResizeEnd.bind(this);
+		this._onLabelResizeMove = this._onLabelResizeMove.bind(this);
+		this._onLabelResizeEnd = this._onLabelResizeEnd.bind(this);
 		// .scroll-area's clientHeight is 0 (or stale) the moment a Section
 		// first becomes visible — e.g. right after wa-preview.js flips its
 		// "section" state to display:block, that layout hasn't happened yet
@@ -921,6 +1006,8 @@ export class WaSectionView extends HTMLElement {
 		// catches the gesture anywhere over the Section preview.
 		this.addEventListener("wheel", (e) => this._onWheelZoom(e), { passive: false });
 		this._stingerDivider.addEventListener("pointerdown", (e) => this._onDividerResizeStart(e));
+		this._labelResizeHandle.addEventListener("pointerdown", (e) => this._onLabelResizeStart(e));
+		this._applyLabelWidth();
 		this._resizeObserver.observe(this._scrollArea);
 		// Manually scrolling toward the current right edge needs to extend
 		// the timeline too, not just playback's own autoscroll — see
@@ -957,6 +1044,8 @@ export class WaSectionView extends HTMLElement {
 
 	disconnectedCallback() {
 		this._stopPositionLoop();
+		this._stopMeterLoop();
+		this._disconnectMeters();
 		this._resizeObserver.disconnect();
 		document.removeEventListener("keydown", this._onKeyDown);
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
@@ -1016,6 +1105,7 @@ export class WaSectionView extends HTMLElement {
 			this._layersDivider.hidden = true;
 			this._stingerDivider.hidden = true;
 			this._stingerScroll.hidden = true;
+			this._labelResizeHandle.hidden = true;
 			this._emptyHint.hidden = false;
 			return;
 		}
@@ -1093,6 +1183,27 @@ export class WaSectionView extends HTMLElement {
 	// switching which Section it targets) correctly stops this view's own
 	// visualization without issuing any stop of its own.
 	_onPlayerStoreChange() {
+		// VU meters (see _connectMeters/_startMeterLoop) run off whether the
+		// live graph is loaded at all — same as wa-mixer-view.js's own
+		// meters — not whether *this* Section specifically is playing: the
+		// graph loads proactively on every structural edit now, independent
+		// of the transport, so a meter should read real silence rather than
+		// simply not exist while nothing's playing yet.
+		if (playerStore.isDocumentLoaded) {
+			const node = this._getActiveSectionNode();
+			if (node) {
+				this._connectMeters(node);
+				this._attachMeterElements();
+			}
+			this._startMeterLoop();
+		} else {
+			this._stopMeterLoop();
+			this._disconnectMeters();
+			this.shadowRoot.querySelectorAll(".layer-fader-vu").forEach((el) => {
+				el.style.width = "0%";
+			});
+		}
+
 		const isThisSectionPlaying = playerStore.isPlaying && playerStore.activeSectionId === this._lastSectionId;
 		if (isThisSectionPlaying === this._isPlaying) return;
 
@@ -1113,6 +1224,91 @@ export class WaSectionView extends HTMLElement {
 			this._activeStingerTriggers.forEach((entry) => entry.el?.remove());
 			this._activeStingerTriggers.clear();
 		}
+	}
+
+	// --- live VU metering (mirrors wa-mixer-view.js's own _connectMeters/
+	// _startMeterLoop — see there for the fuller rationale) ---
+	//
+	// Taps each Layer/Stinger's live [object].bus.output — a real GainNode,
+	// per waxml.js's own Bus constructor (voiceGain -> muteGain -> output),
+	// so this reads the fully-processed, post-mute signal — purely
+	// additively (.connect(analyser) doesn't touch the existing routing).
+	// Only elements with an `id` can be found this way (matches by the XML
+	// id attribute via the same safe [id='...'] selector used elsewhere).
+	// References here are only valid until the next structural edit, which
+	// stops playback and invalidates the live graph (see player-store.js).
+	_connectMeters(sectionNode) {
+		this._disconnectMeters();
+		[...getLayers(sectionNode), ...getStingers(sectionNode)]
+			.filter((n) => n.attributes.id)
+			.forEach((n) => {
+				let liveObj;
+				try {
+					const matches = playerStore.getLiveObjects(`[id='${n.attributes.id}']`);
+					liveObj = matches && matches[0];
+				} catch {
+					liveObj = null;
+				}
+				if (!liveObj || !liveObj.bus || !liveObj.bus.output) return;
+				const analyser = playerStore.audioContext.createAnalyser();
+				analyser.fftSize = 1024;
+				liveObj.bus.output.connect(analyser);
+				this._meterState.set(n.id, {
+					analyser,
+					dataArray: new Uint8Array(analyser.fftSize),
+					vuFillEl: null,
+					smoothedT: 0
+				});
+			});
+	}
+
+	_disconnectMeters() {
+		this._meterState.forEach((entry) => {
+			try {
+				entry.analyser.disconnect();
+			} catch {}
+		});
+		this._meterState.clear();
+	}
+
+	// Re-links each meter's target DOM element by node id — needed after
+	// every render, since _renderSection rebuilds the whole grid from
+	// scratch on any xmlStore change, which would otherwise leave
+	// _meterState pointing at detached elements.
+	_attachMeterElements() {
+		if (this._meterState.size === 0) return;
+		this._meterState.forEach((entry, nodeId) => {
+			const fader = this.shadowRoot.querySelector(`.layer-fader[data-node-id="${CSS.escape(nodeId)}"]`);
+			entry.vuFillEl = fader ? fader.querySelector(".layer-fader-vu") : null;
+		});
+	}
+
+	_startMeterLoop() {
+		this._stopMeterLoop();
+		const step = () => {
+			if (!playerStore.isDocumentLoaded) return;
+			this._meterState.forEach((entry) => {
+				if (!entry.vuFillEl) return;
+				entry.analyser.getByteTimeDomainData(entry.dataArray);
+				let peak = 0;
+				for (let i = 0; i < entry.dataArray.length; i++) {
+					const v = Math.abs(entry.dataArray[i] - 128) / 128;
+					if (v > peak) peak = v;
+				}
+				const db = peak > 0 ? 20 * Math.log10(peak) : VU_MIN_DB;
+				const targetT = Math.max(0, Math.min(1, (db - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB)));
+				// Quick attack, slow release — jumps up instantly, decays gradually.
+				entry.smoothedT = targetT > entry.smoothedT ? targetT : entry.smoothedT * VU_RELEASE + targetT * (1 - VU_RELEASE);
+				entry.vuFillEl.style.width = `${entry.smoothedT * 100}%`;
+			});
+			this._meterRafId = requestAnimationFrame(step);
+		};
+		this._meterRafId = requestAnimationFrame(step);
+	}
+
+	_stopMeterLoop() {
+		if (this._meterRafId) cancelAnimationFrame(this._meterRafId);
+		this._meterRafId = null;
 	}
 
 	_readEnginePosition() {
@@ -1238,7 +1434,7 @@ export class WaSectionView extends HTMLElement {
 
 		const cursorPx = this._timeToPx(this._cursorTime, info);
 		if (this._playheadEl) {
-			this._playheadEl.style.left = `${LABEL_WIDTH + cursorPx}px`;
+			this._playheadEl.style.left = `${this._labelWidth + cursorPx}px`;
 		}
 		// .scroll-area only scrolls vertically now (Stinger rows get their
 		// own independent horizontal scroll below it, see .layer-scroll/
@@ -1442,6 +1638,7 @@ export class WaSectionView extends HTMLElement {
 		this._layersDivider.hidden = false;
 		this._stingerDivider.hidden = false;
 		this._stingerScroll.hidden = false;
+		this._labelResizeHandle.hidden = false;
 
 		// loopEnd inherits Composition -> Section -> Layer (see
 		// readEffectiveLoopEnd), and tempo/timeSign inherit Composition ->
@@ -1508,6 +1705,17 @@ export class WaSectionView extends HTMLElement {
 		this._updatePlayheadVisual();
 		this._updatePositionReadout();
 		this._updateSelectionHighlight();
+		// This render just rebuilt the whole grid from scratch. Re-taps every
+		// Layer/Stinger's live meter (cheap — this only runs on an actual
+		// edit/selection, never per animation frame) rather than just
+		// re-linking the existing ones, since a render can mean a genuinely
+		// *different* Section is now showing (its own Layers need their own
+		// fresh analyser taps, not the previous Section's leftover ones) —
+		// _onPlayerStoreChange's own _connectMeters call only fires when the
+		// *player's* state changes, which switching Sections while already
+		// playing/loaded doesn't.
+		if (playerStore.isDocumentLoaded) this._connectMeters(node);
+		this._attachMeterElements();
 	}
 
 	// The Stinger area below the Layers: same bar/beat ruler (so the two
@@ -1605,6 +1813,47 @@ export class WaSectionView extends HTMLElement {
 	_onDividerResizeEnd() {
 		window.removeEventListener("pointermove", this._onDividerResizeMove);
 		window.removeEventListener("pointerup", this._onDividerResizeEnd);
+	}
+
+	// Same shape as the Layer/Stinger divider just above — a normal
+	// draggable divider between the label+volume+M/S+output column and the
+	// graphical arrange area, per Hans (2026-09-09).
+	_onLabelResizeStart(e) {
+		e.preventDefault();
+		try {
+			this._labelResizeHandle.setPointerCapture(e.pointerId);
+		} catch {}
+		this._labelResizeStartX = e.clientX;
+		this._labelResizeStartWidth = this._labelWidth;
+		window.addEventListener("pointermove", this._onLabelResizeMove);
+		window.addEventListener("pointerup", this._onLabelResizeEnd);
+	}
+
+	_onLabelResizeMove(e) {
+		const delta = e.clientX - this._labelResizeStartX;
+		this._labelWidth = Math.min(MAX_LABEL_WIDTH, Math.max(MIN_LABEL_WIDTH, this._labelResizeStartWidth + delta));
+		this._applyLabelWidth();
+	}
+
+	_onLabelResizeEnd() {
+		window.removeEventListener("pointermove", this._onLabelResizeMove);
+		window.removeEventListener("pointerup", this._onLabelResizeEnd);
+	}
+
+	// Pushes this._labelWidth out to everything that depends on it: the
+	// --label-width custom property (inherited by both .grid's own
+	// grid-template-columns, Layer and Stinger alike — no need to set it on
+	// each separately), the resize handle's own position, and the playhead's
+	// left offset (see _updatePlayheadVisual). Deliberately does NOT
+	// rebuild the label/controls DOM itself — CSS alone reflows the
+	// existing elements; a full _renderSection would be needlessly
+	// expensive on every drag tick and would fight the fader/mute/solo
+	// buttons' own live pointer-capture drags if one happened to be in
+	// progress at the same time.
+	_applyLabelWidth() {
+		this.style.setProperty("--label-width", `${this._labelWidth}px`);
+		if (this._labelResizeHandle) this._labelResizeHandle.style.left = `${this._labelWidth}px`;
+		this._updatePlayheadVisual();
 	}
 
 	// Trailing drop target for the Stinger area, always present — a file or
@@ -2319,94 +2568,135 @@ export class WaSectionView extends HTMLElement {
 
 	// Volume fader+VU, Mute/Solo toggles, and an output-routing button —
 	// identical for a <Layer> and a <Stinger> row (same attribute names on
-	// both: gain/mute/solo/output), per Hans (2026-09-08): "<Stinger> ska
-	// ha samma volym, mute, solo och output-funktioner som <Layer>." Shown
-	// left-to-right in priority order (fader, M, S, output) — the fader's
-	// own CSS floor/ceiling (50-200px) plus everything else's fixed size
-	// means whatever doesn't fit in LABEL_WIDTH just clips off the right
-	// end first, per Hans: "visas i tur och ordning från vänster om det
-	// finns plats, annars göms de." None of these interactions select the
-	// node or touch xmlStore.selectedNodeId at all (stopPropagation keeps
-	// them from bubbling to the label's own click handler) — clicking a
-	// mute/solo/output control is a direct edit, not a "look at this in the
-	// XML editor" gesture, matching the same spirit as the Section preview
-	// never auto-opening the tree on its own (see xmlStore.selectNode's
-	// `reveal` option).
+	// both: gain/mute/output), per Hans: "<Stinger> ska ha samma volym,
+	// mute, solo och output-funktioner som <Layer>." Shown left-to-right in
+	// priority order (fader, M, S, output) — the fader's own CSS floor/
+	// ceiling (50-200px) plus everything else's fixed size means whatever
+	// doesn't fit in the (now user-resizable, see _wireLabelResize) label
+	// column just clips off the right end first, per Hans: "visas i tur och
+	// ordning från vänster om det finns plats, annars göms de." None of
+	// these interactions select the node or touch xmlStore.selectedNodeId
+	// at all (stopPropagation keeps them from bubbling to the label's own
+	// click handler) — clicking a mute/solo/output control is a direct
+	// edit, not a "look at this in the XML editor" gesture, matching the
+	// same spirit as the Section preview never auto-opening the tree on
+	// its own (see xmlStore.selectNode's `reveal` option).
 	_buildLayerControls(node, siblings) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-controls";
 		wrap.appendChild(this._buildGainFader(node));
-		wrap.appendChild(this._buildMuteButton(node, siblings));
-		wrap.appendChild(this._buildSoloButton(node));
+		wrap.appendChild(this._buildMuteButton(node));
+		wrap.appendChild(this._buildSoloButton(node, siblings));
 		wrap.appendChild(this._buildOutputButton(node));
 		return wrap;
 	}
 
-	// true/"true"/"1" (and $var expressions are deliberately NOT resolved
-	// here — this is a plain, un-evaluated read of the attribute's literal
-	// XML value, same simplification as the rest of this v1) count as on.
-	_readBoolAttr(raw) {
-		return raw === "true" || raw === "1";
+	// "1"/"0" (matching what waxml.js's own Bus constructor checks —
+	// `o.mute == 1` — and what setMuteState's gain ramp expects as its
+	// target value), not "true"/"false" — per Hans (2026-09-09): "Det
+	// kommer bara finnas ett attribut: mute." Still lenient reading a
+	// legacy "true" too, in case an older document/session wrote the
+	// previous format this view briefly used.
+	_readMuteAttr(node) {
+		const raw = node.attributes.mute;
+		return raw === "1" || raw === "true";
 	}
 
-	// A Layer/Stinger has no persistent "I am silenced by someone else's
-	// solo" attribute of its own — only its *own* mute/solo. "Effectively
-	// muted" (what the M button actually lights up for) is computed fresh
-	// from the whole sibling group each render: own mute, or some sibling
-	// (not self) is soloed while this one isn't. Purely a GUI-level
-	// computation for now — actually silencing audio for this case is an
-	// engine-side concern (waxml.js reading the same mute/solo attributes),
-	// not something this view fakes by writing to sibling nodes' own mute
-	// attribute, which would pollute the XML with side-effects the user
-	// never asked for. Per Hans (2026-09-08): "Solo mutear alla andra
-	// <Layer> utom de andra som är solade... Det ska funka som i vanliga
-	// DAW."
-	_isEffectivelyMuted(node, siblings) {
-		if (this._readBoolAttr(node.attributes.mute)) return true;
-		if (this._readBoolAttr(node.attributes.solo)) return false;
-		return (siblings || []).some((s) => s.id !== node.id && this._readBoolAttr(s.attributes.solo));
+	// Writes mute to both the document (the persisted source of truth —
+	// Inspector, save, reload) and the live engine object directly, per
+	// Hans (2026-09-09): "När du ändrar mute ska du anropa funktionen
+	// setMuteState() på <Layer> objektet." (waxml.js already defines
+	// setMuteState/getMuteState on Track/Motif — <Layer> builds a Track,
+	// <Stinger> a Motif — ramping .bus.muteGain; see also _connectMeters,
+	// which taps that same bus's .output for the VU meter below.)
+	// nodeId is the *internal* tree id; applyLiveMethodCall re-resolves
+	// the XML `id` attribute and the live object fresh each time, so this
+	// is safe to call repeatedly for several siblings in one solo gesture.
+	_writeMute(nodeId, boolVal) {
+		const nodeNow = ops.findNodeById(xmlStore.root, nodeId);
+		if (!nodeNow) return;
+		xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, mute: boolVal ? "1" : "0" });
+		applyLiveMethodCall(nodeNow.attributes.id, "setMuteState", boolVal ? 1 : 0);
 	}
 
-	_buildMuteButton(node, siblings) {
+	_buildMuteButton(node) {
 		const btn = document.createElement("button");
 		btn.type = "button";
 		btn.className = "layer-toggle-btn mute-btn";
 		btn.textContent = "M";
 		btn.title = "Mute";
-		const sync = () => btn.classList.toggle("active", this._isEffectivelyMuted(node, siblings));
-		sync();
+		btn.classList.toggle("active", this._readMuteAttr(node));
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
 			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 			if (!nodeNow) return;
-			const next = !this._readBoolAttr(nodeNow.attributes.mute);
-			xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, mute: String(next) });
+			this._writeMute(nodeNow.id, !this._readMuteAttr(nodeNow));
 		});
 		return btn;
 	}
 
-	_buildSoloButton(node) {
+	// Solo has no XML attribute of its own at all, per Hans (2026-09-09):
+	// "soloknappen är bara temporär och behöver inte sparas i sig (om ett
+	// spår är solat kommer effekten fås genom att alla andra spår är
+	// muteade när projektet laddas)." Clicking it mutes every OTHER
+	// sibling of the same tag (Layer/Stinger are separate solo pools,
+	// tracked in this._soloState keyed by tagName) and unmutes whichever
+	// one(s) are being soloed — the exact same _writeMute every other
+	// control here uses, so the resulting XML/live state is indistinguishable
+	// from having muted everyone else by hand. Only the S button's own
+	// highlighted look is tracked purely in memory, never written anywhere.
+	// Multiple Layers can be soloed at once (each additional solo just
+	// joins the "stays audible" set); releasing the last one restores
+	// every sibling's mute to whatever it was *before* the first solo in
+	// this gesture, per "Solo mutear alla andra <Layer> utom de andra som
+	// är solade."
+	_buildSoloButton(node, siblings) {
 		const btn = document.createElement("button");
 		btn.type = "button";
 		btn.className = "layer-toggle-btn solo-btn";
 		btn.textContent = "S";
-		btn.title = "Solo";
-		btn.classList.toggle("active", this._readBoolAttr(node.attributes.solo));
+		btn.title = "Solo (temporary — not saved on its own)";
+		const state = this._getSoloState(node.tagName);
+		btn.classList.toggle("active", state.soloedIds.has(node.id));
 		btn.addEventListener("click", (e) => {
 			e.stopPropagation();
-			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-			if (!nodeNow) return;
-			const next = !this._readBoolAttr(nodeNow.attributes.solo);
-			xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, solo: String(next) });
+			this._toggleSolo(node, siblings);
 		});
 		return btn;
+	}
+
+	_getSoloState(tagName) {
+		if (!this._soloState.has(tagName)) {
+			this._soloState.set(tagName, { soloedIds: new Set(), preSoloMute: new Map() });
+		}
+		return this._soloState.get(tagName);
+	}
+
+	_toggleSolo(node, siblings) {
+		const state = this._getSoloState(node.tagName);
+		const wasEmpty = state.soloedIds.size === 0;
+		if (state.soloedIds.has(node.id)) state.soloedIds.delete(node.id);
+		else state.soloedIds.add(node.id);
+
+		if (wasEmpty && state.soloedIds.size > 0) {
+			// Starting a fresh solo gesture — snapshot everyone's current
+			// mute so it can be restored exactly once every solo is released.
+			state.preSoloMute.clear();
+			siblings.forEach((s) => state.preSoloMute.set(s.id, this._readMuteAttr(s)));
+		}
+
+		if (state.soloedIds.size === 0) {
+			siblings.forEach((s) => this._writeMute(s.id, state.preSoloMute.get(s.id) ?? false));
+			state.preSoloMute.clear();
+		} else {
+			siblings.forEach((s) => this._writeMute(s.id, !state.soloedIds.has(s.id)));
+		}
 	}
 
 	// "gain" (schema type, see schemas/waxml.xsd) is a plain 0-1 decimal, an
 	// "XdB" string, or a $var math expression — this fader only ever reads/
 	// writes the plain-decimal form (dropping any dB formatting the user
-	// may have hand-typed), the same simplification _buildMuteButton/
-	// _buildSoloButton make for mute/solo's own boolean-vs-$var union.
+	// may have hand-typed).
 	_parseGainLinear(raw) {
 		if (raw === undefined || raw === null || raw === "") return 1;
 		const str = String(raw).trim();
@@ -2418,38 +2708,40 @@ export class WaSectionView extends HTMLElement {
 		return Number.isFinite(val) ? val : 1;
 	}
 
-	// A combined fader+VU strip, Logic-style, per Hans (2026-09-08) — drag
-	// horizontally to set <Layer>/<Stinger>.gain. The "VU" part is a static
-	// fill proportional to the gain value itself, not a live audio-level
-	// meter (an actual live VU would need an AnalyserNode tapped onto this
-	// specific Layer's own live audio graph node — a real engine-side
-	// integration out of scope for this pass, same "GUI now, engine wiring
-	// later" split as the mute/solo cross-fade above). CSS gives it a hard
-	// 50px floor and 200px ceiling (flex-basis/min-width/max-width) so it
-	// either sits somewhere in that range or — if LABEL_WIDTH's remaining
-	// space after the label text and the fixed-size M/S/output buttons
-	// can't fit even the floor — overflows off the right edge, where
-	// .layer-controls' own overflow:hidden clips it away entirely (see
-	// _buildLayerControls' own comment on why nothing more elaborate than
-	// CSS clipping is needed here).
-	//
-	// Committed only on pointerup, not on every drag tick — Layer/Stinger
-	// almost always live inside a <Composition>, where xml-store.js forces
-	// *every* attribute change to a full structural rebuild (no live-nudge
-	// wiring on that side yet — see _isInsideComposition's own comment) —
-	// committing per-tick would rebuild the whole live graph on every
-	// pixel of drag.
+	// A real fader+VU strip, Logic-style, per Hans (2026-09-09): a thin
+	// *handle* marks the gain position — not a filled bar, which read as
+	// un-Logic-like — over a live level meter reading straight off
+	// [the live Layer/Stinger object].bus.output (a real GainNode — see
+	// _connectMeters), filling from the left like a horizontal VU. Drag
+	// horizontally to set gain; committed only on pointerup, not every
+	// drag tick — Layer/Stinger almost always live inside a <Composition>,
+	// where xml-store.js forces *every* attribute change to a full
+	// structural rebuild (no live-nudge wiring for gain yet — see
+	// _isInsideComposition's own comment) — committing per-tick would
+	// rebuild the whole live graph on every pixel of drag.
 	_buildGainFader(node) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-fader";
+		wrap.dataset.nodeId = node.id;
 		wrap.title = "Gain (drag to adjust)";
-		const fill = document.createElement("div");
-		fill.className = "layer-fader-fill";
-		wrap.appendChild(fill);
+
+		const trackFill = document.createElement("div");
+		trackFill.className = "layer-fader-track-fill";
+		wrap.appendChild(trackFill);
+
+		const vu = document.createElement("div");
+		vu.className = "layer-fader-vu";
+		wrap.appendChild(vu);
+
+		const handle = document.createElement("div");
+		handle.className = "layer-fader-handle";
+		wrap.appendChild(handle);
 
 		const gainToFraction = (gain) => Math.max(0, Math.min(1, gain));
 		const paint = (gain) => {
-			fill.style.width = `${gainToFraction(gain) * 100}%`;
+			const pct = `${gainToFraction(gain) * 100}%`;
+			trackFill.style.width = pct;
+			handle.style.left = pct;
 		};
 		paint(this._parseGainLinear(node.attributes.gain));
 
