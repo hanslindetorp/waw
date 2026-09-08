@@ -66,19 +66,38 @@ const DEFAULT_TRANSITION_LENGTH = "2"; // bars, per Hans (2026-09-08)
 const MIN_TRANSITION_BARS = 0.25; // drag-resize floor, in bars of the transition's own tempo
 const WAVEFORM_COLOR = "#4fa3ff"; // same as wa-section-view.js's own WAVEFORM_COLOR
 
+// A Section's class can hold more than one space-separated token — every
+// caller here (displayLabel, firstSelector, transitionClass) only ever
+// wants the first.
+function firstClassToken(node) {
+	return (node.attributes.class || "").trim().split(/\s+/)[0];
+}
+
 // label > id > class > tagName, per Hans (2026-09-08, reverting the
-// label/class/id order from 2026-09-07) — class shown as just its first
-// token (a Section's class can hold more than one, same convention as
-// firstSelector below).
+// label/class/id order from 2026-09-07).
 function displayLabel(node) {
-	const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
+	const firstClass = firstClassToken(node);
 	return node.attributes.label || node.attributes.id || firstClass || node.tagName;
 }
 
 function firstSelector(node) {
-	const firstClass = (node.attributes.class || "").trim().split(/\s+/)[0];
+	const firstClass = firstClassToken(node);
 	if (firstClass) return `.${firstClass}`;
 	return `#${node.attributes.id}`;
+}
+
+// A newly created transition's own `class`: "[fromClass]-[toClass]", each
+// half the owning regular Section's own first class token — per Hans
+// (2026-09-09). `fromNode` is null for the very first gap (no predecessor
+// to guess from) or an explicit "All" choice in the from-popup, in which
+// case the class is just the target's own, with no dash/prefix (nothing to
+// pair it with). Returns "" (never set the attribute at all) if even the
+// target has no class of its own to fall back on.
+function transitionClass(fromNode, toNode) {
+	const fromClass = fromNode ? firstClassToken(fromNode) : "";
+	const toClass = firstClassToken(toNode);
+	if (fromClass && toClass) return `${fromClass}-${toClass}`;
+	return fromClass || toClass || "";
 }
 
 // Grid-snapping for a transition edge drag (see _wireEdgeDrag) — same
@@ -297,6 +316,7 @@ template.innerHTML = `
 		   rowHeight, so it can never spill past the Section box's own
 		   edges at a small row height (zoomed far out vertically). */
 		.loop-circle-wrap {
+			position: relative;
 			flex: 1 1 auto;
 			display: flex;
 			align-items: center;
@@ -304,6 +324,39 @@ template.innerHTML = `
 			min-width: 0;
 			min-height: 0;
 			padding: 5px;
+		}
+		/* A round, YouTube-style play button centered on top of the loop
+		   ring — per Hans (2026-09-09). A sibling of .loop-circle (not a
+		   child of it), positioned absolutely against .loop-circle-wrap's
+		   own position:relative, so it stays put and doesn't spin along
+		   with the ring's own rotate animation. Sized as a fraction of
+		   .loop-circle-wrap's own box (set in JS from the same measured
+		   size .loop-circle uses — see _populateLoopCircle) rather than a
+		   fixed px value, so it scales down gracefully at a small row
+		   height instead of spilling past the ring at min-zoom. */
+		.section-play-btn {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			border-radius: 50%;
+			border: none;
+			background: rgba(0, 0, 0, 0.55);
+			color: #fff;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+			cursor: pointer;
+		}
+		.section-play-btn:hover {
+			background: rgba(0, 0, 0, 0.75);
+		}
+		.section-play-btn svg {
+			width: 46%;
+			height: 46%;
+			margin-left: 8%;
+			fill: currentColor;
 		}
 		.loop-circle {
 			/* Shadow DOM doesn't inherit main.css's global "* {box-sizing:
@@ -914,6 +967,24 @@ export class WaCompositionView extends HTMLElement {
 		dot.className = "loop-circle-dot";
 		circle.appendChild(dot);
 		circleWrap.appendChild(circle);
+
+		// A round play button centered on the ring — a sibling of `circle`,
+		// not a child of it, so it doesn't spin along with the ring's own
+		// rotate animation (see the .section-play-btn CSS comment). Sized
+		// as a fraction of the same measured `size` the ring itself uses.
+		// Per Hans (2026-09-09).
+		const playBtn = document.createElement("button");
+		playBtn.type = "button";
+		playBtn.className = "section-play-btn";
+		playBtn.title = "Play this Section";
+		playBtn.style.width = `${size * 0.62}px`;
+		playBtn.style.height = `${size * 0.62}px`;
+		playBtn.innerHTML = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>`;
+		playBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._triggerSection(cell.node);
+		});
+		circleWrap.appendChild(playBtn);
 	}
 
 	// One revolution = the longest effective loopEnd among this Section's
@@ -1118,8 +1189,9 @@ export class WaCompositionView extends HTMLElement {
 	// target already has a transition, the next "+" click for that same
 	// target opens the dropdown too (never auto-guessed past the first
 	// one), listing every regular Section's id plus a leading "All" (omits
-	// `from` entirely). No `class` is ever set here — a transition stays
-	// classless unless the user adds one by hand, per Hans (2026-09-08).
+	// `from` entirely). `class` is always auto-set to
+	// "[fromClass]-[toClass]" (see transitionClass) — per Hans (2026-09-09,
+	// reversing the "stays classless" rule from 2026-09-08).
 	_handleCreateTransition(targetId, compositionNode, anchorEl) {
 		const layout = this._lastLayout;
 		const target = layout.regulars.find((r) => r.id === targetId);
@@ -1134,6 +1206,8 @@ export class WaCompositionView extends HTMLElement {
 				length: DEFAULT_TRANSITION_LENGTH,
 				from: `#${predecessor.attributes.id}`
 			};
+			const cls = transitionClass(predecessor, target);
+			if (cls) attrs.class = cls;
 			this._insertTransition(compositionNode, target, attrs);
 			return;
 		}
@@ -1142,9 +1216,11 @@ export class WaCompositionView extends HTMLElement {
 		// transitioning *to* — exclude the target itself from the "from"
 		// choices. Per Hans (2026-09-08).
 		const fromCandidates = layout.regulars.filter((r) => r.id !== target.id);
-		this._openFromPopup(anchorEl, fromCandidates, (fromValue) => {
+		this._openFromPopup(anchorEl, fromCandidates, (fromValue, fromNode) => {
 			const attrs = { to: `#${target.attributes.id}`, length: DEFAULT_TRANSITION_LENGTH };
 			if (fromValue !== null) attrs.from = fromValue;
+			const cls = transitionClass(fromNode, target);
+			if (cls) attrs.class = cls;
 			this._insertTransition(compositionNode, target, attrs);
 		});
 	}
@@ -1156,8 +1232,10 @@ export class WaCompositionView extends HTMLElement {
 		xmlStore.insertNewChild(compNow.id, "Section", attrs, targetIndex < 0 ? undefined : targetIndex);
 	}
 
-	// onChoose(fromValue): fromValue is null for "All" (omit `from` entirely),
-	// otherwise the picked Section's "#id".
+	// onChoose(fromValue, fromNode): fromValue/fromNode are both null for
+	// "All" (omit `from` entirely, and transitionClass has no fromClass to
+	// pair with) — otherwise fromValue is the picked Section's "#id" and
+	// fromNode is that same Section, for transitionClass's own use.
 	_openFromPopup(anchorEl, regulars, onChoose) {
 		const popup = document.createElement("div");
 		popup.className = "from-popup";
@@ -1174,7 +1252,7 @@ export class WaCompositionView extends HTMLElement {
 		allBtn.type = "button";
 		allBtn.textContent = "All";
 		allBtn.addEventListener("click", () => {
-			onChoose(null);
+			onChoose(null, null);
 			popup.remove();
 		});
 		popup.appendChild(allBtn);
@@ -1184,7 +1262,7 @@ export class WaCompositionView extends HTMLElement {
 			btn.type = "button";
 			btn.textContent = `#${r.attributes.id}`;
 			btn.addEventListener("click", () => {
-				onChoose(`#${r.attributes.id}`);
+				onChoose(`#${r.attributes.id}`, r);
 				popup.remove();
 			});
 			popup.appendChild(btn);

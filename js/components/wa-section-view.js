@@ -1177,16 +1177,28 @@ export class WaSectionView extends HTMLElement {
 			return;
 		}
 
-		// Keep this view's own box highlighting in sync with a selection made
-		// *elsewhere* (the XML tree, the Code panel) — clicking a box *inside*
-		// this view (_handleItemClick) pre-announces its own id via
-		// _lastSelfSelectedId before calling xmlStore.selectNode, so this only
-		// reacts to genuinely external selection changes, never collapsing a
-		// ctrl/cmd multi-select the user just built up by clicking boxes here.
+		// Keep this view's own box highlighting/deletion-set in sync with a
+		// selection made *elsewhere* (the XML tree, the Code panel) —
+		// clicking a box *inside* this view (_handleItemClick) pre-announces
+		// its own id via _lastSelfSelectedId before calling
+		// xmlStore.selectNode, so this only reacts to genuinely external
+		// selection changes, never collapsing a ctrl/cmd multi-select the
+		// user just built up by clicking boxes here.
 		const selectedId = selected ? selected.id : null;
 		if (selectedId !== this._lastSelfSelectedId) {
 			if (selected && this._isNodeWithinSection(selected, node)) {
-				this._selectedIds = new Set([selected.id]);
+				// A multi-select made in the tree (ctrl/shift-click) lives in
+				// xmlStore.selectedNodeIds, not just selectedNodeId — collapsing
+				// to only the primary id here (as this used to) meant Delete/
+				// Backspace (which reads *this* view's own _selectedIds, see
+				// _onKeyDown) only ever removed that one element even though
+				// every selected row still looked highlighted in the tree. Per
+				// Hans (2026-09-09) bug report.
+				const externalMulti = [...xmlStore.selectedNodeIds].filter((id) => {
+					const n = ops.findNodeById(xmlStore.root, id);
+					return n && this._isNodeWithinSection(n, node);
+				});
+				this._selectedIds = new Set(externalMulti.length ? externalMulti : [selected.id]);
 			} else if (this._selectedIds.size) {
 				this._selectedIds.clear();
 			}
