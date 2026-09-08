@@ -399,10 +399,21 @@ template.innerHTML = `
 			min-width: 50px;
 			max-width: 200px;
 			height: 10px;
+			cursor: ew-resize;
+		}
+		/* The track's own rounded pill background + fill clipping lives here,
+		   separate from .layer-fader itself, so .layer-fader-handle (a 16px
+		   round knob overlapping the 10px track's top/bottom edges) can be a
+		   plain sibling that isn't also clipped by this element's own
+		   overflow:hidden — it used to be, cropping the handle into a flat
+		   rectangle. Per Hans (2026-09-09 bug report).
+		*/
+		.layer-fader-track {
+			position: absolute;
+			inset: 0;
 			background: #2a2a2a;
 			border-radius: 999px;
 			overflow: hidden;
-			cursor: ew-resize;
 		}
 		/* The gain *set-point* — always visible (unlike the VU below, which
 		   sits at 0 whenever nothing's actually playing) so the track shows
@@ -446,6 +457,7 @@ template.innerHTML = `
 			margin-top: -8px;
 			border-radius: 50%;
 			background: #c9c9c9;
+			z-index: 1;
 			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 			pointer-events: none;
 		}
@@ -941,6 +953,11 @@ export class WaSectionView extends HTMLElement {
 
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
+		// Per-Section zoom memory (see _onStoreChange's own save/restore
+		// around _lastSectionId switching) — each <Section> keeps its own
+		// H/V zoom instead of all of them sharing this one always-mounted
+		// view's single _pxPerSecond/_rowHeight. Per Hans (2026-09-08).
+		this._zoomBySectionId = new Map();
 		// User-resizable width of the label+volume+M/S+output column (see
 		// _wireLabelResize/_applyLabelWidth) — per Hans (2026-09-09).
 		this._labelWidth = DEFAULT_LABEL_WIDTH;
@@ -1075,6 +1092,9 @@ export class WaSectionView extends HTMLElement {
 		const targetSection = selected ? nearestSection(selected) : null;
 
 		if (targetSection && targetSection.id !== this._lastSectionId) {
+			if (this._lastSectionId) {
+				this._zoomBySectionId.set(this._lastSectionId, { pxPerSecond: this._pxPerSecond, rowHeight: this._rowHeight });
+			}
 			this._teardownActive();
 			this._cursorTime = 0;
 			this._maxDecodedEnd = 0;
@@ -1083,6 +1103,9 @@ export class WaSectionView extends HTMLElement {
 			this._selectedIds.clear();
 			this._lastSectionId = targetSection.id;
 			this._lastSelfSelectedId = null;
+			const savedZoom = this._zoomBySectionId.get(targetSection.id);
+			this._pxPerSecond = savedZoom ? savedZoom.pxPerSecond : DEFAULT_PX_PER_SEC;
+			this._rowHeight = savedZoom ? savedZoom.rowHeight : DEFAULT_ROW_HEIGHT;
 			// Arming the global player's PLAY button to target this Section
 			// (and, if already playing, immediately re-trig-ing it — browsing
 			// to a different Section mid-playback previews it live without
@@ -2713,25 +2736,32 @@ export class WaSectionView extends HTMLElement {
 	// un-Logic-like — over a live level meter reading straight off
 	// [the live Layer/Stinger object].bus.output (a real GainNode — see
 	// _connectMeters), filling from the left like a horizontal VU. Drag
-	// horizontally to set gain; committed only on pointerup, not every
-	// drag tick — Layer/Stinger almost always live inside a <Composition>,
-	// where xml-store.js forces *every* attribute change to a full
-	// structural rebuild (no live-nudge wiring for gain yet — see
-	// _isInsideComposition's own comment) — committing per-tick would
-	// rebuild the whole live graph on every pixel of drag.
+	// horizontally to set gain; committed on every drag tick, same as
+	// wa-mixer-view.js's own fader — xmlStore.updateAttributes' live nudge
+	// (see xml-store.js's LIVE_NUDGEABLE_COMPOSITION_TAGS) makes this
+	// audible in real time instead of only on release, per Hans
+	// (2026-09-08).
 	_buildGainFader(node) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-fader";
 		wrap.dataset.nodeId = node.id;
 		wrap.title = "Gain (drag to adjust)";
 
+		// .layer-fader-track clips the fill bars to the rounded pill shape;
+		// .layer-fader-handle stays a direct child of `wrap` (not clipped by
+		// it) so it can overlap the track's top/bottom edges without being
+		// cropped — see the CSS comment on .layer-fader-track.
+		const track = document.createElement("div");
+		track.className = "layer-fader-track";
+		wrap.appendChild(track);
+
 		const trackFill = document.createElement("div");
 		trackFill.className = "layer-fader-track-fill";
-		wrap.appendChild(trackFill);
+		track.appendChild(trackFill);
 
 		const vu = document.createElement("div");
 		vu.className = "layer-fader-vu";
-		wrap.appendChild(vu);
+		track.appendChild(vu);
 
 		const handle = document.createElement("div");
 		handle.className = "layer-fader-handle";
@@ -2754,21 +2784,23 @@ export class WaSectionView extends HTMLElement {
 			} catch {}
 
 			const rect = wrap.getBoundingClientRect();
-			const updateFromEvent = (moveEvt) => {
+			// Commits on every move (not just release) — like wa-mixer-view.js's
+			// own fader, so xmlStore.updateAttributes' live nudge (see
+			// xml-store.js's LIVE_NUDGEABLE_COMPOSITION_TAGS) makes the drag
+			// audible in real time instead of only on release. Per Hans
+			// (2026-09-08).
+			const commitFromEvent = (moveEvt) => {
 				const fraction = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left) / rect.width));
 				paint(fraction);
-				return fraction;
+				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+				if (nodeNow) xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, gain: String(Math.round(fraction * 1000) / 1000) });
 			};
-			let committedFraction = updateFromEvent(e);
+			commitFromEvent(e);
 
-			const onMove = (moveEvt) => {
-				committedFraction = updateFromEvent(moveEvt);
-			};
+			const onMove = (moveEvt) => commitFromEvent(moveEvt);
 			const onUp = () => {
 				wrap.removeEventListener("pointermove", onMove);
 				wrap.removeEventListener("pointerup", onUp);
-				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (nodeNow) xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, gain: String(Math.round(committedFraction * 1000) / 1000) });
 			};
 			wrap.addEventListener("pointermove", onMove);
 			wrap.addEventListener("pointerup", onUp);

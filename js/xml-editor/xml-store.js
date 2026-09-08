@@ -1,5 +1,6 @@
 import * as ops from "./xml-tree-ops.js";
 import { isVariableControlled } from "./variable-references.js";
+import { parseGainAttributeToDb, dbToLinearRatio } from "../waxml-integration/gain-units.js";
 
 const EMPTY_XML = '<?xml version="1.0" encoding="UTF-8"?>';
 
@@ -384,6 +385,25 @@ class XmlStore extends EventTarget {
 	// silently do nothing.
 	static ROUTING_REBUILD_ATTRS = new Set(["output", "input", "bus"]);
 
+	// <Section>/<Layer>/<Stinger> build a Section/Track/Motif at the waxml.js
+	// side, and all three now expose a generic live .set(param, value) —
+	// per Hans (2026-09-08), any attribute change on one of these (loopEnd,
+	// gain, mute, ...) should nudge that live setter instead of forcing a
+	// full graph rebuild, same as every other live-nudgeable element outside
+	// a <Composition> already does. See player-store.js's own handling of
+	// the "liveNudge" change-event detail below.
+	static LIVE_NUDGEABLE_COMPOSITION_TAGS = new Set(["Section", "Layer", "Stinger"]);
+
+	// `mute` is excluded from the generic nudge below on purpose: it has no
+	// "mute" case in waxml.js's own .set(param, value) switch (mute is a
+	// dedicated setMuteState(0|1) method, called separately by whichever UI
+	// writes it — see wa-section-view.js's _writeMute) — a generic nudge
+	// would fall through to that switch's `default` case instead, animating
+	// some unrelated bus parameter with a "0"/"1" string. `output` is
+	// likewise excluded, redundantly with ROUTING_REBUILD_ATTRS already
+	// forcing structural=true for it.
+	static LIVE_NUDGE_EXCLUDED_ATTRS = new Set(["mute", "output", "input", "bus"]);
+
 	// structural=false (the common case): an attribute value changing never
 	// adds/removes/reorders a node, so it can't change what a live waxml
 	// audio graph needs to look like — only *what value* a node's live
@@ -396,8 +416,37 @@ class XmlStore extends EventTarget {
 		if (!this.root) return;
 		const node = ops.findNodeById(this.root, nodeId);
 		const structural = this._attributeChangeNeedsRebuild(node, attributes);
+		const liveNudge = !structural ? this._buildLiveNudge(node, attributes) : null;
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
-		this._syncCode(structural);
+		this._syncCode(structural, liveNudge ? { liveNudge } : {});
+	}
+
+	// Collects {elementId, changed} for updateAttributes' own live-nudge
+	// detail (see LIVE_NUDGEABLE_COMPOSITION_TAGS above) — only meaningful
+	// for a non-structural change on one of those tags that already has a
+	// real `id` (a nudge is keyed on the XML id attribute, same as every
+	// other applyLiveMethodCall/applyLiveProperty caller).
+	_buildLiveNudge(node, nextAttributes) {
+		if (!node || !node.attributes.id) return null;
+		if (!XmlStore.LIVE_NUDGEABLE_COMPOSITION_TAGS.has(node.tagName)) return null;
+		if (!this._isInsideComposition(node)) return null;
+		const changed = {};
+		for (const name of Object.keys(nextAttributes)) {
+			const value = nextAttributes[name];
+			if (value === node.attributes[name]) continue;
+			if (XmlStore.LIVE_NUDGE_EXCLUDED_ATTRS.has(name)) continue;
+			// waxml.js's generic .set(param, value) expects "volume" (a plain
+			// linear float), while the XML `gain` attribute is written as a
+			// 0-1 ratio or an "XdB" string (see waxml.xsd's `gain` union type)
+			// — reuse the same dB<->linear conversion wa-mixer-view.js's own
+			// live gain nudge already relies on.
+			if (name === "gain") {
+				changed.volume = dbToLinearRatio(parseGainAttributeToDb(node.tagName, value));
+			} else {
+				changed[name] = value;
+			}
+		}
+		return Object.keys(changed).length ? { elementId: node.attributes.id, changed } : null;
 	}
 
 	_attributeChangeNeedsRebuild(node, nextAttributes) {
@@ -406,14 +455,16 @@ class XmlStore extends EventTarget {
 			if (nextAttributes[name] !== node.attributes[name]) return true;
 		}
 		if (node.tagName === "OscillatorNode" && nextAttributes.type !== node.attributes.type) return true;
-		// Temporary, per Hans (2026-09-01): the <Composition>/iMus side of
-		// waxml.js doesn't have the Web Audio side's live-property-nudge
-		// wiring yet (e.g. changing loopEnd live currently does nothing
-		// audible) — so ANY attribute change on a <Composition> itself, or on
-		// anything inside one, needs the whole graph rebuilt rather than a
-		// live nudge that would silently no-op. Remove this blanket rule once
-		// that live coupling exists on the iMus side.
-		if (this._isInsideComposition(node)) return true;
+		// <Composition> itself (no live object of its own, see
+		// LIVE_NUDGEABLE_COMPOSITION_TAGS above) and anything else inside one
+		// that isn't a Section/Layer/Stinger still needs a full rebuild — the
+		// rest of the iMus/Composition side has no live-property-nudge wiring.
+		// A live-nudgeable tag with no `id` yet also falls back to a rebuild,
+		// since a nudge is keyed on the XML id attribute.
+		if (this._isInsideComposition(node)) {
+			if (!XmlStore.LIVE_NUDGEABLE_COMPOSITION_TAGS.has(node.tagName)) return true;
+			if (!node.attributes.id) return true;
+		}
 		// An attribute whose value newly becomes (or stops being) a "$name"
 		// <Var> reference needs a full reload too, for the same "live nudge
 		// silently no-ops" reason as the Composition rule above: waxml.js

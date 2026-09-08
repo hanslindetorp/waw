@@ -524,6 +524,8 @@ export class WaCompositionView extends HTMLElement {
 		this._pxPerSecond = DEFAULT_PX_PER_SEC;
 		this._rowHeight = DEFAULT_ROW_HEIGHT;
 		this._lastCompositionId = null;
+		// Per-Composition zoom memory — see _onStoreChange's own save/restore.
+		this._zoomByCompositionId = new Map();
 		this._needsInitialScroll = true; // scrolls LEFT_PAD_PX into view once per newly-selected Composition — see _onStoreChange/_renderComposition
 		this._lastSelectedTransitionIdByTarget = new Map();
 		this._lastLayout = null;
@@ -561,9 +563,17 @@ export class WaCompositionView extends HTMLElement {
 	_onStoreChange() {
 		const selected = xmlStore.getSelectedNode();
 		if (selected && selected.tagName === "Composition" && selected.id !== this._lastCompositionId) {
+			// Per-Composition zoom memory (mirrors wa-section-view.js's own
+			// _zoomBySectionId) — per Hans (2026-09-08).
+			if (this._lastCompositionId) {
+				this._zoomByCompositionId.set(this._lastCompositionId, { pxPerSecond: this._pxPerSecond, rowHeight: this._rowHeight });
+			}
 			this._lastCompositionId = selected.id;
 			this._lastSelectedTransitionIdByTarget.clear();
 			this._needsInitialScroll = true; // see _renderComposition's own use of this flag
+			const savedZoom = this._zoomByCompositionId.get(selected.id);
+			this._pxPerSecond = savedZoom ? savedZoom.pxPerSecond : DEFAULT_PX_PER_SEC;
+			this._rowHeight = savedZoom ? savedZoom.rowHeight : DEFAULT_ROW_HEIGHT;
 		}
 		if (!this._lastCompositionId) return;
 

@@ -57,7 +57,14 @@ class PlayerStore extends EventTarget {
 		this._maybeUpdateTriggerSelectorFromSelection();
 
 		const structural = !e.detail || e.detail.structural !== false;
-		if (!structural) return; // an attribute-only edit never invalidates the live graph's shape
+		if (!structural) {
+			// xmlStore's own liveNudge detail (see xml-store.js's updateAttributes/
+			// _buildLiveNudge) — a Section/Layer/Stinger attribute change that
+			// stayed non-structural because that tag's live object now exposes a
+			// generic waxml.js .set(param, value), per Hans (2026-09-08).
+			if (e.detail?.liveNudge) this._applyLiveNudge(e.detail.liveNudge);
+			return; // an attribute-only edit never invalidates the live graph's shape
+		}
 		this._documentLoaded = false;
 		if (this.isPlaying) {
 			try {
@@ -69,6 +76,31 @@ class PlayerStore extends EventTarget {
 		}
 		this._emit();
 		this._scheduleReload();
+	}
+
+	// Nudges a Section/Track/Motif's own generic .set(param, value) directly
+	// (no engine reload) — same "no graph loaded / object not found / setter
+	// doesn't exist -> silently no-op" contract as live-property.js's
+	// applyLiveMethodCall, reimplemented here rather than imported to avoid
+	// a circular import (live-property.js already imports this module).
+	_applyLiveNudge({ elementId, changed }) {
+		if (!this._documentLoaded || !elementId) return;
+		let liveObj;
+		try {
+			const matches = bridge.getLiveObjects(`[id='${elementId}']`);
+			liveObj = matches && matches[0];
+		} catch {
+			liveObj = null;
+		}
+		if (!liveObj || typeof liveObj.set !== "function") return;
+		for (const [param, value] of Object.entries(changed)) {
+			try {
+				liveObj.set(param, value);
+			} catch {
+				// Same reasoning as live-property.js's own catch: not worth
+				// surfacing, the XML attribute is already the source of truth.
+			}
+		}
 	}
 
 	_scheduleReload() {

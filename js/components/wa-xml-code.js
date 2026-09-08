@@ -34,6 +34,21 @@ template.innerHTML = `
 			overflow: hidden;
 		}
 		.gutter {
+			/* align-self opts out of the flex row's default cross-axis
+			   stretch — without it, .gutter's own height gets stretched to
+			   match .editor's (the visible panel height), and every line
+			   number past whatever fits in that height is permanently
+			   clipped by this element's own overflow:hidden, no matter how
+			   far _syncScroll's translateY shifts it (a transform moves an
+			   already-clipped box on screen, it can't reveal content that
+			   was clipped by the box's own — too-short — layout height in
+			   the first place). Letting height stay auto-sized to the real
+			   number of line-number divs (all of them, for every line, not
+			   just however many are currently visible) fixes that: now
+			   .editor's own overflow:hidden further down is what does the
+			   actual viewport clipping, and the transform genuinely scrolls.
+			   Per Hans (2026-09-08) bug report + his own devtools diagnosis. */
+			align-self: flex-start;
 			flex: 0 0 auto;
 			background: var(--waw-editor-gutter, #1f232b);
 			color: var(--waw-editor-line-number, #6b7280);
@@ -41,7 +56,6 @@ template.innerHTML = `
 			text-align: right;
 			user-select: none;
 			padding: 0.75rem 0;
-			overflow: hidden;
 			white-space: pre;
 		}
 		.gutter div {
@@ -60,10 +74,20 @@ template.innerHTML = `
 		}
 		.line-bg,
 		.highlight {
+			/* top/left/right only (no bottom, no inset:0) so height stays
+			   auto — sized to *all* of this layer's line-divs, not clipped
+			   to .content's own visible height. .content's overflow:hidden
+			   is what actually clips these to the viewport; _syncScroll's
+			   translateY then genuinely scrolls a taller box past that
+			   viewport instead of just repositioning an already-clipped one
+			   (which could never reveal more than whatever first fit). Same
+			   root cause/fix as .gutter's own align-self above. Per Hans
+			   (2026-09-08). */
 			position: absolute;
-			inset: 0;
+			top: 0;
+			left: 0;
+			right: 0;
 			pointer-events: none;
-			overflow: hidden;
 			white-space: pre;
 			line-height: ${LINE_HEIGHT}px;
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
@@ -86,6 +110,13 @@ template.innerHTML = `
 			height: ${LINE_HEIGHT}px;
 		}
 		textarea {
+			/* Shadow DOM doesn't inherit main.css's global box-sizing reset —
+			   without this, the padding below renders *outside* the 100%
+			   height/width, pushing the textarea's real bottom edge past
+			   .content's own clipped bounds by a line's worth. Same class of
+			   bug already guarded against elsewhere (see wa-section-view.js's
+			   .layer-fader, wa-composition-view.js's .loop-circle). */
+			box-sizing: border-box;
 			position: relative;
 			z-index: 2;
 			display: block;
