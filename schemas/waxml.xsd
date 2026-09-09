@@ -2076,10 +2076,16 @@
   </xs:complexType>
 
   <xs:complexType name="CompositionContentType">
+    <!-- Stinger and Command restricted here for now, per Hans (2026-09-09):
+         <Composition> should currently only allow <Section> as a child.
+         May change back later - to reinstate, move the two elements below
+         back into the xs:choice. -->
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element name="Section" type="sectionContentType"/>
+      <!--
       <xs:element name="Stinger" type="stingerContentType"/>
       <xs:element name="Command" type="commandContentType"/>
+      -->
     </xs:choice>
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="id" type="iMusicId"/>

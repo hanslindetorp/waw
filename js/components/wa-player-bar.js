@@ -19,6 +19,14 @@ import "./wa-var-knobs.js";
 // one's set. The "+" button next to the selector field creates a new one of
 // those from whatever the field currently holds.
 
+// Half-width of the "edge" band a shortcut-btn click is tested against (see
+// _renderShortcuts) — the button's own visual box, inset by this on every
+// side, is the "center = trig only" zone; .shortcut-btn::before (below)
+// expands the button's actual clickable area by the same amount outward, so
+// the "edge = select only" zone genuinely straddles the visible border, a
+// few px in and a few px out, per Hans (2026-09-10).
+const SHORTCUT_EDGE_PX = 5;
+
 const template = document.createElement("template");
 template.innerHTML = `
 	<style>
@@ -27,6 +35,12 @@ template.innerHTML = `
 			align-items: center;
 			gap: 0.5rem;
 			font: 0.85rem/1.4 system-ui, sans-serif;
+			/* Reserves a Var knob's own height (~54px measured) up front, so
+			   the bar doesn't visibly grow the moment the *first* one is
+			   created — wa-var-knobs.js hides itself entirely (display:none)
+			   while empty, so it can't reserve this space on its own. Per
+			   Hans (2026-09-10). */
+			min-height: 56px;
 		}
 		.tp-btn {
 			background: #24272c;
@@ -51,23 +65,25 @@ template.innerHTML = `
 			opacity: 0.4;
 			cursor: default;
 		}
-		/* A brief pulse ring on every actual trig — per Hans (2026-09-09): so
-		   clicking PLAY (even while already .active, e.g. re-triggering the
-		   same selector) visibly confirms a trig was really sent, distinct
-		   from the .active background's own persistent "is playing" state.
-		   Shared by PLAY and every shortcut-btn now (2026-09-10) — same
-		   confirmation on any actual trig, wherever it's fired from. Layered
-		   as a box-shadow (not a background swap) so it reads the same
-		   regardless of .active/.selected/disabled. Retriggered in JS by
-		   removing+reflowing+re-adding the class (see _blink), since
-		   re-adding an already-present class alone wouldn't restart the
-		   animation. */
+		/* A brief blue background flash on every actual trig — per Hans
+		   (2026-09-09, restyled 2026-09-10): so clicking PLAY (even while
+		   already .active, e.g. re-triggering the same selector) visibly
+		   confirms a trig was really sent, distinct from .selected's own
+		   persistent border-based indicator (see .shortcut-btn.selected) —
+		   the two used to both be blue and were easy to confuse; now the
+		   *border* means "selected" and the *background* flash means "just
+		   fired". A large inset spread reads as a full-button flash without
+		   literally animating the background gradient property (which
+		   doesn't interpolate cleanly). Shared by PLAY and every
+		   shortcut-btn. Retriggered in JS by removing+reflowing+re-adding
+		   the class (see _blink), since re-adding an already-present class
+		   alone wouldn't restart the animation. */
 		@keyframes tp-trig-blink {
 			0% {
-				box-shadow: 0 0 0 3px rgba(79, 163, 255, 0.9);
+				box-shadow: inset 0 0 0 30px rgba(79, 163, 255, 0.85);
 			}
 			100% {
-				box-shadow: 0 0 0 3px rgba(79, 163, 255, 0);
+				box-shadow: inset 0 0 0 30px rgba(79, 163, 255, 0);
 			}
 		}
 		.blink {
@@ -87,35 +103,81 @@ template.innerHTML = `
 		.bar-divider {
 			flex: 0 0 auto;
 			width: 1px;
-			height: 1.3rem;
+			/* Stretches to :host's own full row height (its cross-axis size,
+			   since :host is display:flex) rather than a fixed rem value that
+			   could drift out of sync with the bar's real height — e.g. once
+			   it grows to fit a Var knob. Per Hans (2026-09-10). */
+			align-self: stretch;
 			background: var(--waw-border, #2f2f2f);
 		}
-		.bar-label {
-			flex: 0 0 auto;
-			font-size: 0.72rem;
-			color: var(--waw-muted, #8a8a8a);
-			white-space: nowrap;
+		/* Wraps the whole Commands+Variables area in one subtly-shaded,
+		   rounded group — per Hans (2026-09-10): with the "Triggers:"/
+		   "Variables:" text labels gone, this pill is what actually marks
+		   the area off from the rest of the bar (PLAY/STOP/selector field)
+		   now, instead of a plain 1px line matching every other divider. */
+		.cmd-var-group {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			/* More top padding than bottom — a Var knob's own value label
+			   (see wa-var-knobs.js) sits close to the top otherwise. Per
+			   Hans (2026-09-10). */
+			padding: 0.6rem 0.6rem 0.3rem;
+			border-radius: 10px;
+			background: rgba(255, 255, 255, 0.04);
+			border: 1px solid var(--waw-border, #2f2f2f);
 		}
 		.add-shortcut-btn,
 		.add-var-btn {
-			background: #24272c;
-			border: 1px solid var(--waw-border, #2f2f2f);
-			color: inherit;
-			border-radius: 4px;
-			padding: 0.25rem 0.5rem;
-			font-size: 0.85rem;
-			line-height: 1;
+			flex: 0 0 auto;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			width: 22px;
+			height: 22px;
+			padding: 0;
+			background: linear-gradient(180deg, #383c42, #1d1f22 80%);
+			border: 1px solid #0b0c0d;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+			color: #cfd3da;
 			cursor: pointer;
+		}
+		.add-shortcut-btn svg,
+		.add-var-btn svg {
+			width: 15px;
+			height: 15px;
+		}
+		/* A rounded-rect "keycap" for "add a trigger button", a circle
+		   (echoing wa-var-knobs.js's own round knobs) for "add a knob" — per
+		   Hans (2026-09-10): the two icons should read as what they each add.
+		   The circular shape alone already carries a lot of that meaning; the
+		   icons inside (see the template markup) carry the rest. */
+		.add-shortcut-btn {
+			border-radius: 5px;
+		}
+		.add-var-btn {
+			border-radius: 50%;
 		}
 		.add-shortcut-btn:hover,
 		.add-var-btn:hover {
-			background: #2f333a;
+			background: linear-gradient(180deg, #40454c, #24272c 80%);
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
 		}
 		.shortcuts {
 			display: flex;
 			align-items: center;
 			gap: 0.35rem;
 			flex-wrap: wrap;
+			/* Roughly two short shortcut-btns' worth of width (measured:
+			   ~26px each, + the row's own gap) — per Hans (2026-09-10): a
+			   plain margin-right alone barely showed at all once .shortcuts
+			   itself had zero width (no Commands yet), collapsing the gap
+			   before the divider/add-var-btn down to almost nothing. This
+			   reserves that space unconditionally, not just when there
+			   happen to be Commands to show. */
+			min-width: 3.6rem;
+			margin-right: 0.4rem;
 		}
 		.shortcut-group {
 			display: flex;
@@ -128,37 +190,67 @@ template.innerHTML = `
 			border-left: none;
 			padding-left: 0;
 		}
+		/* A bit of the same glossy, top-lit 3D feel as wa-var-knobs.js's own
+		   knobs (dark radial gradient + inset highlight) — per Hans
+		   (2026-09-10), a plain gradient here (a knob's radial one doesn't
+		   read right on a rectangular button) plus an inset top highlight
+		   and a real drop shadow for some actual depth. */
 		.shortcut-btn {
-			background: #24272c;
-			border: 1px solid var(--waw-border, #2f2f2f);
+			position: relative;
+			background: linear-gradient(180deg, #383c42, #1d1f22 80%);
+			border: 1px solid #0b0c0d;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 			color: inherit;
-			border-radius: 4px;
+			border-radius: 5px;
 			padding: 0.2rem 0.5rem;
 			font-size: 0.75rem;
 			cursor: pointer;
 			white-space: nowrap;
 		}
+		/* Expands the button's own clickable area by SHORTCUT_EDGE_PX on every
+		   side (a pseudo-element still hit-tests as a click on its host
+		   element) — clicking here lands outside the button's own
+		   getBoundingClientRect(), which _renderShortcuts' click handler
+		   reads as "edge" (select-only). Per Hans (2026-09-10). */
+		.shortcut-btn::before {
+			content: "";
+			position: absolute;
+			inset: -${SHORTCUT_EDGE_PX}px;
+		}
 		.shortcut-btn:hover {
-			background: rgba(79, 163, 255, 0.15);
+			background: linear-gradient(180deg, #40454c, #24272c 80%);
 			border-color: var(--waw-accent, #4fa3ff);
 		}
+		/* Border only (not the background, which .blink now owns — see its
+		   own comment) — a same-width color swap, so a selected button
+		   doesn't shift size, and its box-shadow property stays free for
+		   .blink's animation to use without the two conflicting when a
+		   selected button also gets triggered (a click on its own center).
+		   Per Hans (2026-09-10). */
 		.shortcut-btn.selected {
-			background: var(--waw-accent, #4fa3ff);
 			border-color: var(--waw-accent, #4fa3ff);
-			color: #06131f;
 		}
 	</style>
 	<button class="tp-btn tp-play" data-action="play" title="Play">▶</button>
 	<button class="tp-btn" data-action="stop" title="Stop">■</button>
 	<input type="text" class="selector-input" placeholder="CSS selector to trig" title="What PLAY triggers — auto-fills whenever anything gets trig()'d, or type your own" />
-	<div class="bar-divider"></div>
-	<span class="bar-label">Triggers:</span>
-	<button class="add-shortcut-btn" type="button" title="Save the current selector as a trigger-shortcut Command">+</button>
-	<div class="shortcuts"></div>
-	<div class="bar-divider"></div>
-	<span class="bar-label">Variables:</span>
-	<button class="add-var-btn" type="button" title="Add a new <Var>">+</button>
-	<wa-var-knobs></wa-var-knobs>
+	<div class="cmd-var-group">
+		<button class="add-shortcut-btn" type="button" title="Save the current selector as a trigger-shortcut Command">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+				<rect x="3" y="6" width="18" height="12" rx="3" />
+				<path d="M12 9v6M9 12h6" />
+			</svg>
+		</button>
+		<div class="shortcuts"></div>
+		<div class="bar-divider"></div>
+		<button class="add-var-btn" type="button" title="Add a new Var knob">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+				<circle cx="12" cy="12" r="9" />
+				<path d="M12 8v8M8 12h8" />
+			</svg>
+		</button>
+		<wa-var-knobs></wa-var-knobs>
+	</div>
 `;
 
 export class WaPlayerBar extends HTMLElement {
@@ -321,18 +413,33 @@ export class WaPlayerBar extends HTMLElement {
 				btn.type = "button";
 				btn.className = "shortcut-btn";
 				btn.classList.toggle("selected", xmlStore.selectedNodeId === cmd.id);
-				// label > id > class, per Hans (2026-09-09).
-				btn.textContent = cmd.attributes.label || cmd.attributes.id || cmd.attributes.class || cmd.attributes.value;
+				// The selector itself (what `value` actually trig()s), minus
+				// its leading "."/"#" — per Hans (2026-09-10), replacing the
+				// earlier label>id>class priority.
+				btn.textContent = (cmd.attributes.value || "").replace(/^[.#]/, "");
 				btn.title = `trig(${cmd.attributes.value})`;
-				// Selects this <Command> (so the XML tree/Code panel highlight
-				// it too — see xmlStore.selectNode's existing sync) *and*
-				// fires it, per Hans (2026-09-09): selectable/deletable now,
-				// same as everything else in the XML editor. Blinks the same
-				// way PLAY does (2026-09-10) — see _blink.
-				btn.addEventListener("click", () => {
-					xmlStore.selectNode(cmd.id);
-					this._blink(btn);
-					playerStore.trigShortcut(cmd.attributes.value);
+				// Clicking dead center *only* trigs (no select) — clicking the
+				// edge (a band straddling the button's own visual border, a few
+				// px in and a few px out via the ::before hit-area expansion in
+				// CSS) *only* selects (so the XML tree/Code panel highlight it
+				// — see xmlStore.selectNode's existing sync — without also
+				// firing it). Per Hans (2026-09-10): trigging a Command button
+				// used to always select it too, which made a second "+" click
+				// build a Command that triggered the *previous* one instead of
+				// whatever selector was actually wanted.
+				btn.addEventListener("click", (e) => {
+					const rect = btn.getBoundingClientRect();
+					const inCenter =
+						e.clientX >= rect.left + SHORTCUT_EDGE_PX &&
+						e.clientX <= rect.right - SHORTCUT_EDGE_PX &&
+						e.clientY >= rect.top + SHORTCUT_EDGE_PX &&
+						e.clientY <= rect.bottom - SHORTCUT_EDGE_PX;
+					if (inCenter) {
+						this._blink(btn);
+						playerStore.trigShortcut(cmd.attributes.value);
+					} else {
+						xmlStore.selectNode(cmd.id);
+					}
 				});
 				groupEl.appendChild(btn);
 			});

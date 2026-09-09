@@ -1,5 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
-import { firstSelector } from "../xml-editor/xml-tree-ops.js";
+import { firstClassToken } from "../xml-editor/xml-tree-ops.js";
 import { WaxmlBridge } from "./waxml-bridge.js";
 
 const bridge = new WaxmlBridge();
@@ -162,19 +162,31 @@ class PlayerStore extends EventTarget {
 		this._reloadInFlight = false;
 	}
 
-	// Per Hans (2026-09-01, refined 2026-09-09): waxml.js's sectionStart only
+	// Per Hans (2026-09-01, refined 2026-09-10): waxml.js's sectionStart only
 	// ends up set correctly when trig() is called with a *class* selector,
 	// not an [id='...'] one — so the PLAY/STOP field auto-follows the most
-	// recently selected element's own trig selector (firstSelector: its
-	// first class, "." prefixed, or its id, "#" prefixed, if it has no
-	// class at all — same priority used everywhere else a trig selector is
-	// derived now). Runs on every xmlStore change, not just a fresh
-	// selection, so editing the currently-armed element's own class/id
+	// recently selected element's own class ("." prefixed). No longer falls
+	// back to "#id" when there's no class (2026-09-10): a freshly created
+	// <Command> auto-selects itself and has no class of its own, so that
+	// fallback used to populate the field with "#Cmd-N" — meaning a second
+	// "+" click created a Command that triggered the *first* Command instead
+	// of whatever was actually meant. Selecting a <Command type="trig">
+	// itself is special-cased to show *its own* `value` instead (what it
+	// actually trig()s) — informative, and never that self-referencing
+	// "#Cmd-N" shape. Runs on every xmlStore change, not just a fresh
+	// selection, so editing the currently-armed element's own class/value
 	// updates it too.
 	_maybeUpdateTriggerSelectorFromSelection() {
 		const node = xmlStore.getSelectedNode();
-		if (!node || !node.attributes.id) return; // firstSelector needs at least an id to fall back to
-		const selector = firstSelector(node);
+		if (!node) return;
+		let selector;
+		if (node.tagName === "Command" && (node.attributes.type || "trig") === "trig" && node.attributes.value) {
+			selector = node.attributes.value;
+		} else {
+			const firstClass = firstClassToken(node);
+			if (!firstClass) return;
+			selector = `.${firstClass}`;
+		}
 		if (selector === this.triggerSelector) return;
 		this.setTriggerSelector(selector, node.tagName === "Section" ? node.id : null);
 	}

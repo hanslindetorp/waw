@@ -43,12 +43,36 @@ template.innerHTML = `
 		:host([hidden]) {
 			display: none;
 		}
+		/* :host's own flex only arranges its one shadow-DOM child (this
+		   div) — without this, .var-knob-wrap (a plain block-level div per
+		   knob) stacked vertically instead of sitting side by side. Per
+		   Hans (2026-09-10). */
+		.var-knobs {
+			display: flex;
+			align-items: flex-start;
+			gap: 1rem;
+		}
 		.var-knob-wrap {
 			display: flex;
 			flex-direction: column;
 			align-items: center;
-			gap: 0.05rem;
+			gap: 0.15rem;
+		}
+		/* Knob + its value sit in a row now (value used to be stacked below
+		   the knob along with the name) — per Hans (2026-09-10). */
+		.var-knob-row {
+			display: flex;
+			align-items: center;
+			gap: 0.35rem;
+		}
+		/* The ticks' own -5px/-5px offsets (see _buildTicks) are relative to
+		   this anchor specifically (a plain KNOB_SIZE box), not the whole
+		   row — so they stay centered on just the knob once the value label
+		   sits beside it instead of stretching the row wider. */
+		.var-knob-anchor {
 			position: relative;
+			width: ${KNOB_SIZE}px;
+			height: ${KNOB_SIZE}px;
 		}
 		.var-knob {
 			width: ${KNOB_SIZE}px;
@@ -104,8 +128,11 @@ template.innerHTML = `
 			text-overflow: ellipsis;
 			white-space: nowrap;
 		}
+		/* Bigger than the name label — per Hans (2026-09-10), for
+		   readability now that it sits beside the knob instead of stacked
+		   underneath it. */
 		.var-value {
-			font-size: 0.55rem;
+			font-size: 0.8rem;
 			color: var(--waw-accent, #4fa3ff);
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 		}
@@ -190,7 +217,17 @@ export class WaVarKnobs extends HTMLElement {
 
 		const wrap = document.createElement("div");
 		wrap.className = "var-knob-wrap";
-		wrap.appendChild(this._buildTicks());
+
+		// The knob (with its ticks) and its value sit side by side now — the
+		// name label is the only thing still below. Per Hans (2026-09-10).
+		const row = document.createElement("div");
+		row.className = "var-knob-row";
+		wrap.appendChild(row);
+
+		const knobAnchor = document.createElement("div");
+		knobAnchor.className = "var-knob-anchor";
+		knobAnchor.appendChild(this._buildTicks());
+		row.appendChild(knobAnchor);
 
 		const knob = document.createElement("div");
 		knob.className = "var-knob";
@@ -205,16 +242,16 @@ export class WaVarKnobs extends HTMLElement {
 		const dial = document.createElement("div");
 		dial.className = "var-knob-dial";
 		knob.appendChild(dial);
-		wrap.appendChild(knob);
+		knobAnchor.appendChild(knob);
+
+		const valueLabel = document.createElement("div");
+		valueLabel.className = "var-value";
+		row.appendChild(valueLabel);
 
 		const nameLabel = document.createElement("div");
 		nameLabel.className = "var-name";
 		nameLabel.textContent = varName || "(no name)";
 		wrap.appendChild(nameLabel);
-
-		const valueLabel = document.createElement("div");
-		valueLabel.className = "var-value";
-		wrap.appendChild(valueLabel);
 
 		if (!varName) {
 			// No "name" (nor a fallback "id") to call setVariable() with —
