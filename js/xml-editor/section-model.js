@@ -312,6 +312,39 @@ export function readUpbeatSeconds(node, info) {
 	return parseDivision(node.attributes.upbeat, info);
 }
 
+// An <Option> nested inside a <Stinger> positions itself via `delay`, not
+// `pos` (schema: stingerOptionDelay — a signed musical fraction), per Hans
+// (2026-09-10): "-1/4" for a quarter note before the Stinger's own anchor,
+// "1/8" for an eighth note after it. Mirrors readStingerOffset (same
+// upbeat-as-a-fixed-deduction convention, "pos/delay changes, not upbeat")
+// but reads `delay` via parseDivision instead of `pos` via parsePosition —
+// parseDivision already handles a leading "-" on the fraction's numerator
+// correctly as-is, no extra sign handling needed here.
+export function readOptionDelayOffset(node, info) {
+	return parseDivision(node.attributes.delay, info) - readUpbeatSeconds(node, info);
+}
+
+// This is the inverse, for writing a new `delay` from a dragged pixel/time
+// offset (seconds relative to the Stinger's own anchor - positive = later).
+// Quantizes to the nearest gridBeats-beat grid first (same convention as
+// secondsToPosString/secondsToQuantizeString), then expresses that as an
+// "N/D" fraction of a whole note — matching parseDivision's own grammar,
+// where a full beat is 1/timeSign.denominator of a whole note, so D is
+// timeSign.denominator scaled down by however many grid-steps fit in one
+// beat. gridBeats=null/0 (grid resolution "off") falls back to a signed
+// "Xs" seconds string, which parseDivision also round-trips exactly.
+export function secondsToDelayFractionString(offsetSeconds, info, gridBeats = 1) {
+	if (!gridBeats) {
+		return `${Math.round(offsetSeconds * 1000) / 1000}s`;
+	}
+	const rawBeats = offsetSeconds / info.beatDuration;
+	const snappedBeats = Math.round(rawBeats / gridBeats) * gridBeats;
+	if (snappedBeats === 0) return "0";
+	const numerator = Math.round(snappedBeats / gridBeats);
+	const denominator = Math.round(info.timeSign.denominator / gridBeats);
+	return `${numerator}/${denominator}`;
+}
+
 // ============================================================= //
 // Composition-level helpers (see wa-composition-view.js).       //
 // ============================================================= //

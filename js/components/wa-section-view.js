@@ -14,11 +14,13 @@ import {
 	readEffectiveLoopEnd,
 	readStingerQuantizePosition,
 	readStingerOffset,
+	readOptionDelayOffset,
 	readUpbeatSeconds,
 	secondsToQuantizeString,
 	minimumTotalDuration,
 	parsePosition,
 	secondsToPosString,
+	secondsToDelayFractionString,
 	quantizeDroppedFileLength,
 	secondsToLengthString,
 	parseDivision
@@ -2205,7 +2207,7 @@ export class WaSectionView extends HTMLElement {
 
 		const optionRowHeight = (this._rowHeight - 4) / options.length;
 		options.forEach((option, idx) => {
-			const optionOffset = readStingerOffset(option, info);
+			const optionOffset = readOptionDelayOffset(option, info);
 			const nested = this._renderNestedOption(
 				box,
 				option,
@@ -2267,14 +2269,14 @@ export class WaSectionView extends HTMLElement {
 			if (!isAcceptable(types)) return;
 			e.preventDefault();
 			this._hideGhost(ghost);
-			const posString = this._stingerDropPositionString(e, lane, basePos, info);
+			const delayString = this._stingerDropDelayString(e, lane, basePos, info);
 
 			if (this._isFileDrag(types)) {
 				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
 				if (!fileId) return;
 				const fileNode = vfs.getNode(fileId);
 				if (!fileNode || fileNode.type !== "file") return;
-				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id), pos: posString });
+				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id), delay: delayString });
 				return;
 			}
 
@@ -2282,7 +2284,7 @@ export class WaSectionView extends HTMLElement {
 			if (!draggedOptionId || draggedOptionId === stinger.id) return;
 			xmlStore.reparentNode(draggedOptionId, stinger.id);
 			const nodeNow = ops.findNodeById(xmlStore.root, draggedOptionId);
-			if (nodeNow) xmlStore.updateAttributes(draggedOptionId, { ...nodeNow.attributes, pos: posString });
+			if (nodeNow) xmlStore.updateAttributes(draggedOptionId, { ...nodeNow.attributes, delay: delayString });
 		});
 	}
 
@@ -2475,13 +2477,20 @@ export class WaSectionView extends HTMLElement {
 	// fixed — "pos changes, not upbeat", per Hans). anchorSeconds is this
 	// element's own zero point: the Stinger's raw quantize position for the
 	// Stinger's own content, or the Stinger's *resolved* position for one of
-	// its Options (see _buildStingerLane).
+	// its Options (see _buildStingerLane). An Option nested in a Stinger is
+	// the one exception: it has no `pos` any more (schema, 2026-09-09) and
+	// writes its offset as a signed musical fraction via `delay` instead
+	// (secondsToDelayFractionString) — per Hans (2026-09-10).
 	_wireStingerContentDrag(el, node, info, anchorSeconds, startAbsSeconds) {
 		this._wireStingerDrag(el, info, startAbsSeconds, (newAbsSeconds) => {
 			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 			if (!nodeNow) return;
-			const newPosSeconds = newAbsSeconds - anchorSeconds + readUpbeatSeconds(nodeNow, info);
-			xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, pos: secondsToPosString(newPosSeconds, info, this._effectiveGridBeats(info)) });
+			const newOffsetSeconds = newAbsSeconds - anchorSeconds + readUpbeatSeconds(nodeNow, info);
+			if (nodeNow.tagName === "Option") {
+				xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, delay: secondsToDelayFractionString(newOffsetSeconds, info, this._effectiveGridBeats(info)) });
+				return;
+			}
+			xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, pos: secondsToPosString(newOffsetSeconds, info, this._effectiveGridBeats(info)) });
 		});
 	}
 
@@ -3755,19 +3764,35 @@ export class WaSectionView extends HTMLElement {
 		});
 	}
 
-	// Like _dropPositionString, but for a drop onto a Stinger's own row: the
-	// resulting `pos` is relative to anchorSeconds (the Stinger's own
-	// resolved position, e.g. basePos for an existing Stinger) rather than
-	// an absolute Section-timeline position — matching how an Option's own
-	// pos already stacks on top of its Stinger's anchor everywhere else in
-	// this file. Unlike _dropPositionString there's no grab-offset case
-	// (nothing is ever "re-grabbed" mid-drop here) and no pre-roll clamp —
-	// a Stinger's own pos legitimately extends earlier than its anchor
-	// (e.g. a leadin), so nothing here should cut that off.
-	_stingerDropPositionString(e, referenceEl, anchorSeconds, info) {
+	// Shared by _stingerDropPositionString/_stingerDropDelayString below: the
+	// raw (unformatted) offset in seconds from anchorSeconds (the Stinger's
+	// own resolved position, e.g. basePos for an existing Stinger) to
+	// wherever the cursor is — relative, not absolute, matching how an
+	// Option's own offset already stacks on top of its Stinger's anchor
+	// everywhere else in this file. No pre-roll clamp here — a Stinger's own
+	// pos legitimately extends earlier than its anchor (e.g. a leadin), so
+	// nothing here should cut that off.
+	_stingerDropOffsetSeconds(e, referenceEl, anchorSeconds, info) {
 		const rect = referenceEl.getBoundingClientRect();
 		const rawSeconds = this._pxToTime(e.clientX - rect.left + referenceEl.scrollLeft, info);
-		return secondsToPosString(rawSeconds - anchorSeconds, info, this._effectiveGridBeats(info));
+		return rawSeconds - anchorSeconds;
+	}
+
+	// Like _dropPositionString, but for a drop onto a Stinger's own row —
+	// used for the Stinger's own `pos` and for the drag-preview ghost
+	// (always pos-shaped, even for an Option — the ghost is purely visual
+	// and never written to the XML). Unlike _dropPositionString there's no
+	// grab-offset case (nothing is ever "re-grabbed" mid-drop here).
+	_stingerDropPositionString(e, referenceEl, anchorSeconds, info) {
+		return secondsToPosString(this._stingerDropOffsetSeconds(e, referenceEl, anchorSeconds, info), info, this._effectiveGridBeats(info));
+	}
+
+	// Like _stingerDropPositionString, but for a file/Option dropped onto an
+	// existing Stinger's lane, which creates/repositions an <Option> — those
+	// write `delay` (a signed musical fraction), not `pos`, per Hans
+	// (2026-09-10).
+	_stingerDropDelayString(e, referenceEl, anchorSeconds, info) {
+		return secondsToDelayFractionString(this._stingerDropOffsetSeconds(e, referenceEl, anchorSeconds, info), info, this._effectiveGridBeats(info));
 	}
 
 	_dropPositionString(e, referenceEl, info) {
@@ -3865,11 +3890,20 @@ export class WaSectionView extends HTMLElement {
 		}
 	}
 
+	// Resets a dragged Option's own position now that it's landed in a new
+	// container — strips whichever of `pos`/`delay` it's actually carrying,
+	// since which one encodes "position" depends on the container it came
+	// from: a Layer/Segment Option uses `pos`, a Stinger's own Option uses
+	// `delay` (per Hans, 2026-09-10). Stripping both unconditionally means
+	// this stays correct regardless of source, and never leaves a stale
+	// `delay` behind to be misread as an actual playback delay in the new
+	// (non-Stinger) context, where `delay` means something else entirely.
 	_stripPos(nodeId) {
 		const node = ops.findNodeById(xmlStore.root, nodeId);
-		if (!node || node.attributes.pos === undefined) return;
+		if (!node || (node.attributes.pos === undefined && node.attributes.delay === undefined)) return;
 		const next = { ...node.attributes };
 		delete next.pos;
+		delete next.delay;
 		xmlStore.updateAttributes(nodeId, next);
 	}
 

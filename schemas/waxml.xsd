@@ -1964,6 +1964,31 @@
     <xs:attribute name="voice" type="voice"/>
   </xs:complexType>
 
+  <xs:simpleType name="stingerOptionDelay">
+    <xs:annotation>
+      <xs:documentation>An Option's own position within its Stinger, as a signed musical value relative to the Stinger's anchor - e.g. "-1/8" for an eighth note early, "1/4" for a quarter note late. Same grammar as length, but (unlike length) a leading "-" is allowed, since an Option can sit on either side of the anchor. Per Hans (2026-09-10).</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="bar|beat|-?\d+|-?\d+(\.\d+)?\/\d+|-?\d+(\.\d+)?(ms|s)"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Stinger-only variant of <Option>: same as optionContentType but
+       without "pos" (per Hans, 2026-09-09) - for <Stinger>, "delay" is used
+       as a relative value instead. <Segment> and <Layer> keep "pos" via the
+       regular optionContentType above. May be merged back later. -->
+  <xs:complexType name="stingerOptionContentType">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="Command" type="commandContentType"/>
+    </xs:choice>
+    <xs:attribute name="label" type="label"/>
+    <xs:attribute name="src" type="fileName"/>
+    <xs:attribute name="length" type="length"/>
+    <xs:attribute name="delay" type="stingerOptionDelay"/>
+    <xs:attribute name="upbeat" type="length"/>
+    <xs:attribute name="voice" type="voice"/>
+  </xs:complexType>
+
   <xs:complexType name="segmentContentType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element name="Option" type="optionContentType"/>
@@ -1979,7 +2004,7 @@
 
   <xs:complexType name="stingerContentType">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="Option" type="optionContentType"/>
+      <xs:element name="Option" type="stingerOptionContentType"/>
       <!-- <xs:element name="envelope" .../> was allowed here; commented out for now -->
       <xs:element name="Command" type="commandContentType"/>
     </xs:choice>
