@@ -409,7 +409,19 @@ class XmlStore extends EventTarget {
 	// misapplying the value to some unrelated bus parameter.
 	static LIVE_NUDGE_ALLOWED_ATTRS = new Set([
 		"gain", // aliased to "volume" below — see _buildLiveNudge
-		"loopEnd",
+		// loopEnd deliberately removed (2026-09-10, per Hans): waxml.js's
+		// Track constructor only resolves an *inherited* loopEnd (from its
+		// Section/Composition, when the Layer has none of its own) once, at
+		// construction time (waxml.js's own "XXX ... Rebuild to use the
+		// WAXML inheritance system" comment) — a live .set("loopEnd", ...)
+		// on the ancestor updates its stored parameter but never reaches an
+		// already-playing Track that inherited the old value. Force a full
+		// rebuild instead until that inheritance handling is reworked
+		// engine-side. (A Layer's own *explicit* loopEnd does live-update
+		// correctly — its scheduling loop re-reads parameters.loopEnd every
+		// tick — but there's no cheap way to tell the two cases apart here
+		// without duplicating the engine's own inheritance resolution, so
+		// both go through the safe/slow path for now.)
 		"changeOnNext",
 		"cuePoint",
 		"randomOffset",
