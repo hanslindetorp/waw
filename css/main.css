@@ -77,4 +77,12 @@ body {
 	min-height: 0;
 	overflow: hidden;
 }
+
+/* [hidden] alone loses to the .app-panels rule above (equal specificity,
+   this one earlier in the cascade) without an explicit override — needed
+   now that the View menu (2026-09-10) toggles this via `hidden` rather than
+   it always being the only top-level view. */
+.app-panels[hidden] {
+	display: none;
+}
 </content>

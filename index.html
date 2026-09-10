@@ -15,8 +15,9 @@
 	<header class="app-header">
 		<wa-file-menu></wa-file-menu>
 		<wa-edit-menu></wa-edit-menu>
-		<h1>WAXML Workstation — BETA</h1>
-		<wa-player-bar></wa-player-bar>
+		<wa-view-menu></wa-view-menu>
+		<h1 id="appTitle">WAXML Workstation — BETA</h1>
+		<wa-player-bar id="headerPlayerBar"></wa-player-bar>
 	</header>
 
 	<main class="app-panels">
@@ -61,6 +62,9 @@
 			<wa-xml-code></wa-xml-code>
 		</wa-panel>
 	</main>
+
+	<wa-library-view hidden></wa-library-view>
+	<wa-api-view hidden></wa-api-view>
 
 	<script type="module" src="js/app.js"></script>
 </body>

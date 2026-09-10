@@ -184,8 +184,11 @@ export class WaVarKnobs extends HTMLElement {
 	// same selectable/deletable treatment as everywhere else in the XML
 	// editor, per Hans (2026-09-09). Only acts when the selection is
 	// genuinely one of *this* component's own knobs, same guard
-	// wa-player-bar.js's own Command deletion uses.
+	// wa-player-bar.js's own Command deletion uses. defaultPrevented guard:
+	// same reasoning as wa-player-bar.js's own (2026-09-10) — more than one
+	// <wa-var-knobs> can be mounted at once now (Library (DEMO) view).
 	_onKeyDown(e) {
+		if (e.defaultPrevented) return;
 		if (e.key !== "Backspace" && e.key !== "Delete") return;
 		if (isEditableContext()) return;
 		const selectedId = xmlStore.selectedNodeId;

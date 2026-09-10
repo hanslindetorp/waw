@@ -4,7 +4,11 @@ import { selection } from "../state/selection.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState } from "../vfs/drag-types.js";
 import { STATE_FILE_NAME } from "../project/workstation-state.js";
 
-const ACCEPTED = ".mp3,.wav,.ogg,.m4a,.xml,.zip";
+// Image extensions added (2026-09-10) so a project thumbnail — used by the
+// Library (DEMO) view, see wa-library-view.js — can actually be uploaded via
+// the Upload button, not just dragged in (drag-and-drop never enforced this
+// list anyway).
+const ACCEPTED = ".mp3,.wav,.ogg,.m4a,.xml,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg";
 
 const template = document.createElement("template");
 template.innerHTML = `

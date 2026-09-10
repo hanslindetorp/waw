@@ -35,6 +35,12 @@ template.innerHTML = `
 			align-items: center;
 			gap: 0.5rem;
 			font: 0.85rem/1.4 system-ui, sans-serif;
+		}
+		/* Needed since this element is now hidden from outside (the app
+		   header's own instance, while a non-Workstation view is showing —
+		   see app.js) rather than only ever unmounted. Per Hans (2026-09-10). */
+		:host([hidden]) {
+			display: none;
 			/* Reserves a Var knob's own height (~54px measured) up front, so
 			   the bar doesn't visibly grow the moment the *first* one is
 			   created — wa-var-knobs.js hides itself entirely (display:none)
@@ -88,6 +94,19 @@ template.innerHTML = `
 		}
 		.blink {
 			animation: tp-trig-blink 0.35s ease-out;
+		}
+		/* Library (DEMO)'s bottom bar (see wa-library-view.js) reuses this
+		   whole component but wants a stripped-down transport — no PLAY (its
+		   own row already has a big STOP-only control elsewhere) and no
+		   selector field, no "add a new Command/Var" buttons — while keeping
+		   STOP, the existing shortcuts, and the Var knobs exactly as-is. Per
+		   Hans (2026-09-10). Pure CSS on the host attribute so the markup
+		   itself doesn't need two different template variants. */
+		:host([minimal]) .tp-play,
+		:host([minimal]) .selector-input,
+		:host([minimal]) .add-shortcut-btn,
+		:host([minimal]) .add-var-btn {
+			display: none;
 		}
 		.selector-input {
 			background: #1a1c1f;
@@ -324,7 +343,15 @@ export class WaPlayerBar extends HTMLElement {
 	// per Hans (2026-09-09). Mirrors wa-mixer-view.js's own _onKeyDown: only
 	// acts when the selection is genuinely one of *this* component's own
 	// elements, never something selected in a completely different view.
+	//
+	// defaultPrevented guard: the Library (DEMO) view (2026-09-10) reuses
+	// this whole component for its own bottom bar, so more than one instance
+	// can be mounted (and listening on document) at once — without this, the
+	// same keydown would toggle PLAY/STOP twice (once per instance), which
+	// cancels itself out. Whichever instance's handler runs first calls
+	// preventDefault() below, so every instance after it just no-ops.
 	_onKeyDown(e) {
+		if (e.defaultPrevented) return;
 		if (e.key === " " || e.code === "Space") {
 			if (isEditableContext()) return;
 			e.preventDefault();

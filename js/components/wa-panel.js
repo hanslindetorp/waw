@@ -156,8 +156,15 @@ export class WaPanel extends HTMLElement {
 		// Every panel defaults to a fixed width (resizable via the handle
 		// below), which on a wide window leaves empty space past the last one.
 		// The one panel marked "fill" (normally the trailing one) grows to
-		// soak up whatever's left instead of leaving a gap.
-		this._baseFlex = this.hasAttribute("fill") ? "1 1 auto" : `0 0 ${this.getAttribute("width") || "300px"}`;
+		// soak up whatever's left instead of leaving a gap. _isFill is read
+		// by _applyFairShareOnOpen below, which must never overwrite this
+		// panel's _baseFlex with a fixed pixel value — doing so would
+		// permanently detach it from the container's trailing edge (per
+		// Hans, 2026-09-10: Code's own right edge should always stay glued
+		// to the window's right edge, including after a neighbor's divider
+		// gets dragged, not just at collapse/reopen time).
+		this._isFill = this.hasAttribute("fill");
+		this._baseFlex = this._isFill ? "1 1 auto" : `0 0 ${this.getAttribute("width") || "300px"}`;
 		this._applyFlex();
 		this._collapseBtn.addEventListener("click", () => this.toggleCollapse());
 		this._resizeHandle.addEventListener("pointerdown", (e) => this._onResizeStart(e));
@@ -194,7 +201,13 @@ export class WaPanel extends HTMLElement {
 	// applying workstation-state.json on load, so it deliberately does NOT
 	// dispatch "width-change" (that's reserved for an actual user drag, see
 	// _onResizeEnd) to avoid an immediate redundant save right after load.
+	// Ignored for the fill panel — a workstation-state.json exported before
+	// 2026-09-10 could still have a fixed pixel basis saved for it from the
+	// since-fixed _applyFairShareOnOpen bug; honoring that here would
+	// silently resurrect the "Code detaches from the window's right edge"
+	// bug on a project re-opened from such a file.
 	setWidthBasis(basis) {
+		if (this._isFill) return;
 		this._baseFlex = basis;
 		this._applyFlex();
 	}
@@ -262,6 +275,16 @@ export class WaPanel extends HTMLElement {
 	// (see _applyFlex, called earlier in toggleCollapse) but nothing else has
 	// shrunk yet, so every other panel's getBoundingClientRect() below still
 	// reflects its true pre-reopen width.
+	//
+	// The fill panel (Code) is excluded from ever getting an explicit pixel
+	// _baseFlex here, in either role — as `this` (skip claiming a fixed
+	// targetWidth) or as one of `others` (skip assigning it a fixed share).
+	// It keeps flex:1 1 auto throughout, so it naturally absorbs whatever
+	// pixel amount the other panels *don't* explicitly claim below — which,
+	// since its own current width still counts toward othersWidth's totals,
+	// works out to the same proportional share anyway, while staying
+	// responsive to a plain browser-window resize too (a fixed px basis
+	// wouldn't be).
 	_applyFairShareOnOpen() {
 		const container = this.parentElement;
 		if (!container) return;
@@ -275,11 +298,14 @@ export class WaPanel extends HTMLElement {
 		const othersWidth = others.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0);
 		const remaining = Math.max(0, containerWidth - targetWidth);
 
-		this._baseFlex = `0 0 ${targetWidth}px`;
-		this._applyFlex();
+		if (!this._isFill) {
+			this._baseFlex = `0 0 ${targetWidth}px`;
+			this._applyFlex();
+		}
 
 		if (othersWidth <= 0) return;
 		others.forEach((p) => {
+			if (p._isFill) return;
 			const width = Math.max(MIN_EXPANDED_WIDTH_PX, remaining * (p.getBoundingClientRect().width / othersWidth));
 			p._baseFlex = `0 0 ${width}px`;
 			p._applyFlex();

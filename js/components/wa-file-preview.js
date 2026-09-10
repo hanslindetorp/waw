@@ -106,12 +106,19 @@ template.innerHTML = `
 			gap: 0.5rem;
 			margin-top: 0.75rem;
 		}
+		/* Icon-only now (no text label) — per Hans (2026-09-10) — so this is a
+		   fixed-size square button instead of text-driven padding. */
 		.transport button {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			width: 2rem;
+			height: 2rem;
 			background: #2a2a2a;
 			border: 1px solid var(--waw-border, #2f2f2f);
 			color: inherit;
 			border-radius: 4px;
-			padding: 0.35rem 0.7rem;
+			padding: 0;
 			cursor: pointer;
 			font: inherit;
 		}
@@ -141,10 +148,10 @@ template.innerHTML = `
 		<div class="playhead"></div>
 	</div>
 	<div class="transport">
-		<button class="btn-play" type="button">▶ Play</button>
-		<button class="btn-stop" type="button">■ Stop</button>
-		<button class="btn-loop" type="button">⟲ Loop</button>
-		<button class="btn-start" type="button">⏮ Start</button>
+		<button class="btn-play" type="button" title="Play">▶</button>
+		<button class="btn-stop" type="button" title="Stop">■</button>
+		<button class="btn-loop" type="button" title="Loop">⟲</button>
+		<button class="btn-start" type="button" title="Go to start">⏮</button>
 		<span class="time-readout"></span>
 	</div>
 	<p class="hint status"></p>

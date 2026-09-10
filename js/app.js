@@ -1,17 +1,21 @@
 import "./components/wa-panel.js";
 import "./components/wa-file-menu.js";
 import "./components/wa-edit-menu.js";
+import "./components/wa-view-menu.js";
 import "./components/wa-player-bar.js";
 import "./components/wa-file-manager.js";
 import "./components/wa-preview.js";
 import "./components/wa-xml-editor.js";
 import "./components/wa-xml-code.js";
+import "./components/wa-library-view.js";
+import "./components/wa-api-view.js";
 
 import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
 import { createDefaultProject } from "./project/project-manager.js";
 import { registerPanels, registerLayoutExtras } from "./project/workstation-state.js";
 import { initEditHistory } from "./project/edit-history.js";
+import { viewState } from "./state/view.js";
 
 const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
 const DEFAULT_SCHEMA_NAME = "waxml.xsd";
@@ -29,6 +33,33 @@ registerLayoutExtras({
 });
 initEditHistory();
 loadDefaultSchema().then(createDefaultProject);
+
+// View menu wiring (per Hans, 2026-09-10): swaps which top-level view is
+// visible without ever touching xmlStore/vfs/playerStore — the real project
+// keeps running in the background exactly as-is under Workstation whichever
+// view is showing. The header's own <wa-player-bar> only makes sense in
+// Workstation (the Library view has its own, reused instance — see
+// wa-library-view.js) so it hides along with <main> in the other views.
+const VIEW_TITLES = {
+	workstation: "WAXML Workstation — BETA",
+	library: "WAXML Library (DEMO)",
+	api: "WAXML API (DEMO)"
+};
+const appTitleEl = document.getElementById("appTitle");
+const headerPlayerBarEl = document.getElementById("headerPlayerBar");
+const mainPanelsEl = document.querySelector("main.app-panels");
+const libraryViewEl = document.querySelector("wa-library-view");
+const apiViewEl = document.querySelector("wa-api-view");
+
+function applyView(view) {
+	mainPanelsEl.hidden = view !== "workstation";
+	headerPlayerBarEl.hidden = view !== "workstation";
+	libraryViewEl.hidden = view !== "library";
+	apiViewEl.hidden = view !== "api";
+	appTitleEl.textContent = VIEW_TITLES[view] || VIEW_TITLES.workstation;
+}
+viewState.addEventListener("change", (e) => applyView(e.detail.view));
+applyView(viewState.current);
 
 async function loadDefaultSchema() {
 	try {
