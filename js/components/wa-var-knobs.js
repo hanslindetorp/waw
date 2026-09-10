@@ -26,10 +26,19 @@ function parseNumberList(str) {
 		.filter((n) => Number.isFinite(n));
 }
 
-function formatValue(v) {
+// Two significant digits' worth of resolution scaled to the knob's own max
+// (not a flat 2 decimals regardless of range) — per Hans (2026-09-10): a
+// 0-1 range shows 2 decimals ("0.42"), 0-10 shows 1 ("4.2"), 0-100 shows 0
+// ("42"). digitsBeforeDecimal is how many integer digits `max` itself has
+// (e.g. "10" -> 2); 3 minus that is exactly the three example cases above.
+function decimalsForMax(max) {
+	const digitsBeforeDecimal = String(Math.floor(Math.abs(max))).length;
+	return Math.max(0, 3 - digitsBeforeDecimal);
+}
+
+function formatValue(v, max) {
 	if (!Number.isFinite(v)) return "—";
-	const rounded = Math.round(v * 100) / 100;
-	return String(rounded);
+	return v.toFixed(decimalsForMax(max));
 }
 
 const template = document.createElement("template");
@@ -59,11 +68,12 @@ template.innerHTML = `
 			gap: 0.15rem;
 		}
 		/* Knob + its value sit in a row now (value used to be stacked below
-		   the knob along with the name) — per Hans (2026-09-10). */
+		   the knob along with the name) — per Hans (2026-09-10). Gap widened
+		   the same day — the knob and value almost touched at 0.35rem. */
 		.var-knob-row {
 			display: flex;
 			align-items: center;
-			gap: 0.35rem;
+			gap: 0.65rem;
 		}
 		/* The ticks' own -5px/-5px offsets (see _buildTicks) are relative to
 		   this anchor specifically (a plain KNOB_SIZE box), not the whole
@@ -130,11 +140,15 @@ template.innerHTML = `
 		}
 		/* Bigger than the name label — per Hans (2026-09-10), for
 		   readability now that it sits beside the knob instead of stacked
-		   underneath it. */
+		   underneath it. A fixed min-width + right-align (also per Hans,
+		   2026-09-10) so the digits land on a consistent right edge instead
+		   of each width jittering the row as the value changes. */
 		.var-value {
 			font-size: 0.8rem;
 			color: var(--waw-accent, #4fa3ff);
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			min-width: 2.6rem;
+			text-align: right;
 		}
 	</style>
 	<div class="var-knobs"></div>
@@ -275,8 +289,8 @@ export class WaVarKnobs extends HTMLElement {
 		const applyVisual = (v) => {
 			const t = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0;
 			dial.style.transform = `rotate(${-135 + t * 270}deg)`;
-			valueLabel.textContent = formatValue(v);
-			knob.title = `${varName}: ${formatValue(v)}`;
+			valueLabel.textContent = formatValue(v, max);
+			knob.title = `${varName}: ${formatValue(v, max)}`;
 		};
 		applyVisual(current);
 

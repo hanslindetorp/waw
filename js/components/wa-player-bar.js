@@ -195,17 +195,35 @@ template.innerHTML = `
 		   (2026-09-10), a plain gradient here (a knob's radial one doesn't
 		   read right on a rectangular button) plus an inset top highlight
 		   and a real drop shadow for some actual depth. */
+		/* Same height as a Var knob (KNOB_SIZE in wa-var-knobs.js) — per Hans
+		   (2026-09-10), so the two rows of controls line up. Vertical padding
+		   dropped in favor of a fixed height + flex centering; horizontal
+		   padding unchanged. */
 		.shortcut-btn {
 			position: relative;
+			display: inline-flex;
+			align-items: center;
+			gap: 0.3rem;
+			height: 24px;
 			background: linear-gradient(180deg, #383c42, #1d1f22 80%);
 			border: 1px solid #0b0c0d;
 			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 			color: inherit;
 			border-radius: 5px;
-			padding: 0.2rem 0.5rem;
+			padding: 0 0.5rem;
 			font-size: 0.75rem;
 			cursor: pointer;
 			white-space: nowrap;
+		}
+		/* A small play triangle to the right of the label — per Hans
+		   (2026-09-10), purely a visual "this is playable" cue; clicking
+		   still goes through the button's own center/edge hit-test below,
+		   not this icon specifically. */
+		.shortcut-play-icon {
+			flex: 0 0 auto;
+			width: 9px;
+			height: 9px;
+			opacity: 0.7;
 		}
 		/* Expands the button's own clickable area by SHORTCUT_EDGE_PX on every
 		   side (a pseudo-element still hit-tests as a click on its host
@@ -340,6 +358,21 @@ export class WaPlayerBar extends HTMLElement {
 		el.classList.add("blink");
 	}
 
+	// The small play triangle inside every shortcut-btn (see _renderShortcuts)
+	// — built as real SVG DOM nodes (createElementNS, not innerHTML) so a
+	// Command's own `value` text elsewhere on the button can never end up
+	// interpreted as markup. Per Hans (2026-09-10).
+	_buildPlayIcon() {
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		svg.setAttribute("class", "shortcut-play-icon");
+		svg.setAttribute("viewBox", "0 0 24 24");
+		svg.setAttribute("fill", "currentColor");
+		const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+		path.setAttribute("d", "M8 5v14l11-7z");
+		svg.appendChild(path);
+		return svg;
+	}
+
 	_onPlayerChange() {
 		this._playBtn.classList.toggle("active", playerStore.isPlaying);
 		this._playBtn.disabled = !playerStore.triggerSelector;
@@ -416,7 +449,11 @@ export class WaPlayerBar extends HTMLElement {
 				// The selector itself (what `value` actually trig()s), minus
 				// its leading "."/"#" — per Hans (2026-09-10), replacing the
 				// earlier label>id>class priority.
-				btn.textContent = (cmd.attributes.value || "").replace(/^[.#]/, "");
+				const label = document.createElement("span");
+				label.className = "shortcut-label";
+				label.textContent = (cmd.attributes.value || "").replace(/^[.#]/, "");
+				btn.appendChild(label);
+				btn.appendChild(this._buildPlayIcon());
 				btn.title = `trig(${cmd.attributes.value})`;
 				// Clicking dead center *only* trigs (no select) — clicking the
 				// edge (a band straddling the button's own visual border, a few
