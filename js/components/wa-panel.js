@@ -218,11 +218,10 @@ export class WaPanel extends HTMLElement {
 		const neighbor = this._findAbsorbingNeighbor();
 		if (neighbor) neighbor.setAbsorbing(this._collapsed);
 
-		// A panel that just opened needs to actually be visible — see
-		// _reclaimSpaceIfNeeded. A panel that just closed gives back
-		// whatever it had borrowed while open, if anything.
-		if (this._collapsed) this._giveBackStolenSpace();
-		else this._reclaimSpaceIfNeeded();
+		// A panel that just opened claims a fair share of the total width —
+		// see _applyFairShareOnOpen. Nothing special happens on collapse: its
+		// freed space is already handled above by the absorbing neighbor.
+		if (!this._collapsed) this._applyFairShareOnOpen();
 	}
 
 	// Called by a collapsing/expanding right neighbor (see toggleCollapse) —
@@ -254,58 +253,37 @@ export class WaPanel extends HTMLElement {
 	// panel keeps flex-shrink:0 (see the MIN_EXPANDED_WIDTH_PX comment up
 	// top), so an opening panel that doesn't already have room just
 	// overflows the row instead of showing — this is what actually makes it
-	// visible in that case: a single explicit width transfer from one
-	// specific neighbor (found via _findNeighborToShrink), not a standing
-	// CSS shrink relationship. Reversed by _giveBackStolenSpace once this
-	// panel collapses again.
-	_reclaimSpaceIfNeeded() {
+	// visible: this panel claims 1/n of the container's width (n = now-
+	// visible panel count — 25% of 4, 33% of 3, 50% of 2), and the rest of
+	// the width is redistributed across the other visible panels in
+	// proportion to the relative widths they already had. Per Hans
+	// (2026-09-10). Works precisely because of the flex-shrink:0 above: at
+	// this point `this` has already been restored to its own last _baseFlex
+	// (see _applyFlex, called earlier in toggleCollapse) but nothing else has
+	// shrunk yet, so every other panel's getBoundingClientRect() below still
+	// reflects its true pre-reopen width.
+	_applyFairShareOnOpen() {
 		const container = this.parentElement;
 		if (!container) return;
 		const panels = [...container.children].filter((el) => el instanceof WaPanel);
-		const totalWidth = panels.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0);
-		const overflow = totalWidth - container.getBoundingClientRect().width;
-		if (overflow <= 0.5) return;
-		const neighbor = this._findNeighborToShrink();
-		if (!neighbor) return;
-		const neighborWidth = neighbor.getBoundingClientRect().width;
-		const shrinkBy = Math.min(overflow, Math.max(0, neighborWidth - MIN_EXPANDED_WIDTH_PX));
-		if (shrinkBy <= 0.5) return;
-		neighbor._shrinkBy(shrinkBy);
-		this._stolenFrom = { panel: neighbor, amount: shrinkBy };
-	}
+		const visible = panels.filter((p) => !p.collapsed);
+		const others = visible.filter((p) => p !== this);
+		if (visible.length <= 1) return;
 
-	_giveBackStolenSpace() {
-		if (!this._stolenFrom) return;
-		const { panel, amount } = this._stolenFrom;
-		this._stolenFrom = null;
-		panel._growBy(amount);
-	}
+		const containerWidth = container.getBoundingClientRect().width;
+		const targetWidth = containerWidth / visible.length;
+		const othersWidth = others.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0);
+		const remaining = Math.max(0, containerWidth - targetWidth);
 
-	_shrinkBy(px) {
-		const currentWidth = this.getBoundingClientRect().width;
-		this._baseFlex = `0 0 ${Math.max(MIN_EXPANDED_WIDTH_PX, currentWidth - px)}px`;
+		this._baseFlex = `0 0 ${targetWidth}px`;
 		this._applyFlex();
-	}
 
-	_growBy(px) {
-		const currentWidth = this.getBoundingClientRect().width;
-		this._baseFlex = `0 0 ${currentWidth + px}px`;
-		this._applyFlex();
-	}
-
-	// Which neighbor should give up width when this panel expands and
-	// doesn't fit — the nearest expanded panel to the left (mirrors
-	// _findAbsorbingNeighbor's own "nearest neighbor" convention), falling
-	// back to the right for a panel with no left neighbor at all (File
-	// Manager) — per Hans (2026-09-02): Code takes space from the left,
-	// File Manager from the right.
-	_findNeighborToShrink() {
-		let el = this.previousElementSibling;
-		while (el instanceof WaPanel && el.classList.contains("collapsed")) el = el.previousElementSibling;
-		if (el instanceof WaPanel) return el;
-		el = this.nextElementSibling;
-		while (el instanceof WaPanel && el.classList.contains("collapsed")) el = el.nextElementSibling;
-		return el instanceof WaPanel ? el : null;
+		if (othersWidth <= 0) return;
+		others.forEach((p) => {
+			const width = Math.max(MIN_EXPANDED_WIDTH_PX, remaining * (p.getBoundingClientRect().width / othersWidth));
+			p._baseFlex = `0 0 ${width}px`;
+			p._applyFlex();
+		});
 	}
 
 	_onResizeStart(e) {

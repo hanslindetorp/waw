@@ -59,6 +59,7 @@ export class WaXmlEditor extends HTMLElement {
 		this._divider = this.shadowRoot.querySelector(".xml-divider");
 		this._onDividerMove = this._onDividerMove.bind(this);
 		this._onDividerEnd = this._onDividerEnd.bind(this);
+		this._treeRatio = 0.7; // matches the CSS's own default 7:3 flex-grow split
 	}
 
 	connectedCallback() {
@@ -80,11 +81,32 @@ export class WaXmlEditor extends HTMLElement {
 		const inspectorHeight = Math.max(MIN_AREA_HEIGHT, this._dragStartInspectorHeight - delta);
 		this._treeScroll.style.flex = `0 0 ${treeHeight}px`;
 		this._inspector.style.flex = `0 0 ${inspectorHeight}px`;
+		this._treeRatio = treeHeight / (treeHeight + inspectorHeight);
 	}
 
 	_onDividerEnd() {
 		window.removeEventListener("pointermove", this._onDividerMove);
 		window.removeEventListener("pointerup", this._onDividerEnd);
+		// composed: this element sits in the top-level document (not inside
+		// another shadow root), so bubbles alone would suffice for a listener
+		// on an ancestor here — composed is harmless and kept for consistency
+		// with wa-xml-tree.js's own columns-change (which does need it).
+		this.dispatchEvent(new CustomEvent("split-change", { bubbles: true, composed: true }));
+	}
+
+	// Read by workstation-state.js when saving; setSplitRatio is its
+	// counterpart when loading a project.
+	getSplitRatio() {
+		return this._treeRatio;
+	}
+
+	setSplitRatio(ratio) {
+		if (typeof ratio !== "number" || !Number.isFinite(ratio)) return;
+		this._treeRatio = Math.min(0.95, Math.max(0.05, ratio));
+		const total = this._treeScroll.getBoundingClientRect().height + this._inspector.getBoundingClientRect().height;
+		if (total <= 0) return; // not laid out yet — CSS's own default 7:3 flex-grow still applies
+		this._treeScroll.style.flex = `0 0 ${total * this._treeRatio}px`;
+		this._inspector.style.flex = `0 0 ${total * (1 - this._treeRatio)}px`;
 	}
 }
 

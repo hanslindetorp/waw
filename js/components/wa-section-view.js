@@ -1952,6 +1952,26 @@ export class WaSectionView extends HTMLElement {
 	_onDividerResizeEnd() {
 		window.removeEventListener("pointermove", this._onDividerResizeMove);
 		window.removeEventListener("pointerup", this._onDividerResizeEnd);
+		// composed: this element lives inside wa-preview's shadow root, so
+		// workstation-state.js (outside it) needs composed to hear this.
+		this.dispatchEvent(new CustomEvent("split-change", { bubbles: true, composed: true }));
+	}
+
+	// Read by workstation-state.js when saving; setSplitRatio is its
+	// counterpart when loading a project.
+	getSplitRatio() {
+		return this._layerStingerRatio;
+	}
+
+	setSplitRatio(ratio) {
+		if (typeof ratio !== "number" || !Number.isFinite(ratio)) return;
+		this._layerStingerRatio = Math.min(0.9, Math.max(0.1, ratio));
+		// Re-apply immediately if a Section has already rendered at least
+		// once (so the natural heights below are known); otherwise the new
+		// ratio is simply picked up the first time one does.
+		if (this._lastLayersNaturalHeight !== undefined) {
+			this._applyLayerStingerSplit(this._lastLayersNaturalHeight, this._lastStingersNaturalHeight);
+		}
 	}
 
 	// Same shape as the Layer/Stinger divider just above — a normal

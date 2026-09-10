@@ -7,7 +7,10 @@ import { VFS_FILE_DRAG_TYPE } from "../vfs/drag-types.js";
 const FILE_DROP_TAG = "AudioBufferSourceNode";
 const INDENT_PX = 18;
 const BASE_PADDING_PX = 8;
-const DEFAULT_COLUMNS = ["id", "class"];
+// Per Hans (2026-09-10): a new project starts with these columns (not id/
+// class) — id stays available (unchecked) in the right-click column menu.
+const DEFAULT_COLUMNS = ["label", "class", "src", "output"];
+const MIN_COLUMN_WIDTH_PX = 50;
 // Changing an element's type by clicking its name here (opens the same
 // rename popover used elsewhere) is turned off per Hans (2026-09-03) — the
 // popover/rename machinery itself (_renderTagLabel's button branch,
@@ -90,6 +93,21 @@ template.innerHTML = `
 			cursor: default;
 			user-select: none;
 			white-space: nowrap;
+		}
+		/* Attribute-column headers (not the leading "Name" one) are
+		   draggable for reordering — see _renderHeaderCell/_onColumnDragStart. */
+		.cell.header-cell.attr-header {
+			cursor: grab;
+			position: relative;
+		}
+		.column-resize-handle {
+			position: absolute;
+			top: 0;
+			right: -3px;
+			width: 6px;
+			height: 100%;
+			cursor: col-resize;
+			z-index: 4;
 		}
 		.cell.name-cell {
 			gap: 0.35rem;
@@ -322,6 +340,8 @@ export class WaXmlTree extends HTMLElement {
 		this._openColumnMenuEl = null;
 		this._creatingCustomRoot = false;
 		this._activeColumns = [...DEFAULT_COLUMNS];
+		this._columnWidths = {}; // colName -> px, only for columns the user has actually resized
+		this._dragColName = null; // attribute column currently being drag-reordered (see _onColumnDragStart)
 		this._selectionAnchorId = null; // last plain-clicked row — the fixed end for a subsequent Shift-click range (see _handleRowClick)
 	}
 
@@ -474,8 +494,8 @@ export class WaXmlTree extends HTMLElement {
 		this._container.classList.add("grid-mode");
 		this._container.style.gridTemplateColumns = this._gridTemplateColumns();
 
-		this._container.appendChild(this._renderHeaderCell("Name"));
-		this._activeColumns.forEach((col) => this._container.appendChild(this._renderHeaderCell(col)));
+		this._container.appendChild(this._renderHeaderCell("Name", null));
+		this._activeColumns.forEach((col) => this._container.appendChild(this._renderHeaderCell(col, col)));
 
 		this._flatten(root).forEach((entry) => {
 			const cells = entry.kind === "node" ? this._renderNodeRow(entry) : this._renderAddElementRow(entry);
@@ -492,7 +512,12 @@ export class WaXmlTree extends HTMLElement {
 	}
 
 	_gridTemplateColumns() {
-		const attrCols = this._activeColumns.map(() => "minmax(70px, max-content)").join(" ");
+		const attrCols = this._activeColumns
+			.map((col) => {
+				const width = this._columnWidths[col];
+				return width ? `${width}px` : "minmax(70px, max-content)";
+			})
+			.join(" ");
 		return attrCols ? `minmax(200px, 1fr) ${attrCols}` : "minmax(200px, 1fr)";
 	}
 
@@ -595,15 +620,116 @@ export class WaXmlTree extends HTMLElement {
 		return wrap;
 	}
 
-	_renderHeaderCell(label) {
+	// `colName` is null for the fixed leading "Name" column (not part of
+	// _activeColumns, not reorderable/resizable) — every other header cell
+	// is an attribute column, draggable to reorder and given a resize
+	// handle, per Hans (2026-09-10).
+	_renderHeaderCell(label, colName) {
 		const cell = document.createElement("div");
-		cell.className = "cell header-cell";
+		cell.className = colName ? "cell header-cell attr-header" : "cell header-cell";
 		cell.textContent = label;
 		cell.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			this._openColumnMenu(e.clientX, e.clientY);
 		});
+		if (!colName) return cell;
+
+		cell.dataset.col = colName;
+		cell.draggable = true;
+		cell.addEventListener("dragstart", (e) => {
+			this._dragColName = colName;
+			e.dataTransfer.effectAllowed = "move";
+			e.dataTransfer.setData("text/plain", colName);
+			cell.classList.add("dragging");
+		});
+		cell.addEventListener("dragend", () => {
+			cell.classList.remove("dragging");
+			this._dragColName = null;
+		});
+		cell.addEventListener("dragover", (e) => {
+			if (!this._dragColName || this._dragColName === colName) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "move";
+			const before = e.clientX - cell.getBoundingClientRect().left < cell.offsetWidth / 2;
+			cell.classList.toggle("drop-before", before);
+			cell.classList.toggle("drop-after", !before);
+		});
+		cell.addEventListener("dragleave", () => {
+			cell.classList.remove("drop-before", "drop-after");
+		});
+		cell.addEventListener("drop", (e) => {
+			e.preventDefault();
+			const draggedCol = this._dragColName;
+			const before = cell.classList.contains("drop-before");
+			cell.classList.remove("drop-before", "drop-after");
+			if (!draggedCol || draggedCol === colName) return;
+			this._reorderColumn(draggedCol, colName, before);
+		});
+
+		const handle = document.createElement("div");
+		handle.className = "column-resize-handle";
+		handle.draggable = false;
+		handle.addEventListener("pointerdown", (e) => this._onColumnResizeStart(e, cell, colName));
+		cell.appendChild(handle);
+
 		return cell;
+	}
+
+	_reorderColumn(draggedCol, targetCol, before) {
+		const cols = this._activeColumns.filter((c) => c !== draggedCol);
+		let targetIndex = cols.indexOf(targetCol);
+		if (!before) targetIndex += 1;
+		cols.splice(targetIndex, 0, draggedCol);
+		this._activeColumns = cols;
+		this._notifyColumnsChange();
+		this.render();
+	}
+
+	_onColumnResizeStart(e, cell, colName) {
+		e.preventDefault();
+		e.stopPropagation();
+		this._resizeColName = colName;
+		this._resizeStartX = e.clientX;
+		this._resizeStartWidth = this._columnWidths[colName] || cell.offsetWidth;
+		this._onColumnResizeMove = (moveEvt) => {
+			const width = Math.max(MIN_COLUMN_WIDTH_PX, this._resizeStartWidth + (moveEvt.clientX - this._resizeStartX));
+			this._columnWidths[this._resizeColName] = width;
+			this._container.style.gridTemplateColumns = this._gridTemplateColumns();
+		};
+		this._onColumnResizeEnd = () => {
+			window.removeEventListener("pointermove", this._onColumnResizeMove);
+			window.removeEventListener("pointerup", this._onColumnResizeEnd);
+			this._notifyColumnsChange();
+		};
+		window.addEventListener("pointermove", this._onColumnResizeMove);
+		window.addEventListener("pointerup", this._onColumnResizeEnd);
+	}
+
+	// Lets workstation-state.js persist column visibility/order/width without
+	// polling — composed so it crosses out of wa-xml-editor's shadow root
+	// (this element lives inside it), same reasoning as wa-panel.js's
+	// collapse-change/width-change events (which don't need `composed`
+	// themselves, since those fire on the panel host directly in the light
+	// DOM rather than from within a shadow tree).
+	_notifyColumnsChange() {
+		this.dispatchEvent(new CustomEvent("columns-change", { bubbles: true, composed: true }));
+	}
+
+	// Read by workstation-state.js when saving; applyColumnsState (below) is
+	// its counterpart when loading a project.
+	getColumnsState() {
+		return { order: [...this._activeColumns], widths: { ...this._columnWidths } };
+	}
+
+	applyColumnsState(state) {
+		if (!state || typeof state !== "object") return;
+		if (Array.isArray(state.order)) this._activeColumns = state.order.filter((c) => typeof c === "string");
+		if (state.widths && typeof state.widths === "object") {
+			this._columnWidths = Object.fromEntries(
+				Object.entries(state.widths).filter(([, v]) => typeof v === "number" && v > 0)
+			);
+		}
+		this.render();
 	}
 
 	_openColumnMenu(x, y) {
@@ -626,6 +752,7 @@ export class WaXmlTree extends HTMLElement {
 				} else {
 					this._activeColumns = this._activeColumns.filter((c) => c !== name);
 				}
+				this._notifyColumnsChange();
 				this.render();
 			});
 

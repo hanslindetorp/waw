@@ -54,12 +54,16 @@ export class VFS extends EventTarget {
 
 	// Replaces a file's content in place (same id, same name) — used to keep a
 	// VFS file live-synced with a document being edited elsewhere (xmlStore).
-	updateFileContent(id, content) {
+	// `silent` skips the "change" event entirely — used by
+	// workstation-state.js's own saves (editor layout, not document content),
+	// so they don't create a spurious undo step (edit-history.js tracks every
+	// non-silent "change") or an unnecessary File Manager re-render.
+	updateFileContent(id, content, { silent = false } = {}) {
 		const node = this._requireType(id, "file");
 		if (node.sessionUrl) URL.revokeObjectURL(node.sessionUrl);
 		node.file = new File([content], node.name, { type: node.file.type || "application/xml" });
 		node.sessionUrl = URL.createObjectURL(node.file);
-		this._emitChange();
+		if (!silent) this._emitChange();
 		return node;
 	}
 

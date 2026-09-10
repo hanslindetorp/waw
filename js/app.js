@@ -10,13 +10,23 @@ import "./components/wa-xml-code.js";
 import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
 import { createDefaultProject } from "./project/project-manager.js";
-import { registerPanels } from "./project/workstation-state.js";
+import { registerPanels, registerLayoutExtras } from "./project/workstation-state.js";
 import { initEditHistory } from "./project/edit-history.js";
 
 const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
 const DEFAULT_SCHEMA_NAME = "waxml.xsd";
 
 registerPanels([...document.querySelectorAll("main.app-panels > wa-panel")]);
+// wa-xml-tree and wa-section-view aren't reachable from the top-level
+// document — they're built into wa-xml-editor's/wa-preview's own shadow
+// roots (see those files' constructors) — one shadow-boundary hop each.
+const xmlEditorEl = document.querySelector("wa-xml-editor");
+const previewEl = document.querySelector("wa-preview");
+registerLayoutExtras({
+	xmlTree: xmlEditorEl?.shadowRoot.querySelector("wa-xml-tree"),
+	xmlEditor: xmlEditorEl,
+	sectionView: previewEl?.shadowRoot.querySelector("wa-section-view")
+});
 initEditHistory();
 loadDefaultSchema().then(createDefaultProject);
 

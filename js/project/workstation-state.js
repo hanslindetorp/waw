@@ -20,6 +20,7 @@ const SAVE_DEBOUNCE_MS = 400;
 let stateFileId = null;
 let saveTimer = null;
 let panels = [];
+let layoutExtras = {}; // { xmlTree, xmlEditor, sectionView } — see registerLayoutExtras
 
 // Called once at startup with every top-level <wa-panel> whose open/closed
 // state should be persisted (each needs a stable `id` attribute — see
@@ -32,11 +33,35 @@ export function registerPanels(panelEls) {
 	});
 }
 
+// Called once at startup with the handful of nested (shadow-DOM) elements
+// that have their own persistable layout state beyond plain panel collapse/
+// width: the XML tree's column visibility/order/width, and the two
+// draggable-divider "split" panels (see wa-xml-tree.js's columns-change,
+// wa-xml-editor.js's/wa-section-view.js's split-change — both dispatched
+// `composed: true` so they're actually observable here). Any ref can be
+// null/undefined (e.g. still not found at startup) — every use below is
+// optional-chained.
+export function registerLayoutExtras(refs) {
+	layoutExtras = refs || {};
+	layoutExtras.xmlTree?.addEventListener("columns-change", scheduleSave);
+	layoutExtras.xmlEditor?.addEventListener("split-change", scheduleSave);
+	layoutExtras.sectionView?.addEventListener("split-change", scheduleSave);
+}
+
 function captureState() {
 	const state = {
 		openPanels: panels.filter((p) => !p.collapsed).map((p) => p.id),
 		panelWidths: Object.fromEntries(panels.map((p) => [p.id, p.widthBasis]))
 	};
+	const columns = layoutExtras.xmlTree?.getColumnsState();
+	if (columns) state.xmlTreeColumns = columns;
+	const splits = {
+		xmlEditorTreeInspector: layoutExtras.xmlEditor?.getSplitRatio(),
+		sectionLayerStinger: layoutExtras.sectionView?.getSplitRatio()
+	};
+	if (splits.xmlEditorTreeInspector !== undefined || splits.sectionLayerStinger !== undefined) {
+		state.splits = splits;
+	}
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -66,6 +91,13 @@ function applyState(state) {
 		const node = findNodeByAttributeId(xmlStore.root, state.selectedElementId);
 		if (node) xmlStore.selectNode(node.id);
 	}
+	if (state.xmlTreeColumns) layoutExtras.xmlTree?.applyColumnsState(state.xmlTreeColumns);
+	if (typeof state.splits?.xmlEditorTreeInspector === "number") {
+		layoutExtras.xmlEditor?.setSplitRatio(state.splits.xmlEditorTreeInspector);
+	}
+	if (typeof state.splits?.sectionLayerStinger === "number") {
+		layoutExtras.sectionView?.setSplitRatio(state.splits.sectionLayerStinger);
+	}
 }
 
 function findNodeByAttributeId(node, targetId) {
@@ -90,7 +122,7 @@ function saveNow() {
 		stateFileId = null; // the file was deleted (e.g. a fresh project's vfs.clear()) — nothing to write into
 		return;
 	}
-	vfs.updateFileContent(stateFileId, JSON.stringify(captureState(), null, 2));
+	vfs.updateFileContent(stateFileId, JSON.stringify(captureState(), null, 2), { silent: true });
 }
 
 // Flushes any pending debounced save immediately — call right before
