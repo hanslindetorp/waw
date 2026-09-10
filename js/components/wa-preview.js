@@ -3,10 +3,13 @@ import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
 import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
+import { vfs } from "../vfs/VFS.js";
+import { selection } from "../state/selection.js";
 import "./wa-section-view.js";
 import "./wa-mixer-view.js";
 import "./wa-wam-view.js";
 import "./wa-composition-view.js";
+import { isPreviewableAudioFile } from "./wa-file-preview.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
 // (panel 2) / XML code (panel 4) — they all share xmlStore's selectedNodeId.
@@ -151,6 +154,10 @@ template.innerHTML = `
 		<wa-composition-view></wa-composition-view>
 	</div>
 
+	<div class="state padded" data-state="file">
+		<wa-file-preview></wa-file-preview>
+	</div>
+
 	<div class="state" data-state="mixer">
 		<wa-mixer-view></wa-mixer-view>
 	</div>
@@ -201,11 +208,35 @@ export class WaPreview extends HTMLElement {
 		this._playBtn.addEventListener("click", () => bridge.play());
 		this._stopBtn.addEventListener("click", () => bridge.stop());
 		xmlStore.addEventListener("change", (e) => this._onStoreChange(e));
+		selection.addEventListener("change", (e) => this._onFileSelectionChange(e.detail.id));
 		this._onStoreChange();
+	}
+
+	// A File Manager selection (selection.js — completely independent of
+	// xmlStore) takes over the panel, same as clicking a new node in the XML
+	// tree would — per Hans (2026-09-10). Non-audio files (e.g. the project's
+	// own .xml) have nothing to preview, so they're left alone rather than
+	// switching to a blank "file" state.
+	_onFileSelectionChange(id) {
+		const node = id ? vfs.getNode(id) : null;
+		if (!isPreviewableAudioFile(node)) return;
+		this._showState("file");
+		this._lastFileSelectionId = id;
 	}
 
 	_onStoreChange(e) {
 		const node = xmlStore.getSelectedNode();
+
+		// Ignore an xmlStore "change" event that isn't an actual new XML
+		// selection (e.g. some unrelated live attribute edit elsewhere)
+		// while the panel is showing a File Manager selection — otherwise
+		// every incidental store change would silently yank the panel away
+		// from the file preview. A genuine new XML-tree selection still
+		// switches away from it, same as it would switch away from any
+		// other state below.
+		const xmlSelectionChanged = node?.id !== this._lastXmlNodeIdSeen;
+		this._lastXmlNodeIdSeen = node?.id ?? null;
+		if (this._activeState === "file" && !xmlSelectionChanged) return;
 
 		if (!node) {
 			this._showState("empty");
