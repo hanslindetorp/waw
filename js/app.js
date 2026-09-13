@@ -43,7 +43,7 @@ loadDefaultSchema().then(createDefaultProject);
 const VIEW_TITLES = {
 	workstation: "WAXML Workstation — BETA",
 	library: "WAXML Library (DEMO)",
-	api: "WAXML API (DEMO)"
+	api: "WAXML API"
 };
 const appTitleEl = document.getElementById("appTitle");
 const headerPlayerBarEl = document.getElementById("headerPlayerBar");

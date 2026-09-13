@@ -8,7 +8,7 @@ import { viewState } from "../state/view.js";
 const VIEWS = [
 	{ id: "workstation", label: "Workstation" },
 	{ id: "library", label: "Library (DEMO)" },
-	{ id: "api", label: "API (DEMO)" }
+	{ id: "api", label: "API" }
 ];
 
 const template = document.createElement("template");
