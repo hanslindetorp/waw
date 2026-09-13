@@ -249,13 +249,13 @@ export class WaVarKnobs extends HTMLElement {
 		const knob = document.createElement("div");
 		knob.className = "var-knob";
 		knob.classList.toggle("selected", xmlStore.selectedNodeId === node.id);
-		// Selects this <Var> (so the XML tree/Code panel highlight it too —
-		// see xmlStore.selectNode's existing sync), per Hans (2026-09-09):
-		// selectable/deletable now, same as everything else in the XML
-		// editor. A plain click still fires normally alongside _wireDrag's
-		// own pointerdown-based drag handling below (stopPropagation there
-		// only blocks bubbling, not this element's own later "click").
-		knob.addEventListener("click", () => xmlStore.selectNode(node.id));
+		// Selecting this <Var> (so the XML tree/Code panel highlight it too —
+		// see xmlStore.selectNode's existing sync) is handled inside
+		// _wireDrag's own pointerup below, only when the gesture *didn't*
+		// actually drag the knob — per Hans (2026-09-09) it's
+		// selectable/deletable like everything else in the XML editor, but
+		// per Hans (2026-09-13), turning the knob to change its value must
+		// never also select it (a plain click still does).
 		const dial = document.createElement("div");
 		dial.className = "var-knob-dial";
 		knob.appendChild(dial);
@@ -305,6 +305,7 @@ export class WaVarKnobs extends HTMLElement {
 
 		this._wireDrag(
 			knob,
+			node.id,
 			() => this._values.get(node.id),
 			min,
 			max,
@@ -346,25 +347,36 @@ export class WaVarKnobs extends HTMLElement {
 	// comment), but it also never rebuilds *between* separate gestures
 	// either, so a stale snapshot would make the second drag on the same
 	// knob jump from wherever the first one actually ended.
-	_wireDrag(el, getValue, min, max, onChange, defaultValue) {
+	//
+	// Selection lives here (not a separate "click" listener) so it can tell
+	// a genuine click apart from a drag that happened to change the value —
+	// per Hans (2026-09-13), turning the knob must never also select it.
+	// DRAG_THRESHOLD_PX is a small deadzone so a plain click's inevitable
+	// sub-pixel jitter is never mistaken for an intentional drag.
+	_wireDrag(el, nodeId, getValue, min, max, onChange, defaultValue) {
+		const DRAG_THRESHOLD_PX = 2;
 		el.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			e.preventDefault();
 			e.stopPropagation();
 			const startY = e.clientY;
 			const startValue = getValue();
+			let dragging = false;
 			try {
 				el.setPointerCapture(e.pointerId);
 			} catch {}
 
 			const onMove = (moveEvt) => {
 				const deltaPx = startY - moveEvt.clientY; // up = increase
+				if (!dragging && Math.abs(deltaPx) < DRAG_THRESHOLD_PX) return;
+				dragging = true;
 				const raw = startValue + (deltaPx / KNOB_PX_PER_RANGE) * (max - min);
 				onChange(Math.max(min, Math.min(max, raw)));
 			};
 			const onUp = () => {
 				el.removeEventListener("pointermove", onMove);
 				el.removeEventListener("pointerup", onUp);
+				if (!dragging) xmlStore.selectNode(nodeId);
 			};
 			el.addEventListener("pointermove", onMove);
 			el.addEventListener("pointerup", onUp);

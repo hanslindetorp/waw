@@ -1,14 +1,16 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 
-// The "API" view (View menu) — how a published WAXML project (see
-// wa-library-view.js's Library (DEMO) sketch) gets embedded into someone
-// else's web app. Per Hans (2026-09-11): four parts — instructions, the
-// <script> tag to paste into a host page, HTML attributes for a no-JS
-// integration, and the JavaScript API — with the attribute/JS-call listings
-// generated live from the *real* open project's root-level <Command
-// type="trig"> and <Var> elements (same filtering wa-player-bar.js's own
-// shortcuts/knobs use), so this page never drifts out of sync with what a
-// host app could actually call.
+// How a published WAXML project (see wa-library-view.js's Library (DEMO)
+// sketch) gets embedded into someone else's web app. Per Hans (2026-09-11):
+// four parts — instructions, the <script> tag to paste into a host page,
+// HTML attributes for a no-JS integration, and the JavaScript API — with the
+// attribute/JS-call listings generated live from the *real* open project's
+// root-level <Command type="trig"> and <Var> elements (same filtering
+// wa-player-bar.js's own shortcuts/knobs use), so this page never drifts out
+// of sync with what a host app could actually call. Originally its own
+// top-level "API" view; now shown inside the File menu's "Share..." dialog
+// instead (see wa-share-dialog.js), per Hans (2026-09-13) — this component
+// itself is unchanged either way, just re-parented.
 
 function rootTrigCommands(root) {
 	if (!root) return [];

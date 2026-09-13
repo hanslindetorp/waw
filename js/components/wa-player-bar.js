@@ -415,14 +415,16 @@ export class WaPlayerBar extends HTMLElement {
 	// The "+" button: saves the field's current selector as a new root-level
 	// trigger-shortcut <Command>, inserted as root's first child if it has
 	// no <Command> children yet, otherwise right after the last one. Per
-	// Hans (2026-09-09).
+	// Hans (2026-09-09). Doesn't select the new Command — per Hans
+	// (2026-09-13), creating one from here shouldn't disturb whatever's
+	// currently selected in the XML editor.
 	_addShortcutCommand() {
 		const selector = playerStore.triggerSelector;
 		if (!selector || !xmlStore.root) return;
 		const rootChildren = xmlStore.root.children;
 		const lastCommandIndex = rootChildren.reduce((last, c, i) => (c.tagName === "Command" ? i : last), -1);
 		const index = lastCommandIndex + 1; // 0 (first child) if none found yet
-		xmlStore.insertNewChild(xmlStore.root.id, "Command", { id: ops.generateCommandId(xmlStore.root), type: "trig", value: selector }, index);
+		xmlStore.insertNewChild(xmlStore.root.id, "Command", { id: ops.generateCommandId(xmlStore.root), type: "trig", value: selector }, index, { select: false });
 	}
 
 	// The "+" button next to the Var knobs: adds a new root-level <Var>,
@@ -431,6 +433,8 @@ export class WaPlayerBar extends HTMLElement {
 	// after the first <Command> if there's no <Var> yet, or as root's first
 	// child if there's neither. Attributes (name/mapin/default) are left
 	// for xmlStore.insertNewChild's own Var auto-fill. Per Hans (2026-09-10).
+	// Doesn't select the new Var — per Hans (2026-09-13), same reasoning as
+	// _addShortcutCommand above.
 	_addVarElement() {
 		if (!xmlStore.root) return;
 		const rootChildren = xmlStore.root.children;
@@ -442,7 +446,7 @@ export class WaPlayerBar extends HTMLElement {
 			const firstCommandIndex = rootChildren.findIndex((c) => c.tagName === "Command");
 			index = firstCommandIndex >= 0 ? firstCommandIndex + 1 : 0;
 		}
-		xmlStore.insertNewChild(xmlStore.root.id, "Var", {}, index);
+		xmlStore.insertNewChild(xmlStore.root.id, "Var", {}, index, { select: false });
 	}
 
 	// Root-level <Command type="trig"> elements — grouped by a shared

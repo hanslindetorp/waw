@@ -8,7 +8,7 @@ import "./components/wa-preview.js";
 import "./components/wa-xml-editor.js";
 import "./components/wa-xml-code.js";
 import "./components/wa-library-view.js";
-import "./components/wa-api-view.js";
+import "./components/wa-share-dialog.js";
 
 import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
@@ -42,20 +42,17 @@ loadDefaultSchema().then(createDefaultProject);
 // wa-library-view.js) so it hides along with <main> in the other views.
 const VIEW_TITLES = {
 	workstation: "WAXML Workstation — BETA",
-	library: "WAXML Library (DEMO)",
-	api: "WAXML API"
+	library: "WAXML Library (DEMO)"
 };
 const appTitleEl = document.getElementById("appTitle");
 const headerPlayerBarEl = document.getElementById("headerPlayerBar");
 const mainPanelsEl = document.querySelector("main.app-panels");
 const libraryViewEl = document.querySelector("wa-library-view");
-const apiViewEl = document.querySelector("wa-api-view");
 
 function applyView(view) {
 	mainPanelsEl.hidden = view !== "workstation";
 	headerPlayerBarEl.hidden = view !== "workstation";
 	libraryViewEl.hidden = view !== "library";
-	apiViewEl.hidden = view !== "api";
 	appTitleEl.textContent = VIEW_TITLES[view] || VIEW_TITLES.workstation;
 }
 viewState.addEventListener("change", (e) => applyView(e.detail.view));

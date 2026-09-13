@@ -1101,16 +1101,16 @@
 
   <xs:simpleType name="syncToSuggested">
     <xs:annotation>
-      <xs:documentation>Common suggested syncTo values, offered as autocomplete/default choices by editors - same list quantize's documentation used to suggest. Free-form musical values are still valid, see syncToValue.</xs:documentation>
+      <xs:documentation>Common suggested syncTo values, offered as autocomplete/default choices by editors. Corrected 2026-09-13 (per Hans): these are note-value grid subdivisions, not time signatures - don't confuse with timeSign/meter's 4/4, 3/4 etc. Free-form musical values are still valid, see syncToValue.</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string">
-      <xs:enumeration value="off"/>
       <xs:enumeration value="bar"/>
       <xs:enumeration value="beat"/>
-      <xs:enumeration value="4/4"/>
-      <xs:enumeration value="3/4"/>
-      <xs:enumeration value="6/8"/>
-      <xs:enumeration value="5/8"/>
+      <xs:enumeration value="2/4"/>
+      <xs:enumeration value="1/4"/>
+      <xs:enumeration value="1/8"/>
+      <xs:enumeration value="1/16"/>
+      <xs:enumeration value="off"/>
     </xs:restriction>
   </xs:simpleType>
 

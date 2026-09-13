@@ -1,4 +1,4 @@
-import { createDefaultProject, openProjectFromFile, exportProjectAsZip, saveProject, saveProjectAs, listTemplates, loadTemplate } from "../project/project-manager.js";
+import { createDefaultProject, openProjectFromFile, saveProject, saveProjectAs } from "../project/project-manager.js";
 
 const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const MOD_KEY_LABEL = IS_MAC ? "⌘" : "Ctrl+";
@@ -97,10 +97,10 @@ template.innerHTML = `
 	<div class="menu-dropdown" hidden>
 		<div class="menu-items">
 			<button class="menu-item" type="button" data-action="new">
-				<span>New Project</span><span class="menu-shortcut">${MOD_KEY_LABEL}N</span>
+				<span>New</span><span class="menu-shortcut">${MOD_KEY_LABEL}N</span>
 			</button>
 			<button class="menu-item" type="button" data-action="open">
-				<span>Open Project...</span><span class="menu-shortcut">${MOD_KEY_LABEL}O</span>
+				<span>Open...</span><span class="menu-shortcut">${MOD_KEY_LABEL}O</span>
 			</button>
 			<button class="menu-item" type="button" data-action="save">
 				<span>Save</span><span class="menu-shortcut">${MOD_KEY_LABEL}S</span>
@@ -108,9 +108,7 @@ template.innerHTML = `
 			<button class="menu-item" type="button" data-action="save-as">
 				<span>Save As...</span><span class="menu-shortcut">⇧${MOD_KEY_LABEL}S</span>
 			</button>
-			<button class="menu-item" type="button" data-action="export">Export Project...</button>
-			<div class="templates-divider menu-divider" hidden></div>
-			<div class="templates-list"></div>
+			<button class="menu-item" type="button" data-action="share">Share...</button>
 		</div>
 		<div class="confirm-view" hidden>
 			<p class="confirm-message"></p>
@@ -133,8 +131,6 @@ export class WaFileMenu extends HTMLElement {
 		this._menuItems = this.shadowRoot.querySelector(".menu-items");
 		this._confirmView = this.shadowRoot.querySelector(".confirm-view");
 		this._fileInput = this.shadowRoot.querySelector(".file-input");
-		this._templatesDivider = this.shadowRoot.querySelector(".templates-divider");
-		this._templatesList = this.shadowRoot.querySelector(".templates-list");
 		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
@@ -174,14 +170,10 @@ export class WaFileMenu extends HTMLElement {
 			}
 		});
 
-		this._dropdown.querySelector('[data-action="export"]').addEventListener("click", async (e) => {
+		this._dropdown.querySelector('[data-action="share"]').addEventListener("click", (e) => {
 			e.stopPropagation();
 			this._close();
-			try {
-				await exportProjectAsZip();
-			} catch (err) {
-				console.error("Export Project failed:", err);
-			}
+			document.querySelector("wa-share-dialog")?.open();
 		});
 
 		this._fileInput.addEventListener("click", (e) => e.stopPropagation());
@@ -200,32 +192,11 @@ export class WaFileMenu extends HTMLElement {
 		this._onDocumentClick = () => this._close();
 		document.addEventListener("click", this._onDocumentClick);
 		document.addEventListener("keydown", this._onKeyDown);
-
-		this._loadTemplates();
 	}
 
 	disconnectedCallback() {
 		document.removeEventListener("click", this._onDocumentClick);
 		document.removeEventListener("keydown", this._onKeyDown);
-	}
-
-	async _loadTemplates() {
-		const manifest = await listTemplates();
-		const names = Object.keys(manifest).sort((a, b) => a.localeCompare(b));
-		if (names.length === 0) return;
-
-		this._templatesDivider.hidden = false;
-		names.forEach((name) => {
-			const btn = document.createElement("button");
-			btn.className = "menu-item";
-			btn.type = "button";
-			btn.innerHTML = `<span>${name}</span>`;
-			btn.addEventListener("click", (e) => {
-				e.stopPropagation();
-				this._startLoadTemplate(name);
-			});
-			this._templatesList.appendChild(btn);
-		});
 	}
 
 	// Cmd/Ctrl+N and +O mirror the browser's own reserved shortcuts (new
@@ -311,18 +282,6 @@ export class WaFileMenu extends HTMLElement {
 		this._confirmThen("Discard the current project and open another one?", () => {
 			this._close();
 			this._fileInput.click();
-		});
-	}
-
-	_startLoadTemplate(name) {
-		this._open();
-		this._confirmThen(`Discard the current project and load the "${name}" template?`, async () => {
-			this._close();
-			try {
-				await loadTemplate(name);
-			} catch (err) {
-				console.error("Load Template failed:", err);
-			}
 		});
 	}
 

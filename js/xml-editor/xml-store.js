@@ -174,7 +174,14 @@ class XmlStore extends EventTarget {
 
 	// Like addChild, but with control over the initial attributes and
 	// insertion index (used for e.g. dropping a file between two elements).
-	insertNewChild(parentId, tagName, attributes, index) {
+	// `select` defaults to true (the long-standing behavior every other
+	// caller relies on — e.g. the XML tree's own "+" button expects the new
+	// element to become selected so its attributes are immediately
+	// editable) — pass `{ select: false }` for a creation flow that
+	// shouldn't disturb whatever's currently selected, per Hans (2026-09-13):
+	// adding a Command-shortcut or Var knob from the player bar must never
+	// change the XML editor's own selection.
+	insertNewChild(parentId, tagName, attributes, index, { select = true } = {}) {
 		if (!this.root) return;
 		let child = ops.createXmlNode(tagName, parentId);
 		// Every new *regular* <Section> gets a unique `class` so it's usable
@@ -201,8 +208,10 @@ class XmlStore extends EventTarget {
 		}
 		if (attributes) child = { ...child, attributes };
 		this.root = ops.insertChild(this.root, parentId, child, index);
-		this.selectedNodeId = child.id;
-		this.selectedNodeIds = new Set([child.id]);
+		if (select) {
+			this.selectedNodeId = child.id;
+			this.selectedNodeIds = new Set([child.id]);
+		}
 		// newNodeId (see wa-xml-tree.js's _onStoreChange): a freshly created
 		// element always starts collapsed, per Hans (2026-09-08) — otherwise a
 		// Section-preview drop that cascades several insertNewChild calls
