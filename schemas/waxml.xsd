@@ -2066,7 +2066,9 @@
     <!-- <xs:attribute name="upbeat" type="length"/> -->
     <xs:attribute name="active" type="active"/>
     <xs:attribute name="filter" type="filter"/>
-    <xs:attribute name="loopActive" type="loopActive"/>
+    <!-- "loopActive" commented out - old/unused attribute, per Hans
+         (2026-09-14). -->
+    <!-- <xs:attribute name="loopActive" type="loopActive"/> -->
     <xs:attribute name="gain" type="gain"/>
     <xs:attribute name="mute" type="mute"/>
   </xs:complexType>
