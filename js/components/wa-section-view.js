@@ -12,17 +12,18 @@ import {
 	readPos,
 	readLength,
 	readEffectiveLoopEnd,
-	readStingerQuantizePosition,
+	readStingerSyncToPosition,
 	readStingerOffset,
 	readOptionDelayOffset,
 	readUpbeatSeconds,
-	secondsToQuantizeString,
+	secondsToSyncToString,
 	minimumTotalDuration,
 	parsePosition,
 	secondsToPosString,
 	secondsToDelayFractionString,
 	quantizeDroppedFileLength,
 	secondsToLengthString,
+	secondsToLengthFractionString,
 	parseDivision
 } from "../xml-editor/section-model.js";
 import { findSrcAttribute, getSchemaSrcAttributeName, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
@@ -834,10 +835,10 @@ template.innerHTML = `
 			outline: 2px dashed var(--waw-fg, #e8e8e8);
 			outline-offset: -2px;
 		}
-		/* Drag to change a closed Segment's own length (see
-		   _buildSegmentResizeHandle) — the cursor alone marks it as
+		/* Drag to change a closed Segment's, or a Stinger's, own length (see
+		   _buildLengthResizeHandle) — the cursor alone marks it as
 		   draggable, no extra visible chrome (per Hans, 2026-09-02). */
-		.segment-resize-handle {
+		.length-resize-handle {
 			position: absolute;
 			top: 0;
 			bottom: 0;
@@ -1622,11 +1623,17 @@ export class WaSectionView extends HTMLElement {
 		const stingerNow = ops.findNodeById(xmlStore.root, stinger.id);
 		if (!stingerNow) return;
 
-		playerStore.trigShortcut(ops.firstSelector(stingerNow));
+		// Always by id, never firstSelector's usual class-first convention —
+		// per Hans (2026-09-15): unlike a <Section>, a <Stinger>'s own PLAY
+		// button should trig it by id specifically, even when it also has a
+		// class (e.g. one shared by a whole group of Stingers for some
+		// other purpose — triggering *this one* shouldn't accidentally
+		// address that whole group instead).
+		playerStore.trigShortcut(`#${stingerNow.attributes.id}`);
 
 		if (!this._isPlaying) return;
 
-		const quantizeDurationSeconds = parseDivision(stingerNow.attributes.quantize, info);
+		const quantizeDurationSeconds = parseDivision(stingerNow.attributes.syncTo, info);
 		const startOffsetSeconds = quantizeDurationSeconds > 0 ? this._cursorTime % quantizeDurationSeconds : 0;
 
 		this._activeStingerTriggers.set(stinger.id, {
@@ -1665,14 +1672,14 @@ export class WaSectionView extends HTMLElement {
 	// whatever's already decoded/cached for its own waveform (the first
 	// Option's, for a with-Options Stinger, since which one the engine
 	// actually picks isn't predictable from the XML alone), falling back to
-	// its own quantize duration (or a bar) if nothing's decoded yet.
+	// its own syncTo duration (or a bar) if nothing's decoded yet.
 	_estimateStingerDuration(stinger, info) {
 		const options = getOptions(stinger);
 		const srcAttr = options.length > 0 ? findSrcAttribute(xmlStore.schema, options[0]) : findSrcAttribute(xmlStore.schema, stinger);
 		const resolvedUrl = srcAttr ? resolvePlayableUrl(srcAttr.value) : null;
 		const buffer = resolvedUrl ? this._resolvedBuffers.get(resolvedUrl) : null;
 		if (buffer) return buffer.duration;
-		const quantizeDurationSeconds = parseDivision(stinger.attributes.quantize, info);
+		const quantizeDurationSeconds = parseDivision(stinger.attributes.syncTo, info);
 		return quantizeDurationSeconds > 0 ? quantizeDurationSeconds : info.barDuration;
 	}
 
@@ -1702,7 +1709,7 @@ export class WaSectionView extends HTMLElement {
 				continue;
 			}
 			if (!entry.el) continue; // its lane isn't currently rendered
-			const basePos = readStingerQuantizePosition(stinger, info) + readStingerOffset(stinger, info);
+			const basePos = readStingerSyncToPosition(stinger, info) + readStingerOffset(stinger, info);
 			// startOffsetSeconds is measured against the Section's own
 			// cursorTime, whose zero point is bar 1 — but the quantize grid
 			// this Stinger triggers within is anchored one bar earlier, at
@@ -2059,24 +2066,24 @@ export class WaSectionView extends HTMLElement {
 			// an *existing* Stinger's lane (which sets the new content's own
 			// pos, leaving that Stinger's own anchor alone), here the anchor
 			// itself is what should land at the drop point (its own
-			// quantize), with no pos offset needed at all — "ljudfilen med
+			// syncTo), with no pos offset needed at all — "ljudfilen med
 			// anchor ska hamna där man släpper", per Hans.
 			const anchorSeconds = this._stingerAnchorDropSeconds(e, zone, info);
-			const quantizeString = secondsToQuantizeString(anchorSeconds, info, this._effectiveGridBeats(info));
+			const syncToString = secondsToSyncToString(anchorSeconds, info, this._effectiveGridBeats(info));
 
 			if (this._isFileDrag(types)) {
 				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
 				if (!fileId) return;
 				const fileNode = vfs.getNode(fileId);
 				if (!fileNode || fileNode.type !== "file") return;
-				const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { quantize: quantizeString });
+				const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { syncTo: syncToString });
 				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id) });
 				return;
 			}
 
 			const draggedOptionId = e.dataTransfer.getData(OPTION_DRAG_TYPE);
 			if (!draggedOptionId) return;
-			const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { quantize: quantizeString });
+			const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { syncTo: syncToString });
 			xmlStore.reparentNode(draggedOptionId, stinger.id);
 			this._stripPos(draggedOptionId);
 		});
@@ -2102,9 +2109,9 @@ export class WaSectionView extends HTMLElement {
 	// visual treatment as a closed Segment.
 	//
 	// Every Stinger (and each of its Options) has an "anchor" — the point
-	// its `quantize` locks to — shown as a draggable red line (see
+	// its `syncTo` locks to — shown as a draggable red line (see
 	// _buildStingerAnchor). Grabbing the anchor line itself moves it and
-	// rewrites `quantize`; the whole group (content + Options, since their
+	// rewrites `syncTo`; the whole group (content + Options, since their
 	// own offsets are relative to it) moves along with it automatically.
 	// Grabbing the content elsewhere instead shifts it relative to the
 	// (unmoved) anchor, rewriting `pos` (upbeat stays fixed) — pos=0 sits
@@ -2115,7 +2122,7 @@ export class WaSectionView extends HTMLElement {
 		lane.style.height = `${this._rowHeight}px`;
 		lane.style.minWidth = `${totalWidth}px`;
 
-		const quantizePos = readStingerQuantizePosition(stinger, info);
+		const quantizePos = readStingerSyncToPosition(stinger, info);
 		const stingerOffset = readStingerOffset(stinger, info);
 		const basePos = quantizePos + stingerOffset;
 		const options = getOptions(stinger);
@@ -2124,13 +2131,37 @@ export class WaSectionView extends HTMLElement {
 		// with the anchor when *that's* what gets dragged — see
 		// _wireStingerDrag's followerEls.
 		let content = null;
+		// Positioned once the bare-src canvas's real width is known (see
+		// _renderWaveformOnly's onWidthResolved) — declared here so the
+		// callback below (which can fire either synchronously or after decode)
+		// always closes over the current playBtn/resizeHandle, whichever
+		// exists by the time it runs.
+		let playBtn = null;
+		let resizeHandle = null;
+		const contentOffsetPx = this._timeToPx(basePos, info);
 		if (options.length === 0) {
 			// Shown exactly like a bare Layer src: just the waveform, no
 			// separate selectable box on top of it — clicking this Stinger's
 			// label (left column) is how you select it, same as a Layer.
 			const srcAttr = findSrcAttribute(xmlStore.schema, stinger);
 			if (srcAttr) {
-				content = this._renderWaveformOnly(lane, srcAttr.value, this._rowHeight, totalWidth, token, info, basePos, false);
+				content = this._renderWaveformOnly(
+					lane,
+					srcAttr.value,
+					this._rowHeight,
+					totalWidth,
+					token,
+					info,
+					basePos,
+					false,
+					false,
+					readLength(stinger, info),
+					(widthPx) => {
+						const rightPx = contentOffsetPx + widthPx;
+						if (playBtn) playBtn.style.left = `${contentOffsetPx + widthPx / 2}px`;
+						if (resizeHandle) resizeHandle.style.left = `${rightPx - 8}px`;
+					}
+				);
 			}
 		} else {
 			content = this._renderTimedBox(stinger, info, token, "Stinger", basePos, { top: 2, height: this._rowHeight - 4 }, true);
@@ -2139,7 +2170,7 @@ export class WaSectionView extends HTMLElement {
 
 		const anchor = this._buildStingerAnchor(this._rowHeight);
 		anchor.style.left = `${this._timeToPx(quantizePos, info)}px`;
-		anchor.title = "Drag to change this Stinger's quantize";
+		anchor.title = "Drag to change this Stinger's syncTo";
 		this._wireStingerDrag(
 			anchor,
 			info,
@@ -2149,7 +2180,7 @@ export class WaSectionView extends HTMLElement {
 				if (!stingerNow) return;
 				xmlStore.updateAttributes(stinger.id, {
 					...stingerNow.attributes,
-					quantize: secondsToQuantizeString(newQuantizePos, info, this._effectiveGridBeats(info))
+					syncTo: secondsToSyncToString(newQuantizePos, info, this._effectiveGridBeats(info))
 				});
 			},
 			content ? [content] : [],
@@ -2194,18 +2225,39 @@ export class WaSectionView extends HTMLElement {
 				// canvas and anchor already use.
 				this._renderChangeOnNextMarks(lane, stinger, info, basePos, quantizePos, (s) => this._timeToPx(s, info));
 				// Same reasoning as the marks above — a canvas can't usefully
-				// contain a DOM child, so the play button appends to `lane`
-				// instead, positioned from `content`'s own *current* rendered
-				// box (its real width isn't known until decode resolves, but
-				// this reads whatever's true right now — close enough, and
-				// self-corrects on the next full re-render once it does).
-				const playBtn = this._buildStingerPlayButton(stinger, info);
-				const contentRect = content.getBoundingClientRect();
-				const laneRect = lane.getBoundingClientRect();
-				playBtn.style.left = `${contentRect.left - laneRect.left + contentRect.width / 2}px`;
+				// contain a DOM child, so the play button and resize handle
+				// both append to `lane` instead, positioned via contentOffsetPx
+				// + the canvas's real width (see the onWidthResolved callback
+				// above) rather than getBoundingClientRect() — `lane` isn't
+				// attached to the live document yet at this point (still being
+				// built by this method, appended only by its own caller), so
+				// every rect here would just read back as zero.
+				playBtn = this._buildStingerPlayButton(stinger, info);
 				playBtn.style.top = "50%";
 				playBtn.style.transform = "translate(-50%, -50%)";
 				lane.appendChild(playBtn);
+
+				// This bare-src Stinger's own resize handle (see
+				// _buildLengthResizeHandle) — the -8px in the callback above
+				// mirrors .length-resize-handle's own CSS width, so it overlaps
+				// the box's last 8px exactly like the CSS-positioned (right:0)
+				// version used for the with-Options case.
+				resizeHandle = this._buildLengthResizeHandle(stinger, info, content);
+				resizeHandle.style.top = "0";
+				resizeHandle.style.height = `${this._rowHeight}px`;
+				lane.appendChild(resizeHandle);
+
+				// The callback above only fires from inside
+				// _renderWaveformOnly (synchronously for an explicit length,
+				// or once decode resolves otherwise) — this covers the
+				// synchronous case, since playBtn/resizeHandle didn't exist
+				// yet the first time it could have fired for that case.
+				// content.width (the canvas's own bitmap size, always set by
+				// _renderWaveformOnly either way) rather than .style.width,
+				// which is only ever set in the explicit-length branch.
+				const currentWidthPx = content.width;
+				playBtn.style.left = `${contentOffsetPx + currentWidthPx / 2}px`;
+				resizeHandle.style.left = `${contentOffsetPx + currentWidthPx - 8}px`;
 			}
 			return lane;
 		}
@@ -2705,8 +2757,19 @@ export class WaSectionView extends HTMLElement {
 		});
 		label.addEventListener("dblclick", (e) => {
 			e.stopPropagation();
+			// _handleItemClick's xmlStore.selectNode() dispatches "change"
+			// synchronously, which _onStoreChange answers with a full
+			// _renderSection() — by the time it returns, `label` (captured
+			// above) has already been torn down and replaced by a fresh
+			// element, so swapping *it* for the input would silently do
+			// nothing. Re-query the just-rendered element by node id instead
+			// of relying on the now-stale closure reference. Bug per Hans
+			// (2026-09-14).
 			this._handleItemClick(layer.id, e, { reveal: true });
-			this._startAttributeEdit(label, layer, "label", () => this._buildLayerLabel(layer, rowsNeeded, siblings), "inline-rename-input", layer.attributes.id || layer.tagName);
+			const freshLabel = this.shadowRoot.querySelector(`.layer-label[data-node-id="${layer.id}"]`);
+			if (freshLabel) {
+				this._startAttributeEdit(freshLabel, layer, "label", () => this._buildLayerLabel(layer, rowsNeeded, siblings), "inline-rename-input", layer.attributes.id || layer.tagName);
+			}
 		});
 		return label;
 	}
@@ -2732,8 +2795,13 @@ export class WaSectionView extends HTMLElement {
 		});
 		label.addEventListener("dblclick", (e) => {
 			e.stopPropagation();
+			// See _buildLayerLabel's own dblclick handler for why this
+			// re-queries the label instead of using the closure reference.
 			this._handleItemClick(stinger.id, e, { reveal: true });
-			this._startAttributeEdit(label, stinger, "label", () => this._buildStingerLabel(stinger, siblings), "inline-rename-input", stinger.attributes.id || stinger.tagName);
+			const freshLabel = this.shadowRoot.querySelector(`.layer-label[data-node-id="${stinger.id}"]`);
+			if (freshLabel) {
+				this._startAttributeEdit(freshLabel, stinger, "label", () => this._buildStingerLabel(stinger, siblings), "inline-rename-input", stinger.attributes.id || stinger.tagName);
+			}
 		});
 		return label;
 	}
@@ -3253,27 +3321,56 @@ export class WaSectionView extends HTMLElement {
 	// false for those copies since a looping layer must fill existing bounds
 	// rather than extend them (only the first/non-looping placement can grow
 	// the timeline).
-	_renderWaveformOnly(lane, rawSrc, heightPx, laneWidth, token, info, offsetSeconds = 0, allowGrow = true, isRepeat = false) {
+	// explicitLengthSeconds (only passed for a bare-src Stinger with its own
+	// `length` attribute, per Hans 2026-09-15 — see _buildStingerLane) pins
+	// the canvas to that width instead of the decoded buffer's natural
+	// duration; drawWaveform always stretches the whole buffer across
+	// whatever width the canvas has, so this reads as the audio compressed/
+	// stretched to fit the given length, same visual idea as a `.timed-box`
+	// with an explicit `length` shorter/longer than its own src.
+	//
+	// onWidthResolved(widthPx), when given, fires with the canvas's real
+	// final width — synchronously if explicitLengthSeconds was given (already
+	// known), otherwise once the decode below resolves it from the buffer's
+	// actual duration. `lane` (and this canvas) aren't attached to the live
+	// document yet at the point this method runs — it's still being built by
+	// its caller, appended only afterwards (see _buildStingerLane) — so a
+	// caller positioning something relative to this canvas can't use
+	// getBoundingClientRect() (always zero-sized while detached); this
+	// callback hands back the real width from the CSS value this method
+	// itself just set, no layout required.
+	_renderWaveformOnly(lane, rawSrc, heightPx, laneWidth, token, info, offsetSeconds = 0, allowGrow = true, isRepeat = false, explicitLengthSeconds = null, onWidthResolved = null) {
 		const resolvedUrl = resolvePlayableUrl(rawSrc);
 		if (!resolvedUrl) return null;
 
 		const offsetPx = this._timeToPx(offsetSeconds, info);
 		const canvas = document.createElement("canvas");
-		canvas.width = Math.max(laneWidth - offsetPx, 1);
 		canvas.height = heightPx;
 		canvas.style.position = "absolute";
 		canvas.style.left = `${offsetPx}px`;
 		canvas.style.top = "0";
 		if (isRepeat) canvas.classList.add("loop-repeat");
+
+		const applyWidth = (seconds) => {
+			const px = Math.max(seconds * this._pxPerSecond, 1);
+			canvas.width = px;
+			canvas.style.width = `${px}px`;
+			return px;
+		};
+		if (explicitLengthSeconds !== null) onWidthResolved?.(applyWidth(explicitLengthSeconds));
+		else canvas.width = Math.max(laneWidth - offsetPx, 1);
 		lane.appendChild(canvas);
 
 		this._decode(resolvedUrl).then((buffer) => {
 			if (token !== this._renderToken || !buffer) return;
-			const durationPx = buffer.duration * this._pxPerSecond;
-			canvas.width = Math.max(durationPx, 1);
-			canvas.style.width = `${durationPx}px`;
+			if (explicitLengthSeconds === null) {
+				const px = applyWidth(buffer.duration);
+				if (allowGrow) this._growTimelineTo(offsetSeconds + buffer.duration);
+				onWidthResolved?.(px);
+			} else if (allowGrow) {
+				this._growTimelineTo(offsetSeconds + explicitLengthSeconds);
+			}
 			drawWaveform(canvas, buffer, WAVEFORM_COLOR);
-			if (allowGrow) this._growTimelineTo(offsetSeconds + buffer.duration);
 		});
 		return canvas;
 	}
@@ -3522,12 +3619,15 @@ export class WaSectionView extends HTMLElement {
 			});
 		}
 
-		// A closed Segment's own length is resizable from its right edge, per
-		// Hans (2026-09-02) — Options aren't (their box is either read-only
-		// preview content inside an open Segment, or driven by the Segment's
-		// own length when closed).
+		// A closed Segment's, or a Stinger's, own length is resizable from its
+		// right edge, per Hans (2026-09-02, extended to Stinger 2026-09-15) —
+		// Options aren't (their box is either read-only preview content inside
+		// an open Segment, or driven by the Segment's own length when closed).
+		if (kind === "Segment" || kind === "Stinger") {
+			box.appendChild(this._buildLengthResizeHandle(node, info, box));
+		}
+
 		if (kind === "Segment") {
-			box.appendChild(this._buildSegmentResizeHandle(node, info, box));
 			// Double-click renames the Segment (see _startAttributeEdit) — on
 			// the box itself, not just .box-label, since that span is
 			// pointer-events:none (see its CSS). stopPropagation keeps this
@@ -3535,8 +3635,15 @@ export class WaSectionView extends HTMLElement {
 			// Layer's loopEnd (see _buildLayerLane) — per Hans (2026-09-03).
 			box.addEventListener("dblclick", (e) => {
 				e.stopPropagation();
+				// _handleItemClick's selectNode() triggers a full, synchronous
+				// _renderSection() (see _buildLayerLabel's own dblclick for the
+				// full explanation) — `box` itself is stale by the time this
+				// returns, so re-query the freshly-rendered one by node id
+				// instead of searching inside the detached old one. Bug per
+				// Hans (2026-09-14).
 				this._handleItemClick(node.id, e, { reveal: true });
-				const labelEl = box.querySelector(".box-label");
+				const freshBox = this.shadowRoot.querySelector(`.timed-box[data-node-id="${node.id}"]`);
+				const labelEl = freshBox?.querySelector(".box-label");
 				if (!labelEl) return;
 				this._startAttributeEdit(labelEl, node, "label", () => {
 					const rebuilt = document.createElement("span");
@@ -3552,17 +3659,21 @@ export class WaSectionView extends HTMLElement {
 		return box;
 	}
 
-	// A grip at a closed Segment's right edge — drag to change its own
-	// `length`, snapped to the same beat grid other drags use (see
-	// _buildLoopMarker). Positioned via CSS right:0 so it tracks the box's
-	// current width even when that width was grown after the fact to fit
-	// nested Options (_renderSegmentBox's own post-hoc width bump).
-	_buildSegmentResizeHandle(segment, info, box) {
+	// A grip at a closed Segment's, or a Stinger's, right edge — drag to
+	// change its own `length` (a musical fraction, e.g. "2/4"/"3/8"/"7/16" —
+	// see secondsToLengthFractionString), snapped to the same beat grid other
+	// drags use (see _buildLoopMarker).
+	// Positioned via CSS right:0 so it tracks the box's current width even
+	// when that width was grown after the fact to fit nested Options
+	// (_renderSegmentBox's own post-hoc width bump). Per Hans (2026-09-02,
+	// extended to Stinger 2026-09-15) — `node` is generic (only ever a
+	// Segment or Stinger here), both share the same `length` attribute.
+	_buildLengthResizeHandle(node, info, box) {
 		const handle = document.createElement("div");
-		handle.className = "segment-resize-handle";
-		handle.title = "Drag to change this Segment's length";
+		handle.className = "length-resize-handle";
+		handle.title = `Drag to change this ${node.tagName}'s length`;
 		// The parent box is itself draggable (native HTML5 DnD, for moving
-		// the whole Segment) — without this, a mousedown here would be
+		// the whole Segment/Stinger) — without this, a mousedown here would be
 		// picked up as the start of *that* drag instead of this one.
 		handle.draggable = false;
 		handle.addEventListener("click", (e) => e.stopPropagation());
@@ -3586,9 +3697,9 @@ export class WaSectionView extends HTMLElement {
 			const onUp = () => {
 				handle.removeEventListener("pointermove", onMove);
 				handle.removeEventListener("pointerup", onUp);
-				const segmentNow = ops.findNodeById(xmlStore.root, segment.id);
-				if (segmentNow) {
-					xmlStore.updateAttributes(segment.id, { ...segmentNow.attributes, length: secondsToLengthString(pendingSeconds) });
+				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+				if (nodeNow) {
+					xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, length: secondsToLengthFractionString(pendingSeconds, info, gridBeats) });
 				}
 			};
 			handle.addEventListener("pointermove", onMove);

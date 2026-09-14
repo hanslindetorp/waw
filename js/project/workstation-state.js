@@ -44,6 +44,7 @@ export function registerPanels(panelEls) {
 export function registerLayoutExtras(refs) {
 	layoutExtras = refs || {};
 	layoutExtras.xmlTree?.addEventListener("columns-change", scheduleSave);
+	layoutExtras.xmlTree?.addEventListener("collapse-change", scheduleSave);
 	layoutExtras.xmlEditor?.addEventListener("split-change", scheduleSave);
 	layoutExtras.sectionView?.addEventListener("split-change", scheduleSave);
 }
@@ -55,6 +56,8 @@ function captureState() {
 	};
 	const columns = layoutExtras.xmlTree?.getColumnsState();
 	if (columns) state.xmlTreeColumns = columns;
+	const collapsed = layoutExtras.xmlTree?.getCollapsedState();
+	if (collapsed) state.xmlTreeCollapsed = collapsed;
 	const splits = {
 		xmlEditorTreeInspector: layoutExtras.xmlEditor?.getSplitRatio(),
 		sectionLayerStinger: layoutExtras.sectionView?.getSplitRatio()
@@ -92,6 +95,7 @@ function applyState(state) {
 		if (node) xmlStore.selectNode(node.id);
 	}
 	if (state.xmlTreeColumns) layoutExtras.xmlTree?.applyColumnsState(state.xmlTreeColumns);
+	if (Array.isArray(state.xmlTreeCollapsed)) layoutExtras.xmlTree?.applyCollapsedState(state.xmlTreeCollapsed);
 	if (typeof state.splits?.xmlEditorTreeInspector === "number") {
 		layoutExtras.xmlEditor?.setSplitRatio(state.splits.xmlEditorTreeInspector);
 	}

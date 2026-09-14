@@ -1959,8 +1959,10 @@
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="pos" type="position"/>
     <xs:attribute name="length" type="length"/>
-    <xs:attribute name="delay" type="length"/>
-    <xs:attribute name="upbeat" type="length"/>
+    <!-- "delay" and "upbeat" commented out here for now, per Hans
+         (2026-09-14), for every object under <Composition>. -->
+    <!-- <xs:attribute name="delay" type="length"/> -->
+    <!-- <xs:attribute name="upbeat" type="length"/> -->
     <xs:attribute name="voice" type="voice"/>
   </xs:complexType>
 
@@ -1984,8 +1986,10 @@
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="length" type="length"/>
-    <xs:attribute name="delay" type="stingerOptionDelay"/>
-    <xs:attribute name="upbeat" type="length"/>
+    <!-- "delay" and "upbeat" commented out here for now, per Hans
+         (2026-09-14), for every object under <Composition>. -->
+    <!-- <xs:attribute name="delay" type="stingerOptionDelay"/> -->
+    <!-- <xs:attribute name="upbeat" type="length"/> -->
     <xs:attribute name="voice" type="voice"/>
   </xs:complexType>
 
@@ -1996,10 +2000,12 @@
     </xs:choice>
     <xs:attribute name="label" type="label"/>
     <xs:attribute name="pos" type="position"/>
-    <xs:attribute name="upbeat" type="length"/>
+    <!-- "upbeat" and "delay" commented out here for now, per Hans
+         (2026-09-14), for every object under <Composition>. -->
+    <!-- <xs:attribute name="upbeat" type="length"/> -->
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="length" type="length"/>
-    <xs:attribute name="delay" type="length"/>
+    <!-- <xs:attribute name="delay" type="length"/> -->
   </xs:complexType>
 
   <xs:complexType name="stingerContentType">
@@ -2023,10 +2029,12 @@
            playing audio. -->
     <xs:attribute name="syncTo" type="syncTo"/>
     <xs:attribute name="cuePoint" type="syncTo"/>
-    <xs:attribute name="upbeat" type="length"/>
+    <!-- "upbeat" and "delay" commented out here for now, per Hans
+         (2026-09-14), for every object under <Composition>. -->
+    <!-- <xs:attribute name="upbeat" type="length"/> -->
     <xs:attribute name="length" type="length"/>
     <xs:attribute name="pos" type="position"/>
-    <xs:attribute name="delay" type="length"/>
+    <!-- <xs:attribute name="delay" type="length"/> -->
     <xs:attribute name="active" type="active"/>
     <xs:attribute name="filter" type="filter"/>
     <xs:attribute name="retrig" type="retrigMode"/>
@@ -2053,7 +2061,9 @@
     <xs:attribute name="fadeTime" type="fadeTime"/>
     <xs:attribute name="loopEnd" type="musicalLoopEnd"/>
     <xs:attribute name="partLength" type="length"/>
-    <xs:attribute name="upbeat" type="length"/>
+    <!-- "upbeat" commented out here for now, per Hans (2026-09-14), for
+         every object under <Composition>. -->
+    <!-- <xs:attribute name="upbeat" type="length"/> -->
     <xs:attribute name="active" type="active"/>
     <xs:attribute name="filter" type="filter"/>
     <xs:attribute name="loopActive" type="loopActive"/>

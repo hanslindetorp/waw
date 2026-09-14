@@ -6,6 +6,7 @@ import { getAttributeCurve } from "../xml-editor/attribute-curves.js";
 import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
 import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribute-inheritance.js";
 import { openIoPicker } from "./wa-io-picker.js";
+import { openVoicePicker } from "./wa-voice-picker.js";
 
 // Showing/editing an element's own tag name here is turned off per Hans
 // (2026-09-03) — _renderTagNameField (and xmlStore.updateTagName) are left
@@ -38,6 +39,18 @@ const SHOW_ELEMENT_TYPE_FIELD = false;
 // validated, not "does it match this specific representation of it".
 // Returns null (skip validation entirely) if any member is a fully
 // unconstrained string, since the union then accepts literally anything.
+// Every distinct `voice` value already used anywhere in the document — see
+// _renderVoiceControl/wa-voice-picker.js: any element sharing one of these
+// becomes part of the same monophonic instrument group (per the schema's own
+// "voice" type doc), so the picker offers them instead of leaving the user to
+// retype a name by hand and risk a typo silently starting a new group.
+function collectVoiceValues(root, set = new Set()) {
+	if (!root) return set;
+	if (root.attributes.voice) set.add(root.attributes.voice);
+	root.children.forEach((child) => collectVoiceValues(child, set));
+	return set;
+}
+
 function combineUnionPattern(members) {
 	const parts = [];
 	for (const m of members) {
@@ -226,6 +239,19 @@ template.innerHTML = `
 			color: var(--waw-muted, #8a8a8a);
 			font-size: 0.72rem;
 			margin-left: -0.15rem;
+		}
+		.voice-value-btn {
+			font: inherit;
+			background: #101010;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			color: inherit;
+			border-radius: 4px;
+			padding: 0.3rem 0.45rem;
+			cursor: pointer;
+			text-align: left;
+		}
+		.voice-value-btn:hover {
+			border-color: var(--waw-accent, #4fa3ff);
 		}
 		.toggle-btn {
 			flex: 0 0 auto;
@@ -613,6 +639,8 @@ export class WaNodeInspector extends HTMLElement {
 
 		if (attrName === "output" || attrName === "input" || attrName === "bus") {
 			control.appendChild(this._renderIoSelectorControl(node, attrName, value, attrSchema, onChange));
+		} else if (attrName === "voice") {
+			control.appendChild(this._renderVoiceControl(value, onChange));
 		} else if (attrSchema?.type === "boolean") {
 			control.appendChild(this._renderBooleanControl(value, onChange));
 		} else if (attrSchema?.type === "union") {
@@ -1062,6 +1090,54 @@ export class WaNodeInspector extends HTMLElement {
 		});
 		frag.appendChild(pickBtn);
 
+		return frag;
+	}
+
+	// `voice` (a plain schema string, no enumValues) gets a small popup menu
+	// instead of a free-text field, per Hans (2026-09-15): "New Voice..." at
+	// the top, then every distinct voice value already used elsewhere in the
+	// document, sorted alphabetically — picking one of those (rather than
+	// retyping it) avoids a typo silently starting a second, unrelated voice
+	// group. Picking "New Voice..." prompts for a name, which then
+	// automatically becomes available in this same list next time (see
+	// collectVoiceValues — it just reads whatever's currently in the
+	// document, nothing extra to persist).
+	_renderVoiceControl(value, onChange) {
+		const frag = document.createElement("div");
+		frag.style.display = "flex";
+		frag.style.alignItems = "center";
+		frag.style.gap = "0.4rem";
+		frag.style.flex = "1 1 auto";
+		frag.style.minWidth = "0";
+
+		// A value picked here never triggers a full re-render (see onChange's
+		// _isLocalEdit flag in _renderAttributeRow) — this component's own
+		// closure would otherwise still report the pre-pick value as "current"
+		// on a second open, meaning the just-picked voice would keep showing
+		// up as another selectable option in its own picker instead of being
+		// excluded as the already-current value.
+		let currentValue = value;
+
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "voice-value-btn mono";
+		btn.style.flex = "1 1 auto";
+		btn.style.minWidth = "0";
+		btn.style.overflow = "hidden";
+		btn.style.textOverflow = "ellipsis";
+		btn.style.whiteSpace = "nowrap";
+		btn.textContent = currentValue || "(not set)";
+		btn.addEventListener("click", () => {
+			const existing = [...collectVoiceValues(xmlStore.root)].filter((v) => v !== currentValue);
+			openVoicePicker(existing, btn.getBoundingClientRect()).then((picked) => {
+				if (picked === null || picked === undefined) return;
+				currentValue = picked;
+				btn.textContent = picked;
+				onChange(picked);
+			});
+		});
+
+		frag.appendChild(btn);
 		return frag;
 	}
 

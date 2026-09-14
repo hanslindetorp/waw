@@ -26,7 +26,11 @@ template.innerHTML = `
 			   host including wa-schema-input's own height above, not just
 			   the space actually left over for these two. Replaced with a
 			   fixed pixel basis once the user drags .xml-divider (see
-			   _onDividerMove) so a manual split survives future re-renders. */
+			   _onDividerMove) so a manual split survives future re-renders.
+			   overflow:auto — the single scroll owner for wa-xml-tree.js's
+			   whole grid; the Element column freezes via its own
+			   position:sticky rather than a separate scroll region (see
+			   that file, 2026-09-15). */
 			flex: 7 1 0%;
 			min-height: 0;
 			overflow: auto;
@@ -39,6 +43,14 @@ template.innerHTML = `
 			flex: 3 1 0%;
 			min-height: 0;
 			overflow: auto;
+		}
+		/* Hidden, not removed — per Hans (2026-09-15): which schema is
+		   loaded is implied/fixed in this app, so showing "waxml.xsd" as a
+		   pickable/removable chip here is just clutter. He'll want it back
+		   once the XML editor + Code panel get extracted into a more
+		   general-purpose app that isn't WAXML-specific. */
+		wa-schema-input {
+			display: none;
 		}
 	</style>
 	<wa-schema-input></wa-schema-input>

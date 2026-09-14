@@ -11,6 +11,8 @@ const BASE_PADDING_PX = 8;
 // class) — id stays available (unchecked) in the right-click column menu.
 const DEFAULT_COLUMNS = ["label", "class", "src", "output"];
 const MIN_COLUMN_WIDTH_PX = 50;
+const DEFAULT_ELEMENT_PANE_WIDTH_PX = 240;
+const MIN_ELEMENT_PANE_WIDTH_PX = 120;
 // Changing an element's type by clicking its name here (opens the same
 // rename popover used elsewhere) is turned off per Hans (2026-09-03) — the
 // popover/rename machinery itself (_renderTagLabel's button branch,
@@ -33,10 +35,32 @@ template.innerHTML = `
 		.container {
 			padding: 0.6rem;
 		}
-		.container.grid-mode {
+		/* One shared grid/scroll again (per Hans, 2026-09-15 — a two-pane
+		   version with its own JS-synced scroll noticeably lagged/glitched
+		   between the two on fast scrolling). The Element column freezes
+		   via position:sticky (see .cell.name-cell/.element-header below)
+		   instead of living in a separate scroll region — a single native
+		   scrollport has no sync to glitch. Scrolling itself happens on
+		   wa-xml-editor.js's own .tree-scroll wrapper outside this shadow
+		   root, same as it always has — position:sticky reaches across a
+		   shadow boundary to its nearest actual scrolling ancestor fine. */
+		.container.doc-mode {
 			padding: 0;
 			display: grid;
 			align-content: start;
+			/* Without an explicit width, a grid item/container defaults to
+			   its *containing block's* width (like any auto-width block
+			   box) even when its own tracks need more room — the extra
+			   just paints as visual overflow rather than genuinely
+			   widening this box. That silently breaks position:sticky
+			   (which needs a real, wider scrollable box to track scroll
+			   offset against) even though the ink overflow alone is
+			   already enough for .tree-scroll's own scrollbar to appear.
+			   width:max-content makes this box's real size match its
+			   tracks' actual total width, so both scrolling and sticky
+			   agree on the same (correct) geometry. */
+			width: max-content;
+			min-width: 100%;
 		}
 		.create-root {
 			display: flex;
@@ -80,6 +104,16 @@ template.innerHTML = `
 			overflow: hidden;
 		}
 		.cell.header-cell {
+			/* position:sticky already establishes a containing block for an
+			   absolutely-positioned descendant (the resize handle below),
+			   exactly like position:relative would — no separate rule
+			   needed for that, and one that overrode this to plain "relative"
+			   would silently drop the sticky-to-top behavior entirely
+			   (position is a single property). That was actually the case
+			   here for every *attribute* column header until Hans caught it
+			   (2026-09-15): only the Element column's own header (never
+			   touched by that now-removed .attr-header override) was
+			   actually sticking. */
 			position: sticky;
 			top: 0;
 			z-index: 3;
@@ -94,11 +128,19 @@ template.innerHTML = `
 			user-select: none;
 			white-space: nowrap;
 		}
-		/* Attribute-column headers (not the leading "Name" one) are
+		/* Attribute-column headers (not the leading "Element" one) are
 		   draggable for reordering — see _renderHeaderCell/_onColumnDragStart. */
 		.cell.header-cell.attr-header {
 			cursor: grab;
-			position: relative;
+		}
+		/* The Element column freezes horizontally (per Hans, 2026-09-15):
+		   its own header needs *both* axes of sticky at once (it's the
+		   grid's top-left corner), with a higher z-index than either a
+		   plain sticky-top attr header or a plain sticky-left name cell so
+		   it paints above both while they scroll past underneath it. */
+		.cell.header-cell.element-header {
+			left: 0;
+			z-index: 5;
 		}
 		.column-resize-handle {
 			position: absolute;
@@ -110,8 +152,23 @@ template.innerHTML = `
 			z-index: 4;
 		}
 		.cell.name-cell {
+			position: sticky;
+			left: 0;
+			z-index: 2;
 			gap: 0.35rem;
 			cursor: pointer;
+		}
+		/* Everything before the actions (grip/toggle/tag/text-preview/file-hint)
+		   — kept as one flex item so its width can be pinned per-row (see
+		   render()'s post-pass below) without disturbing the gaps between its
+		   own children. flex:0 0 auto so it takes its natural content width
+		   until JS gives it an explicit width. */
+		.row-content {
+			display: flex;
+			align-items: center;
+			gap: 0.35rem;
+			flex: 0 0 auto;
+			min-width: 0;
 		}
 		.cell.attr-cell {
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
@@ -230,8 +287,12 @@ template.innerHTML = `
 			font-weight: 600;
 		}
 
+		/* No margin-left:auto (per Hans, 2026-09-14) — these buttons sit
+		   directly after the row's own content (name/tag/preview), not
+		   pushed out to the far edge of however wide the Element pane
+		   happens to be; any leftover pane width just sits empty *after*
+		   them instead of *before*. */
 		.actions {
-			margin-left: auto;
 			display: flex;
 			align-items: center;
 			gap: 0.1rem;
@@ -343,6 +404,7 @@ export class WaXmlTree extends HTMLElement {
 		this._columnWidths = {}; // colName -> px, only for columns the user has actually resized
 		this._dragColName = null; // attribute column currently being drag-reordered (see _onColumnDragStart)
 		this._selectionAnchorId = null; // last plain-clicked row — the fixed end for a subsequent Shift-click range (see _handleRowClick)
+		this._elementPaneWidth = DEFAULT_ELEMENT_PANE_WIDTH_PX;
 	}
 
 	connectedCallback() {
@@ -427,7 +489,13 @@ export class WaXmlTree extends HTMLElement {
 		}
 		if (expanded) this.render();
 		requestAnimationFrame(() => {
-			this._container.querySelector(`.cell[data-node-id="${nodeId}"]`)?.scrollIntoView({ block: "nearest" });
+			// Specifically the sticky Element cell (.name-cell), not an
+			// attr-cell — it's frozen at the grid's left edge, so revealing
+			// it only ever needs to scroll vertically; inline:"nearest"
+			// keeps it that way instead of also horizontally scrolling the
+			// attribute columns just to "reveal" a column that was already
+			// always visible.
+			this._container.querySelector(`.name-cell[data-node-id="${nodeId}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
 		});
 	}
 
@@ -486,21 +554,29 @@ export class WaXmlTree extends HTMLElement {
 		this._lastSchema = xmlStore.schema;
 
 		if (!root) {
-			this._container.classList.remove("grid-mode");
+			this._container.classList.remove("doc-mode");
 			this._container.appendChild(this._renderCreateRoot());
 			return;
 		}
 
-		this._container.classList.add("grid-mode");
+		this._container.classList.add("doc-mode");
 		this._container.style.gridTemplateColumns = this._gridTemplateColumns();
 
-		this._container.appendChild(this._renderHeaderCell("Name", null));
+		const elementHeader = this._renderHeaderCell("Element", null);
+		elementHeader.classList.add("element-header");
+		elementHeader.appendChild(this._buildResizeHandle((px) => this._onElementColumnResize(px)));
+		this._container.appendChild(elementHeader);
 		this._activeColumns.forEach((col) => this._container.appendChild(this._renderHeaderCell(col, col)));
 
+		const rowContents = [];
 		this._flatten(root).forEach((entry) => {
-			const cells = entry.kind === "node" ? this._renderNodeRow(entry) : this._renderAddElementRow(entry);
-			cells.forEach((cell) => this._container.appendChild(cell));
+			const { elementCell, attrCells, contentWrap, indentPx } =
+				entry.kind === "node" ? this._renderNodeRow(entry) : this._renderAddElementRow(entry);
+			this._container.appendChild(elementCell);
+			attrCells.forEach((cell) => this._container.appendChild(cell));
+			if (contentWrap) rowContents.push({ wrap: contentWrap, indent: indentPx });
 		});
+		this._alignRowActions(rowContents);
 
 		if (this._pendingEditTarget) {
 			const { nodeId, colName } = this._pendingEditTarget;
@@ -511,14 +587,72 @@ export class WaXmlTree extends HTMLElement {
 		}
 	}
 
+	// Pins every row's actions (+/copy/delete) to the same horizontal
+	// position — per Hans (2026-09-14): they should line up in one column,
+	// sitting right after whichever row's own content (name/tag/preview,
+	// including its indent) reaches furthest to the right, not flush against
+	// each row's own (varying) content width. Widening a row-content span to
+	// `maxRight - indent` pushes its sibling .actions to start at the same
+	// maxRight for every row, since flex lays them out immediately after it.
+	_alignRowActions(rowContents) {
+		if (rowContents.length === 0) return;
+		const maxRight = Math.max(...rowContents.map((r) => r.indent + r.wrap.getBoundingClientRect().width));
+		rowContents.forEach((r) => {
+			r.wrap.style.width = `${maxRight - r.indent}px`;
+		});
+	}
+
+	// A resize handle usable on any header cell (the Element column's own,
+	// or an attribute column's — see _renderHeaderCell) — `onResize(px)` is
+	// called with the new width throughout the drag and once more on
+	// release; the caller decides what that width actually resizes.
+	_buildResizeHandle(onResize) {
+		const handle = document.createElement("div");
+		handle.className = "column-resize-handle";
+		handle.draggable = false;
+		handle.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			const startX = e.clientX;
+			const startWidth = handle.parentElement.getBoundingClientRect().width;
+			const onMove = (moveEvt) => onResize(Math.max(MIN_COLUMN_WIDTH_PX, startWidth + (moveEvt.clientX - startX)));
+			const onUp = () => {
+				window.removeEventListener("pointermove", onMove);
+				window.removeEventListener("pointerup", onUp);
+				this._notifyColumnsChange();
+			};
+			window.addEventListener("pointermove", onMove);
+			window.addEventListener("pointerup", onUp);
+		});
+		return handle;
+	}
+
+	_onElementColumnResize(px) {
+		this._elementPaneWidth = Math.max(MIN_ELEMENT_PANE_WIDTH_PX, px);
+		this._container.style.gridTemplateColumns = this._gridTemplateColumns();
+	}
+
+	// The Element column is always the first, fixed-width track (frozen via
+	// position:sticky — see .cell.name-cell/.element-header — not a
+	// flexible/stretching one, per Hans, 2026-09-10/14: a wide flexible
+	// column pushed the action buttons away from the row's own content).
+	// Every attribute column below is sized to its own natural content
+	// width (max-content) and never compressed to fit the available space
+	// — per Hans (2026-09-15): a `minmax(min, max-content)` track *does*
+	// get compressed below max-content in a narrow container, which reads
+	// as truncated/illegible columns instead of the intended behavior
+	// (scroll horizontally to see them, at their real width). A bare
+	// `max-content` track has no such give, so the grid (and therefore
+	// wa-xml-editor.js's own .tree-scroll, its scrolling ancestor) overflows
+	// and scrolls horizontally instead — exactly like a spreadsheet.
 	_gridTemplateColumns() {
 		const attrCols = this._activeColumns
 			.map((col) => {
 				const width = this._columnWidths[col];
-				return width ? `${width}px` : "minmax(70px, max-content)";
+				return width ? `${width}px` : "max-content";
 			})
 			.join(" ");
-		return attrCols ? `minmax(200px, 1fr) ${attrCols}` : "minmax(200px, 1fr)";
+		return attrCols ? `${this._elementPaneWidth}px ${attrCols}` : `${this._elementPaneWidth}px`;
 	}
 
 	// Depth-first walk of the visible (non-collapsed) tree into a flat row
@@ -666,11 +800,12 @@ export class WaXmlTree extends HTMLElement {
 			this._reorderColumn(draggedCol, colName, before);
 		});
 
-		const handle = document.createElement("div");
-		handle.className = "column-resize-handle";
-		handle.draggable = false;
-		handle.addEventListener("pointerdown", (e) => this._onColumnResizeStart(e, cell, colName));
-		cell.appendChild(handle);
+		cell.appendChild(
+			this._buildResizeHandle((px) => {
+				this._columnWidths[colName] = px;
+				this._container.style.gridTemplateColumns = this._gridTemplateColumns();
+			})
+		);
 
 		return cell;
 	}
@@ -683,26 +818,6 @@ export class WaXmlTree extends HTMLElement {
 		this._activeColumns = cols;
 		this._notifyColumnsChange();
 		this.render();
-	}
-
-	_onColumnResizeStart(e, cell, colName) {
-		e.preventDefault();
-		e.stopPropagation();
-		this._resizeColName = colName;
-		this._resizeStartX = e.clientX;
-		this._resizeStartWidth = this._columnWidths[colName] || cell.offsetWidth;
-		this._onColumnResizeMove = (moveEvt) => {
-			const width = Math.max(MIN_COLUMN_WIDTH_PX, this._resizeStartWidth + (moveEvt.clientX - this._resizeStartX));
-			this._columnWidths[this._resizeColName] = width;
-			this._container.style.gridTemplateColumns = this._gridTemplateColumns();
-		};
-		this._onColumnResizeEnd = () => {
-			window.removeEventListener("pointermove", this._onColumnResizeMove);
-			window.removeEventListener("pointerup", this._onColumnResizeEnd);
-			this._notifyColumnsChange();
-		};
-		window.addEventListener("pointermove", this._onColumnResizeMove);
-		window.addEventListener("pointerup", this._onColumnResizeEnd);
 	}
 
 	// Lets workstation-state.js persist column visibility/order/width without
@@ -718,7 +833,50 @@ export class WaXmlTree extends HTMLElement {
 	// Read by workstation-state.js when saving; applyColumnsState (below) is
 	// its counterpart when loading a project.
 	getColumnsState() {
-		return { order: [...this._activeColumns], widths: { ...this._columnWidths } };
+		return { order: [...this._activeColumns], widths: { ...this._columnWidths }, elementPaneWidth: this._elementPaneWidth };
+	}
+
+	// Lets workstation-state.js persist which elements are collapsed — see
+	// getCollapsedState/applyCollapsedState below. Only a plain UI toggle needs
+	// this dedicated event: the auto-collapse-on-create and reveal-triggered
+	// auto-expand paths (_onStoreChange, _revealNode) already ride along on
+	// xmlStore's own "change" event, which workstation-state.js already
+	// listens to.
+	_notifyCollapseChange() {
+		this.dispatchEvent(new CustomEvent("collapse-change", { bubbles: true, composed: true }));
+	}
+
+	// Read by workstation-state.js when saving; applyCollapsedState (below) is
+	// its counterpart when loading a project. Persisted by each element's own
+	// XML `id` attribute rather than its internal tree id — per Hans
+	// (2026-09-14/15): expand/collapse state wasn't surviving a project
+	// reload at all before this. The internal id is a session-local counter
+	// reset on every reparse (see xml-tree-ops.js's resetNodeIdCounter), so it
+	// can't be trusted to still name the same element next time the project
+	// loads — the `id` attribute is durable (every non-root element always
+	// has one, auto-backfilled — see backfillElementIds), same reasoning as
+	// this file's own selectedElementId persistence.
+	getCollapsedState() {
+		if (!xmlStore.root || this._collapsedIds.size === 0) return [];
+		const ids = [];
+		const walk = (node) => {
+			if (this._collapsedIds.has(node.id) && node.attributes.id) ids.push(node.attributes.id);
+			node.children.forEach(walk);
+		};
+		walk(xmlStore.root);
+		return ids;
+	}
+
+	applyCollapsedState(attributeIds) {
+		if (!Array.isArray(attributeIds) || !xmlStore.root) return;
+		const wanted = new Set(attributeIds);
+		this._collapsedIds.clear();
+		const walk = (node) => {
+			if (node.attributes.id && wanted.has(node.attributes.id)) this._collapsedIds.add(node.id);
+			node.children.forEach(walk);
+		};
+		walk(xmlStore.root);
+		this.render();
 	}
 
 	applyColumnsState(state) {
@@ -728,6 +886,9 @@ export class WaXmlTree extends HTMLElement {
 			this._columnWidths = Object.fromEntries(
 				Object.entries(state.widths).filter(([, v]) => typeof v === "number" && v > 0)
 			);
+		}
+		if (typeof state.elementPaneWidth === "number" && state.elementPaneWidth > 0) {
+			this._elementPaneWidth = Math.max(MIN_ELEMENT_PANE_WIDTH_PX, state.elementPaneWidth);
 		}
 		this.render();
 	}
@@ -816,7 +977,7 @@ export class WaXmlTree extends HTMLElement {
 			return cell;
 		});
 
-		return [nameCell, ...attrCells];
+		return { elementCell: nameCell, attrCells };
 	}
 
 	_renderNodeRow({ node, depth, isRoot, hasChildren, canHaveChildren, allowedChildren, parentAllowedChildren }) {
@@ -840,16 +1001,20 @@ export class WaXmlTree extends HTMLElement {
 		const siblingInsertionAllowedChildren = isRoot ? allowedChildren : parentAllowedChildren || [];
 		const canInsertFileNode = !schema || siblingInsertionAllowedChildren.includes(FILE_DROP_TAG);
 
+		const indentPx = BASE_PADDING_PX + depth * INDENT_PX;
 		const nameCell = document.createElement("div");
 		nameCell.className = "cell name-cell";
 		nameCell.dataset.nodeId = node.id;
-		nameCell.style.paddingLeft = `${BASE_PADDING_PX + depth * INDENT_PX}px`;
+		nameCell.style.paddingLeft = `${indentPx}px`;
+
+		const contentWrap = document.createElement("span");
+		contentWrap.className = "row-content";
 
 		if (!isRoot) {
 			const grip = document.createElement("span");
 			grip.className = "grip";
 			grip.textContent = "⋮⋮";
-			nameCell.appendChild(grip);
+			contentWrap.appendChild(grip);
 		}
 
 		if (hasChildren) {
@@ -861,30 +1026,32 @@ export class WaXmlTree extends HTMLElement {
 				e.stopPropagation();
 				if (this._collapsedIds.has(node.id)) this._collapsedIds.delete(node.id);
 				else this._collapsedIds.add(node.id);
+				this._notifyCollapseChange();
 				this.render();
 			});
-			nameCell.appendChild(toggle);
+			contentWrap.appendChild(toggle);
 		} else {
 			const spacer = document.createElement("span");
 			spacer.className = "toggle-spacer";
-			nameCell.appendChild(spacer);
+			contentWrap.appendChild(spacer);
 		}
 
-		nameCell.appendChild(this._renderTagLabel(node, isRoot, parentAllowedChildren));
+		contentWrap.appendChild(this._renderTagLabel(node, isRoot, parentAllowedChildren));
 
 		if (node.textContent) {
 			const textSpan = document.createElement("span");
 			textSpan.className = "text-preview";
 			textSpan.textContent = `"${node.textContent}"`;
-			nameCell.appendChild(textSpan);
+			contentWrap.appendChild(textSpan);
 		}
 
 		const fileHint = document.createElement("span");
 		fileHint.className = "file-hint";
 		fileHint.hidden = true;
 		fileHint.textContent = `⬇ ${effectiveSrcAttrName}`;
-		nameCell.appendChild(fileHint);
+		contentWrap.appendChild(fileHint);
 
+		nameCell.appendChild(contentWrap);
 		nameCell.appendChild(this._renderActions(node, isRoot, canHaveChildren, allowedChildren));
 
 		const attrCells = this._activeColumns.map((colName) => this._renderAttrCell(node, colName));
@@ -896,7 +1063,7 @@ export class WaXmlTree extends HTMLElement {
 
 		this._wireDragEvents(cells, node, { isRoot, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, fileHint });
 
-		return cells;
+		return { elementCell: nameCell, attrCells, contentWrap, indentPx };
 	}
 
 	_renderAttrCell(node, colName) {

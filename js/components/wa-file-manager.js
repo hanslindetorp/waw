@@ -38,6 +38,16 @@ template.innerHTML = `
 		button:hover {
 			background: #333;
 		}
+		.toolbar button {
+			width: 1.9rem;
+			height: 1.9rem;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+			font-size: 0.95rem;
+			line-height: 1;
+		}
 		.dropzone {
 			flex: 1 1 auto;
 			overflow: auto;
@@ -152,8 +162,8 @@ template.innerHTML = `
 		}
 	</style>
 	<div class="toolbar">
-		<button class="btn-upload" type="button">Upload</button>
-		<button class="btn-new-folder" type="button">New folder</button>
+		<button class="btn-upload" type="button" title="Upload">⬆</button>
+		<button class="btn-new-folder" type="button" title="New folder">📁</button>
 		<input class="file-input" type="file" multiple hidden accept="${ACCEPTED}" />
 	</div>
 	<div class="dropzone">

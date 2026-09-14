@@ -16666,6 +16666,8 @@ class Music extends EventTarget {
 			myInstance.musicalStart = 0;
 	
 			myInstance.motifs = [];
+			myInstance.stingers = [];
+
 			myInstance.busses = [];
 			myInstance.intervalIDs = [];
 	
@@ -17048,6 +17050,7 @@ class Music extends EventTarget {
 				this.tracks = [];
 				this.transitions = [];
 				this.leadIns = [];
+				this.stingers = [];
 	
 				this.idName = o.id || "";
 	
@@ -17534,7 +17537,9 @@ class Music extends EventTarget {
 			}
 	
 			Section.prototype.addMotif = function(params, urls){
-				return defaultInstance.addMotif(params, urls, this);
+				let motif = defaultInstance.addMotif(params, urls, this);
+				this.stingers.push(motif);
+				return motif;
 			}
 	
 	
@@ -17775,7 +17780,7 @@ class Music extends EventTarget {
 	
 			Section.prototype.getMaxLeadInUpbeatOffset = function(selector){
 				var minOffset = 0;
-				let targetLeadins = this.leadIns.filter(leadIn => leadIn.tags.includes(selector));
+				let targetLeadins = [...this.leadIns, ...this.stingers].filter(leadIn => leadIn.tags.includes(selector.substr(1)));
 				if(targetLeadins.length){
 					targetLeadins.forEach(leadIn => {
 						minOffset = Math.min(minOffset, leadIn.getMinUpbeatOffset());
@@ -18473,7 +18478,7 @@ class Music extends EventTarget {
 				}
 				
 				// use setting from parent section if not set for the leadin
-				this.changeOnNext = this.parentObj.divisionToTime(this.parameters.cuePoint || this.parentObj.parameters.cuePoint);
+				this.parameters.cuePoint = this.parentObj.divisionToTime(this.parameters.cuePoint || this.parentObj.parameters.cuePoint);
 				this.parameters.length = this.parentObj.divisionToTime(this.parameters.length);
 	
 				// this.parameters.length
@@ -18534,10 +18539,11 @@ class Music extends EventTarget {
 						// 	obj.changeOnNext = this.parentObj.divisionToTime(this.parameters.changeOnNext);
 						// }
 
-						if(obj.changeOnNext != "off"){
-							// cut in the middle of a file
-							obj.changeOnNext = this.parentObj.divisionToTime(this.parameters.cuePoint);
-						}
+						// if(obj.changeOnNext != "off"){
+						// 	// cut in the middle of a file
+						// 	obj.changeOnNext = this.parentObj.divisionToTime(this.parameters.cuePoint);
+						// }
+
 
 
 
@@ -18708,7 +18714,8 @@ class Music extends EventTarget {
 						let offset = (targetSound ? targetSound.offset : 0);
 						t = (nextTime ? nextTime : Qtime) + offset;
 	
-						if(this.parameters.type != "leadIn"){
+						// if(this.parameters.type != "leadIn"){
+						if(!this.parameters.cuePoint){
 	
 							// Motifs are always synchronized with the next section change.
 							// Leadins are only played if they fit BEFORE the 
@@ -18725,9 +18732,9 @@ class Music extends EventTarget {
 							if(t < currentTime){ //} - timeWindow){ 2023-10-17
 								
 								
-								// If a leadin has changeOnNext set, then make a cut-in
+								// If a leadin has cuePoint set, then make a cut-in
 								// t += Q; // next Q-point i.e. bar
-								let ChOn = targetSound.changeOnNext || this.changeOnNext;
+								let ChOn = this.parameters.cuePoint;
 								if(ChOn){
 									t += this.getMaxUpbeatOffset();
 									let nrOfChOn = parseInt(timeToQ / ChOn);
@@ -18813,7 +18820,7 @@ class Music extends EventTarget {
 						
 					waxml.log([label, 
 						description, 
-						"changeOnNext: " + this.parameters.cuePoint,
+						"cuePoint: " + this.parameters.cuePoint,
 						posObjectToString(pos)
 					]);
 	
@@ -18967,6 +18974,7 @@ class Music extends EventTarget {
 	
 				var newMotif = new Motif(params, section);
 				myInstance.motifs.push(newMotif);
+				myInstance.stingers.push(newMotif);
 	
 	
 				return newMotif;
@@ -18988,7 +18996,9 @@ class Music extends EventTarget {
 	
 			Motif.prototype.getMinUpbeatOffset = function(){
 	
-				var minOffset = -this.changeOnNext; // || sound.offset; // -this.getBarDuration();
+				// var minOffset = -this.changeOnNext; // || sound.offset; // -this.getBarDuration();
+
+				var minOffset = -this.parameters.cuePoint || -this.changeOnNext || 0;
 				
 				this.sounds.forEach(sound => {
 					if(sound){
@@ -19407,6 +19417,7 @@ class Music extends EventTarget {
 				motif.remove();
 			});
 			this.motifs = [];
+			this.stingers = [];
 
 			this.busses.forEach(bus => {
 				bus.remove();
@@ -21013,6 +21024,7 @@ class Music extends EventTarget {
 				if(params.motifID){
 					if(!targetObj.motifs){
 						targetObj.motifs = [];
+						targetObj.stingers = [];
 					}
 					var motif = getObjectFromParam(targetObj.motifs, "id", params.motifID);
 					if(!motif){
@@ -21465,6 +21477,7 @@ class Music extends EventTarget {
 					
 					myInstance.sections = [];
 					myInstance.motifs = [];
+					myInstance.stingers = [];
 
 					myInstance.parameters.tempo = parseFloat(musicStructure.getAttribute("tempo")) || 120;
 					myInstance.parameters.timeSign = getTimeSign(musicStructure.getAttribute("timeSign") || "4/4");

@@ -255,42 +255,79 @@ export function minimumTotalDuration(info) {
 }
 
 // A <Stinger> isn't placed on the Section's own timeline — it can trigger at
-// any moment during live playback — but its `quantize` attribute (same
-// grammar as length: "bar", "beat", a bar count, or a fraction) says how
-// far a trigger has to wait for the next musically-sound moment to
-// actually start. For a static preview (per Hans), that's shown as "if
-// triggered right at bar 1, where does it land": one quantize-unit's
-// duration after bar 1, minus one whole bar (Hans, having seen it rendered —
-// quantize="bar" now lands on bar 1 itself rather than bar 2; quantize="beat"
-// -> beat 2 of bar 1 minus a bar, i.e. into the pre-roll, etc., the same flat
-// shift applied uniformly regardless of the quantize unit). An absent
-// quantize is 0 (matching every other missing division value in this app)
-// before that same -1 bar shift.
-export function readStingerQuantizePosition(stingerNode, info) {
-	return parseDivision(stingerNode.attributes.quantize, info) - info.barDuration;
+// any moment during live playback — but its `syncTo` attribute (same
+// grammar as length: "bar", "beat", a bar count, or a fraction — renamed
+// from the schema's old "quantize" name, per Hans 2026-09-07/2026-09-15: the
+// *app* kept reading/writing the old attribute name here even after the
+// schema itself was renamed, so a dragged anchor was silently writing an
+// attribute the schema no longer declares) says how far a trigger has to
+// wait for the next musically-sound moment to actually start. For a static
+// preview (per Hans), that's shown as "if triggered right at bar 1, where
+// does it land": one syncTo-unit's duration after bar 1, minus one whole bar
+// (Hans, having seen it rendered — syncTo="bar" now lands on bar 1 itself
+// rather than bar 2; syncTo="beat" -> beat 2 of bar 1 minus a bar, i.e. into
+// the pre-roll, etc., the same flat shift applied uniformly regardless of
+// the unit). An absent syncTo is 0 (matching every other missing division
+// value in this app) before that same -1 bar shift.
+export function readStingerSyncToPosition(stingerNode, info) {
+	return parseDivision(stingerNode.attributes.syncTo, info) - info.barDuration;
 }
 
-// Inverse of readStingerQuantizePosition — for writing a new `quantize` from
-// a dragged anchor position (see wa-section-view.js). Quantizes to the
+// Inverse of readStingerSyncToPosition — for writing a new `syncTo` from a
+// dragged anchor position (see wa-section-view.js). Quantizes to the
 // nearest gridBeats-beat grid first, then expresses that as a bar count when
 // it lands on a whole number of bars (matching Hans's own "bar"/"1"
 // vocabulary), otherwise as an "N/denominator" fraction — the same fraction
-// grammar that makes quantize="1/4" equivalent to quantize="beat" in a
+// grammar that makes syncTo="1/4" equivalent to syncTo="beat" in a
 // quarter-note meter, generalized to any beat count.
-export function secondsToQuantizeString(anchorPositionSeconds, info, gridBeats = 1) {
-	const quantizeDurationSeconds = anchorPositionSeconds + info.barDuration;
+export function secondsToSyncToString(anchorPositionSeconds, info, gridBeats = 1) {
+	const syncToDurationSeconds = anchorPositionSeconds + info.barDuration;
 	if (!gridBeats) {
 		// The grid-resolution menu's "off" — no snapping at all, so this can't
 		// be expressed as a clean bar-count/fraction the way every other
 		// branch here is; a plain seconds value (parseDivision's own "Xs"
 		// branch) round-trips exactly instead, at whatever precision the drag
 		// actually landed on.
-		return `${Math.max(0, Math.round(quantizeDurationSeconds * 1000) / 1000)}s`;
+		return `${Math.max(0, Math.round(syncToDurationSeconds * 1000) / 1000)}s`;
 	}
-	const beatCount = Math.max(0, Math.round(quantizeDurationSeconds / info.beatDuration / gridBeats) * gridBeats);
+	const beatCount = Math.max(0, Math.round(syncToDurationSeconds / info.beatDuration / gridBeats) * gridBeats);
 	if (beatCount === 0) return "0";
 	if (beatCount % info.timeSign.numerator === 0) return String(beatCount / info.timeSign.numerator);
 	return `${beatCount}/${info.timeSign.denominator}`;
+}
+
+// Inverse of parseDivision, for writing a `length` grid-snapped from a
+// dragged resize handle (see wa-section-view.js's _buildLengthResizeHandle) —
+// unlike secondsToLengthString above (used for an already-decoded, one-off
+// duration where a plain seconds value is the natural, unambiguous choice),
+// a *dragged* length is inherently musical: a bar count when it lands on a
+// whole number of bars, otherwise an N/denominator fraction. Per Hans
+// (2026-09-15): dragging a <Stinger>'s (or a <Segment>'s) right edge should
+// write a musical fraction like "2/4"/"3/8"/"7/16", not a raw seconds value.
+//
+// Counts in whole *grid units* (gridBeats each), not whole beats — a
+// sub-beat grid (gridBeats < 1, e.g. 0.25 for "1/16") lands on a fractional
+// *beat* count in general, which a beat-denominator fraction can't express
+// cleanly (e.g. 7.75 beats as "7.75/4" — not wrong per parseDivision's own
+// decimal-numerator tolerance, but not the clean whole-numerator notation
+// Hans's own examples show either). Scaling the denominator by 1/gridBeats
+// instead (so the numerator is always a whole grid-unit count) gives exactly
+// that: gridBeats=0.25 in 4/4 time is a sixteenth note by construction
+// (timeSign.denominator / gridBeats = 4 / 0.25 = 16), so an 8-unit count
+// there is cleanly "8/16", not "2/4" restated with noise.
+export function secondsToLengthFractionString(durationSeconds, info, gridBeats = 1) {
+	if (!gridBeats) {
+		// The grid-resolution menu's "off" — see secondsToSyncToString's own
+		// identical fallback.
+		return secondsToLengthString(durationSeconds);
+	}
+	const unitCount = Math.max(1, Math.round(durationSeconds / info.beatDuration / gridBeats));
+	const beatCount = unitCount * gridBeats;
+	if (Math.abs(beatCount % info.timeSign.numerator) < 1e-9) {
+		return String(Math.round(beatCount / info.timeSign.numerator));
+	}
+	const fractionDenominator = Math.round(info.timeSign.denominator / gridBeats);
+	return `${unitCount}/${fractionDenominator}`;
 }
 
 // upbeat and pos both nudge a Stinger/Option away from its quantize point —
@@ -327,7 +364,7 @@ export function readOptionDelayOffset(node, info) {
 // This is the inverse, for writing a new `delay` from a dragged pixel/time
 // offset (seconds relative to the Stinger's own anchor - positive = later).
 // Quantizes to the nearest gridBeats-beat grid first (same convention as
-// secondsToPosString/secondsToQuantizeString), then expresses that as an
+// secondsToPosString/secondsToSyncToString), then expresses that as an
 // "N/D" fraction of a whole note — matching parseDivision's own grammar,
 // where a full beat is 1/timeSign.denominator of a whole note, so D is
 // timeSign.denominator scaled down by however many grid-steps fit in one
