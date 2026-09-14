@@ -200,10 +200,18 @@ class PlayerStore extends EventTarget {
 	// without stopping whatever else is already sounding) — but merely
 	// selecting a Section while stopped just arms the field for the next
 	// manual Play.
+	//
+	// sectionId is only ever *set*, never cleared, here — same reasoning as
+	// trigShortcut's own identical guard (see there): this runs on every
+	// single xmlStore selection change via _maybeUpdateTriggerSelectorFromSelection,
+	// including selecting something that ISN'T a Section (a Layer, a
+	// Command, anything) while merely browsing/editing — that must not
+	// silently stop wa-section-view.js's own position-pointer tracking for
+	// whatever Section is actually still playing. Per Hans (2026-09-15).
 	setTriggerSelector(selector, sectionId = null) {
 		const sectionChanged = sectionId !== null && sectionId !== this.activeSectionId;
 		this.triggerSelector = selector;
-		this.activeSectionId = sectionId;
+		if (sectionId !== null) this.activeSectionId = sectionId;
 		if (this.isPlaying && sectionChanged) {
 			try {
 				bridge.trig(selector);
@@ -244,14 +252,30 @@ class PlayerStore extends EventTarget {
 	// itself targets". `sectionId`, when the caller knows the selector
 	// resolves to an actual <Section> (e.g. wa-composition-view.js's own
 	// _triggerSection), keeps activeSectionId in sync the same way
-	// setTriggerSelector's own selection-driven path does; omit it (null)
-	// for anything else. Loads the document first if it isn't already, so a
-	// shortcut works even before the main PLAY button has ever been pressed.
+	// setTriggerSelector's own selection-driven path does.
+	//
+	// Every *other* caller omits it (null) — activeSectionId is left
+	// UNCHANGED in that case, not reset to null: a Stinger's own play
+	// button, a ruler click, or a Command shortcut fired while a Section is
+	// already the active playback target must not stop that Section's own
+	// wa-section-view.js from tracking itself as playing (isThisSectionPlaying
+	// there checks activeSectionId === its own section id) — that view's
+	// whole position-pointer animation (both the main playhead and any
+	// Stinger's own live pointer, see _updatePlayheadVisual/
+	// _updateStingerPointers) silently stopped the instant *any* of those
+	// fired, including a Stinger trigging *itself*, since _triggerStinger
+	// only starts animating its own pointer `if (this._isPlaying)` — which
+	// this reset had just, moments earlier in the very same call, made
+	// false. Per Hans (2026-09-15): "positionPointer rör sig inte varken
+	// bland Layer eller Stinger."
+	//
+	// Loads the document first if it isn't already, so a shortcut works even
+	// before the main PLAY button has ever been pressed.
 	async trigShortcut(selector, sectionId = null) {
 		if (!selector || !xmlStore.root) return;
 		if (!this._documentLoaded) await this._reloadDocument();
 		this.triggerSelector = selector;
-		this.activeSectionId = sectionId;
+		if (sectionId !== null) this.activeSectionId = sectionId;
 		bridge.trig(selector);
 		this.isPlaying = true;
 		this._emit();

@@ -3294,7 +3294,15 @@ export class WaSectionView extends HTMLElement {
 				const laneRect = lane.getBoundingClientRect();
 				const rawSeconds = this._pxToTime(moveEvt.clientX - laneRect.left + lane.scrollLeft, info);
 				const gridBeats = this._effectiveGridBeats(info) || 1;
-				const beatCount = Math.max(1, Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats);
+				// Floored at one grid unit (not a whole beat) — per Hans
+				// (2026-09-15): "det går inte att dra ... loopEnd till vänster
+				// om 1.2.00 [1 whole beat past bar 1]. Det behöver gå att dra
+				// den ända ner till 1.1.25" (a quarter-beat, i.e. one "1/16"
+				// grid unit, past bar 1 at the default resolution). The old
+				// `Math.max(1, ...)` floor was hardcoded to a whole beat
+				// regardless of the actual grid resolution in use, making the
+				// marker undraggable past that point even at a finer grid.
+				const beatCount = Math.max(gridBeats, Math.round(rawSeconds / info.beatDuration / gridBeats) * gridBeats);
 				pendingSeconds = beatCount * info.beatDuration;
 				marker.style.left = `${this._timeToPx(pendingSeconds, info)}px`;
 			};

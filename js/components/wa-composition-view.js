@@ -101,6 +101,29 @@ function transitionClass(fromNode, toNode) {
 const GRID_RESOLUTIONS_BEATS = [1, 0.5, 1 / 3, 0.25, 1 / 6, 0.125];
 const MIN_GRID_SPACING_PX = 6;
 
+// A Section's own displayed duration — both its box width here and its loop
+// circle's own animation duration (see _populateLoopCircle) — has to be the
+// same regardless of how long its underlying audio file(s) actually are,
+// whenever it loops: if any of its Layers has an effective loopEnd (its
+// own, or inherited from this Section/the Composition — see
+// readEffectiveLoopEnd), the audio just repeats within that window, so two
+// Sections sharing the same loopEnd must render at the same width. Using
+// the raw content duration unconditionally (sectionContentDuration alone)
+// made Sections with identical loopEnd render at different widths purely
+// because their src files happened to differ in length — read by Hans
+// (2026-09-15) as "Sections have different lengths depending on content."
+// Falls back to the Section's own raw content duration only when nothing
+// anywhere in the chain specifies a loopEnd.
+function sectionLoopedDuration(sectionNode, info, compositionNode) {
+	let maxLoopEnd = null;
+	getLayers(sectionNode).forEach((layer) => {
+		const loopEnd = readEffectiveLoopEnd(layer, sectionNode, compositionNode, info);
+		if (loopEnd !== null && (maxLoopEnd === null || loopEnd > maxLoopEnd)) maxLoopEnd = loopEnd;
+	});
+	if (maxLoopEnd !== null) return maxLoopEnd;
+	return sectionContentDuration(sectionNode, info) || info.barDuration;
+}
+
 // Pure layout: turns a <Composition>'s children into a flat list of boxes
 // (regular Sections, transitions, "+" buttons) plus a parallel list of
 // ruler columns (one per x-range slot, including blank gaps), all in
@@ -161,7 +184,7 @@ function computeLayout(compositionNode) {
 			cursor = columnEnd;
 		}
 
-		const sectionDuration = sectionContentDuration(section, sectionInfo) || sectionInfo.barDuration;
+		const sectionDuration = sectionLoopedDuration(section, sectionInfo, compositionNode);
 		cells.push({ kind: "section", node: section, info: sectionInfo, startSeconds: cursor, durationSeconds: sectionDuration, row: 0 });
 		columns.push({ kind: "section", node: section, info: sectionInfo, startSeconds: cursor, durationSeconds: sectionDuration });
 		cursor += sectionDuration;
@@ -296,7 +319,7 @@ template.innerHTML = `
 		   linear span — its own Layers/waveforms aren't shown (per Hans,
 		   2026-09-08: "inte ha sina <Layer>s synliga"); instead a spinning
 		   ring/dot represents the loop, one full revolution per the
-		   Section's own loop length (see _loopCycleSeconds), mirroring
+		   Section's own loop length (see sectionLoopedDuration), mirroring
 		   Logic/Ableton's loop-clip convention. Only actually spins while
 		   *this* Section is the one really playing (see .spinning /
 		   _updateLoopCircles) — otherwise it sits paused straight up
@@ -808,18 +831,30 @@ export class WaCompositionView extends HTMLElement {
 		this._rows.style.width = `${totalWidth}px`;
 		this._rows.style.height = `${totalHeight}px`;
 
+		const circleTargets = [];
 		layout.cells.forEach((cell) => {
 			if (cell.kind === "section") {
 				const box = this._buildSectionBox(cell, node);
 				this._rows.appendChild(box);
-				// Sized only once actually connected to the live DOM — see
-				// _populateLoopCircle's own comment for why (clientWidth/
-				// clientHeight of a still-detached element always read 0).
-				this._populateLoopCircle(box.querySelector(".loop-circle-wrap"), cell, node);
+				circleTargets.push({ wrap: box.querySelector(".loop-circle-wrap"), cell });
 			} else if (cell.kind === "transition") this._rows.appendChild(this._buildTransitionBox(cell, layout));
 			else if (cell.kind === "plus") this._rows.appendChild(this._buildPlusButton(cell, node));
 		});
-		this._updateLoopCircles();
+		// Deferred a frame — being connected to *this* component's own shadow
+		// DOM isn't enough on its own (per _populateLoopCircle's own comment
+		// about clientWidth/clientHeight reading 0 while detached): this whole
+		// render can run while wa-preview.js's own panel switch to
+		// "composition" (display:none -> block) hasn't visually applied yet,
+		// same "not-yet-laid-out" problem _needsInitialScroll's own rAF below
+		// already works around — without this, every circle sized on the
+		// very first render of a freshly-selected Composition came out
+		// ~0px (clamped by the Math.max(0, ...) below), invisible until
+		// something else (e.g. clicking a Section) triggered a second render
+		// after the panel was actually visible. Read by Hans (2026-09-15).
+		requestAnimationFrame(() => {
+			circleTargets.forEach(({ wrap, cell }) => this._populateLoopCircle(wrap, cell, node));
+			this._updateLoopCircles();
+		});
 
 		// Scrolls the fixed pre-roll pad out of view once per newly-selected
 		// Composition — see _wireEdgeDrag's own use of LEFT_PAD_PX for why
@@ -975,9 +1010,11 @@ export class WaCompositionView extends HTMLElement {
 	// (zoomed far out vertically), where the box-label's own height eats a
 	// larger *proportion* of the box, leaving less room than the guess
 	// assumed, and the ring spilled out past the Section box's own bottom
-	// edge. Must run after circleWrap is connected to the live DOM
-	// (clientWidth/clientHeight of a still-detached element always read 0).
-	// Per Hans (2026-09-08).
+	// edge. Must run after circleWrap is not just connected to the live DOM
+	// but actually laid out (clientWidth/clientHeight read 0 for either a
+	// detached element or one whose ancestor is still display:none) — see
+	// _renderComposition's own requestAnimationFrame around this call.
+	// Per Hans (2026-09-08, deferral fix 2026-09-15).
 	_populateLoopCircle(circleWrap, cell, compositionNode) {
 		if (!circleWrap) return;
 		// clientWidth/clientHeight are the wrap's padding-BOX size (content
@@ -996,7 +1033,7 @@ export class WaCompositionView extends HTMLElement {
 		circle.dataset.sectionId = cell.node.id;
 		circle.style.width = `${size}px`;
 		circle.style.height = `${size}px`;
-		circle.style.animationDuration = `${this._loopCycleSeconds(cell.node, cell.info, compositionNode)}s`;
+		circle.style.animationDuration = `${sectionLoopedDuration(cell.node, cell.info, compositionNode)}s`;
 		circle.title = "Loops indefinitely until another Section is triggered";
 		const dot = document.createElement("div");
 		dot.className = "loop-circle-dot";
@@ -1020,24 +1057,6 @@ export class WaCompositionView extends HTMLElement {
 			this._triggerSection(cell.node);
 		});
 		circleWrap.appendChild(playBtn);
-	}
-
-	// One revolution = the longest effective loopEnd among this Section's
-	// own Layers (readEffectiveLoopEnd already resolves the
-	// Composition->Section->Layer inheritance chain, per section-model.js)
-	// — falling back to the Section's own raw content duration (cell.info's
-	// caller already computed this as cell.durationSeconds; sectionContentDuration
-	// recomputes the same thing here since only the node/info are on hand)
-	// when no Layer has an explicit loopEnd anywhere in the chain, so the
-	// circle still has *some* sensible, non-zero cycle length.
-	_loopCycleSeconds(sectionNode, info, compositionNode) {
-		let maxLoopEnd = null;
-		getLayers(sectionNode).forEach((layer) => {
-			const loopEnd = readEffectiveLoopEnd(layer, sectionNode, compositionNode, info);
-			if (loopEnd !== null && (maxLoopEnd === null || loopEnd > maxLoopEnd)) maxLoopEnd = loopEnd;
-		});
-		if (maxLoopEnd !== null) return maxLoopEnd;
-		return sectionContentDuration(sectionNode, info) || info.barDuration;
 	}
 
 	// A quick, static waveform preview inside a Layer's own chip — mirrors
