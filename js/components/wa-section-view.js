@@ -2824,9 +2824,16 @@ export class WaSectionView extends HTMLElement {
 	_buildLayerControls(node, siblings) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-controls";
-		wrap.appendChild(this._buildGainFader(node));
-		wrap.appendChild(this._buildMuteButton(node));
-		wrap.appendChild(this._buildSoloButton(node, siblings));
+		// Volume fader, Mute and Solo temporarily hidden for <Layer> — per
+		// Hans (2026-09-15): "De funkar inte och jag hinner inte titta på det
+		// just nu." Stinger keeps all four (not reported as broken, and this
+		// function is shared between the two — see the class comment above).
+		// Revisit/remove this guard once fixed.
+		if (node.tagName !== "Layer") {
+			wrap.appendChild(this._buildGainFader(node));
+			wrap.appendChild(this._buildMuteButton(node));
+			wrap.appendChild(this._buildSoloButton(node, siblings));
+		}
 		wrap.appendChild(this._buildOutputButton(node));
 		return wrap;
 	}
