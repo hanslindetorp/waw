@@ -1,7 +1,7 @@
 import { vfs, ROOT_ID } from "../vfs/VFS.js";
 import { importZip } from "../vfs/zip-import.js";
 import { selection } from "../state/selection.js";
-import { VFS_FILE_DRAG_TYPE, vfsDragState } from "../vfs/drag-types.js";
+import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
 import { STATE_FILE_NAME } from "../project/workstation-state.js";
 
 // Image extensions added (2026-09-10) so a project thumbnail — used by the
@@ -83,8 +83,12 @@ template.innerHTML = `
 		li.file > .node-row:hover {
 			background: #262626;
 		}
-		li.file.selected > .node-row {
+		li.file.selected > .node-row,
+		li.folder.selected > .node-row {
 			background: #234b73;
+		}
+		li.folder > .node-row {
+			cursor: pointer;
 		}
 		li.folder > .node-row.drop-target {
 			background: rgba(79, 163, 255, 0.18);
@@ -181,6 +185,17 @@ export class WaFileManager extends HTMLElement {
 		this._emptyHint = this.shadowRoot.querySelector(".empty-hint");
 		this._fileInput = this.shadowRoot.querySelector(".file-input");
 		this._collapsedIds = new Set();
+		// Multi-selection (Finder/Explorer-style Ctrl/Cmd/Shift-click) — kept
+		// separate from `selection` (state/selection.js), which is the shared
+		// single "currently active" file used cross-component (drives the
+		// file preview panel etc.). `selection` still gets updated to whatever
+		// was last clicked (see _setActiveSelection) so that behavior keeps
+		// working unchanged; `_selectedIds` is this component's own richer
+		// state, used for the multi-row highlight and for what a drag actually
+		// carries. Per Hans (2026-09-15).
+		this._selectedIds = new Set();
+		this._selectionAnchorId = null; // last plain-clicked row — the fixed end for a subsequent Shift-click range
+		this._isLocalSelectionUpdate = false; // guards against _onExternalSelectionChange undoing our own selection.select() call
 		this._onDragOver = this._onDragOver.bind(this);
 		this._onDragLeave = this._onDragLeave.bind(this);
 		this._onDrop = this._onDrop.bind(this);
@@ -198,8 +213,17 @@ export class WaFileManager extends HTMLElement {
 		this.addEventListener("dragleave", this._onDragLeave);
 		this.addEventListener("drop", this._onDrop);
 
+		// Clicking empty space in the dropzone (not any row) clears the
+		// multi-selection, same as clicking blank space in a real file
+		// picker — the row's own click handler (_handleRowClick) already
+		// stops this from firing when the click actually lands on a row.
+		this.shadowRoot.querySelector(".dropzone").addEventListener("click", (e) => {
+			if (e.target.closest(".node-row")) return;
+			this._clearFileSelection();
+		});
+
 		vfs.addEventListener("change", () => this.render());
-		selection.addEventListener("change", (e) => this._highlightSelection(e.detail.id));
+		selection.addEventListener("change", (e) => this._onExternalSelectionChange(e.detail.id));
 
 		this.render();
 	}
@@ -221,9 +245,9 @@ export class WaFileManager extends HTMLElement {
 		// missed every folder row (empty space, or onto a file) reaches here
 		// — treat that as "move to the top level", same as dropping between
 		// icons in Finder's list view.
-		const draggedId = e.dataTransfer.getData(VFS_FILE_DRAG_TYPE);
-		if (draggedId) {
-			this._moveNode(draggedId, ROOT_ID);
+		const draggedIds = getDraggedFileIds(e.dataTransfer);
+		if (draggedIds.length > 0) {
+			draggedIds.forEach((id) => this._moveNode(id, ROOT_ID));
 			return;
 		}
 		this._handleFiles(e.dataTransfer.files, ROOT_ID);
@@ -255,7 +279,13 @@ export class WaFileManager extends HTMLElement {
 		this._tree.innerHTML = "";
 		this._tree.appendChild(this._renderChildren(ROOT_ID));
 		this._emptyHint.style.display = this._visibleChildren(ROOT_ID).length === 0 ? "" : "none";
-		this._highlightSelection(selection.id);
+		// Prune any selected id that no longer exists (e.g. it was just
+		// deleted, or moved away as part of the very change that triggered
+		// this render) before re-painting the highlight.
+		[...this._selectedIds].forEach((id) => {
+			if (!vfs.getNode(id)) this._selectedIds.delete(id);
+		});
+		this._updateSelectionHighlight();
 	}
 
 	// workstation-state.json lives at the project root like any other VFS
@@ -266,17 +296,34 @@ export class WaFileManager extends HTMLElement {
 		return vfs.listFolder(folderId).filter((n) => !(folderId === ROOT_ID && n.name === STATE_FILE_NAME));
 	}
 
-	_renderChildren(folderId) {
-		const fragment = document.createDocumentFragment();
-		const children = [...this._visibleChildren(folderId)].sort((a, b) =>
+	// Same ordering _renderChildren lays rows out in (folders first, then
+	// alphabetical within each type) — shared so a Shift-click range
+	// (_flattenVisibleIds) walks ids in exactly the order they're visually
+	// stacked.
+	_sortedChildren(folderId) {
+		return [...this._visibleChildren(folderId)].sort((a, b) =>
 			a.type === b.type ? a.name.localeCompare(b.name) : a.type === "folder" ? -1 : 1
 		);
+	}
 
-		children.forEach((node) => {
+	_renderChildren(folderId) {
+		const fragment = document.createDocumentFragment();
+		this._sortedChildren(folderId).forEach((node) => {
 			fragment.appendChild(node.type === "folder" ? this._renderFolderNode(node) : this._renderFileNode(node));
 		});
-
 		return fragment;
+	}
+
+	// Depth-first, visibility-respecting (collapsed folders' children are
+	// skipped) flat id order — the same order rows actually render in, used
+	// by a Shift-click to select every row between the anchor and the
+	// clicked one, same convention as wa-xml-tree.js's own _flatten.
+	_flattenVisibleIds(folderId = ROOT_ID, out = []) {
+		this._sortedChildren(folderId).forEach((node) => {
+			out.push(node.id);
+			if (node.type === "folder" && !this._collapsedIds.has(node.id)) this._flattenVisibleIds(node.id, out);
+		});
+		return out;
 	}
 
 	_renderFolderNode(node) {
@@ -319,6 +366,7 @@ export class WaFileManager extends HTMLElement {
 			e.stopPropagation();
 			this._promptUploadInto(node.id);
 		});
+		row.addEventListener("click", (e) => this._handleRowClick(e, node));
 		this._wireRename(row, node);
 		this._wireDelete(row, node);
 		this._wireDragSource(row, node);
@@ -355,7 +403,7 @@ export class WaFileManager extends HTMLElement {
 			</span>
 		`;
 		row.querySelector(".name").textContent = node.name;
-		row.addEventListener("click", () => selection.select(node.id));
+		row.addEventListener("click", (e) => this._handleRowClick(e, node));
 
 		this._wireDragSource(row, node);
 		this._wireRename(row, node);
@@ -431,25 +479,43 @@ export class WaFileManager extends HTMLElement {
 	// Both files and folders can be dragged to reorganize the tree (dropped
 	// onto a folder row, or onto empty space / a file to land at the top
 	// level — see _onDrop). The same custom type already used to drag a file
-	// out onto the XML editor (wa-xml-tree.js) carries the id here too —
+	// out onto the XML editor (wa-xml-tree.js) carries the id(s) here too —
 	// that drop handler already ignores anything that isn't a `file` node,
 	// so reusing it for folder drags is safe.
+	//
+	// Dragging a row that's part of the current multi-selection carries the
+	// *whole* selection (per Hans, 2026-09-15: "Om man drar flera filer till
+	// en mapp ska alla flyttas") — dragging a row that ISN'T selected first
+	// collapses the selection down to just that row, same as a real file
+	// picker (dragging an unselected item drags only it, not whatever else
+	// happened to be selected before).
 	_wireDragSource(row, node) {
 		row.draggable = true;
 		row.addEventListener("dragstart", (e) => {
 			e.stopPropagation();
+			if (!this._selectedIds.has(node.id)) {
+				this._selectedIds = new Set([node.id]);
+				this._selectionAnchorId = node.id;
+				this._updateSelectionHighlight();
+				this._setActiveSelection(node.id);
+			}
+			const draggedNodes = [...this._selectedIds].map((id) => vfs.getNode(id)).filter(Boolean);
 			// Folders can only be moved within the file manager — unlike a
 			// file, they can't be dropped onto the XML editor to set a src
 			// attribute (wa-xml-tree.js's own drop handler already ignores
-			// non-file nodes), so only offer "copy" for files. This makes the
-			// browser show an honest "not allowed" cursor over the XML editor
-			// while dragging a folder, instead of a misleading "allowed" one.
-			e.dataTransfer.effectAllowed = node.type === "file" ? "copyMove" : "move";
-			e.dataTransfer.setData(VFS_FILE_DRAG_TYPE, node.id);
-			vfsDragState.fileId = node.type === "file" ? node.id : null;
+			// non-file nodes), so only offer "copy" when at least one actual
+			// file is part of the drag. This makes the browser show an honest
+			// "not allowed" cursor over the XML editor while dragging only
+			// folders, instead of a misleading "allowed" one.
+			e.dataTransfer.effectAllowed = draggedNodes.some((n) => n.type === "file") ? "copyMove" : "move";
+			e.dataTransfer.setData(VFS_FILE_DRAG_TYPE, JSON.stringify(draggedNodes.map((n) => n.id)));
+			const fileIds = draggedNodes.filter((n) => n.type === "file").map((n) => n.id);
+			vfsDragState.fileIds = fileIds;
+			vfsDragState.fileId = fileIds[0] || null;
 		});
 		row.addEventListener("dragend", () => {
 			vfsDragState.fileId = null;
+			vfsDragState.fileIds = [];
 		});
 	}
 
@@ -470,7 +536,7 @@ export class WaFileManager extends HTMLElement {
 			e.preventDefault();
 			e.stopPropagation();
 			row.classList.remove("drop-target");
-			this._moveNode(e.dataTransfer.getData(VFS_FILE_DRAG_TYPE), node.id);
+			getDraggedFileIds(e.dataTransfer).forEach((id) => this._moveNode(id, node.id));
 		});
 	}
 
@@ -498,9 +564,73 @@ export class WaFileManager extends HTMLElement {
 		input.click();
 	}
 
-	_highlightSelection(selectedId) {
-		this._tree.querySelectorAll("li.file").forEach((li) => {
-			li.classList.toggle("selected", li.dataset.id === selectedId);
+	// Finder/Explorer-style click handling for both file and folder rows —
+	// plain click selects just this row (and sets it as the anchor for a
+	// later Shift-click); Cmd/Ctrl-click toggles it in/out of the selection;
+	// Shift-click selects the *visible* range from the last plain-clicked
+	// anchor to this row (_flattenVisibleIds already respects collapsed
+	// folders, matching render order). Mirrors wa-xml-tree.js's own
+	// _handleRowClick. Per Hans (2026-09-15): "Det ska gå att multi-markera
+	// flera filer (som i en vanlig filväljare)."
+	_handleRowClick(e, node) {
+		if (e.shiftKey && this._selectionAnchorId) {
+			const orderedIds = this._flattenVisibleIds();
+			const anchorIndex = orderedIds.indexOf(this._selectionAnchorId);
+			const clickedIndex = orderedIds.indexOf(node.id);
+			if (anchorIndex !== -1 && clickedIndex !== -1) {
+				const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
+				this._selectedIds = new Set(orderedIds.slice(from, to + 1));
+				this._updateSelectionHighlight();
+				this._setActiveSelection(node.id);
+				return;
+			}
+		}
+		if (e.metaKey || e.ctrlKey) {
+			if (this._selectedIds.has(node.id)) this._selectedIds.delete(node.id);
+			else this._selectedIds.add(node.id);
+			this._selectionAnchorId = node.id;
+			this._updateSelectionHighlight();
+			this._setActiveSelection(node.id);
+			return;
+		}
+		this._selectedIds = new Set([node.id]);
+		this._selectionAnchorId = node.id;
+		this._updateSelectionHighlight();
+		this._setActiveSelection(node.id);
+	}
+
+	_clearFileSelection() {
+		if (this._selectedIds.size === 0) return;
+		this._selectedIds.clear();
+		this._selectionAnchorId = null;
+		this._updateSelectionHighlight();
+		this._setActiveSelection(null);
+	}
+
+	// Keeps the shared cross-component `selection` (state/selection.js) in
+	// sync with whatever was last clicked here — _isLocalSelectionUpdate
+	// stops the resulting "change" event (_onExternalSelectionChange) from
+	// immediately collapsing the multi-selection this same click just built.
+	_setActiveSelection(id) {
+		this._isLocalSelectionUpdate = true;
+		selection.select(id);
+		this._isLocalSelectionUpdate = false;
+	}
+
+	// Reacts to `selection` changing from *outside* this component (e.g.
+	// another view driving what's "active") by collapsing to just that one
+	// id — a multi-selection only ever exists as something this component
+	// itself built via _handleRowClick.
+	_onExternalSelectionChange(selectedId) {
+		if (this._isLocalSelectionUpdate) return;
+		this._selectedIds = selectedId ? new Set([selectedId]) : new Set();
+		this._selectionAnchorId = selectedId || null;
+		this._updateSelectionHighlight();
+	}
+
+	_updateSelectionHighlight() {
+		this._tree.querySelectorAll("li.file, li.folder").forEach((li) => {
+			li.classList.toggle("selected", this._selectedIds.has(li.dataset.id));
 		});
 	}
 }

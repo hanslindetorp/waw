@@ -2,7 +2,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { getSchemaSrcAttributeName } from "../xml-editor/src-attribute.js";
 import { vfs } from "../vfs/VFS.js";
-import { VFS_FILE_DRAG_TYPE } from "../vfs/drag-types.js";
+import { VFS_FILE_DRAG_TYPE, getDraggedFileIds } from "../vfs/drag-types.js";
 
 const FILE_DROP_TAG = "AudioBufferSourceNode";
 const INDENT_PX = 18;
@@ -1390,7 +1390,10 @@ export class WaXmlTree extends HTMLElement {
 			}
 
 			if (isVfsFileDrag) {
-				const fileNodeId = e.dataTransfer.getData(VFS_FILE_DRAG_TYPE);
+				// Only single-file semantics here (this sets one `src`
+				// attribute) — a multi-selection dragged out of File Manager
+				// (see getDraggedFileIds) just uses the first of them.
+				const fileNodeId = getDraggedFileIds(e.dataTransfer)[0];
 				const position = this._dragState.dropPosition;
 				if (position) {
 					this._handleVfsFileDrop(node, fileNodeId, position, canAcceptFile, effectiveSrcAttrName, canInsertFileNode);

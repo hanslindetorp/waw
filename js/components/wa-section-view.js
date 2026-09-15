@@ -1,6 +1,6 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { vfs, ROOT_ID } from "../vfs/VFS.js";
-import { VFS_FILE_DRAG_TYPE, vfsDragState } from "../vfs/drag-types.js";
+import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
 import { importZip } from "../vfs/zip-import.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import {
@@ -1463,11 +1463,21 @@ export class WaSectionView extends HTMLElement {
 	// of pinch direction) — meaning horizontal zoom was effectively
 	// unreachable via the most common "pinch to zoom" gesture, only
 	// vertical ever responded (Hans, 2026-09-08: "nu funkar bara
-	// vertikal"). _onWheelZoom below falls back to deltaY driving both axes
-	// together (a uniform zoom) whenever deltaX is negligible; a genuine
-	// horizontal-only gesture (real deltaX, e.g. a dedicated horizontal
-	// scroll wheel) still zooms just that axis. The H/V buttons remain the
-	// fully independent, mouse-friendly way to zoom either axis alone.
+	// vertikal"). _onWheelZoom's rawDeltaX falls back to deltaY whenever
+	// deltaX is negligible so a pinch can still reach pxPerSecond at all —
+	// but since that means a real pinch's *single* scalar was driving both
+	// axes by roughly the same factor every time, H and V always moved
+	// together (Hans, 2026-09-15: "de sitter ihop"). With no gesture-shape
+	// signal left to separate "meant H" from "meant V" for a real pinch,
+	// _pinchAxisAt below routes by *where* the pinch happens instead (his
+	// own choice among the options offered): over the sticky label column
+	// zooms row height only, over the ruler zooms pxPerSecond only,
+	// anywhere else in the main grid zooms both together same as before. A
+	// genuine horizontal-only gesture (real deltaX, e.g. a dedicated
+	// horizontal scroll wheel) still zooms just that axis wherever axis
+	// routing allows H at all. The H/V buttons remain the fully
+	// independent, mouse-friendly way to zoom either axis alone regardless
+	// of cursor position.
 	//
 	// Horizontal zoom also keeps whatever time position is currently under
 	// the cursor visually fixed — captured (in the *old* pxPerSecond) before
@@ -1475,6 +1485,20 @@ export class WaSectionView extends HTMLElement {
 	// pxPerSecond) after _renderSection has rebuilt everything at the new
 	// scale — otherwise the content under the pointer drifts away as you
 	// zoom, per Hans (2026-09-04).
+	// Cursor-position-based pinch-zoom axis routing — see _onWheelZoom's own
+	// comment for why this exists at all. "v": over the sticky label column
+	// (any row's own name/controls, or the empty corner above it — checked
+	// by x position alone, since that column has no single element
+	// covering every row's gaps/dividers too). "h": over the ruler (the
+	// time-axis header row, one single element covering its own full
+	// width). "both": anywhere else in the main grid.
+	_pinchAxisAt(e) {
+		const scrollRect = this._scrollArea.getBoundingClientRect();
+		if (e.clientX - scrollRect.left < this._labelWidth) return "v";
+		if (e.composedPath().some((node) => node.classList?.contains("ruler"))) return "h";
+		return "both";
+	}
+
 	_onWheelZoom(e) {
 		if (!e.ctrlKey) return;
 		e.preventDefault();
@@ -1494,11 +1518,16 @@ export class WaSectionView extends HTMLElement {
 		// Negative delta = pinch out/zoom in, matching native browser
 		// page-zoom's own convention for this synthesized gesture. See the
 		// class-level comment above for why rawDeltaX falls back to deltaY.
-		const rawDeltaX = Math.abs(e.deltaX) > 0.01 ? e.deltaX : e.deltaY;
-		const factorX = Math.exp(-rawDeltaX * 0.01);
-		const factorY = Math.exp(-e.deltaY * 0.01);
-		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factorX));
-		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));
+		const axis = this._pinchAxisAt(e);
+		if (axis !== "v") {
+			const rawDeltaX = Math.abs(e.deltaX) > 0.01 ? e.deltaX : e.deltaY;
+			const factorX = Math.exp(-rawDeltaX * 0.01);
+			this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factorX));
+		}
+		if (axis !== "h") {
+			const factorY = Math.exp(-e.deltaY * 0.01);
+			this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));
+		}
 
 		this._renderSection(node);
 
@@ -2072,12 +2101,10 @@ export class WaSectionView extends HTMLElement {
 			const syncToString = secondsToSyncToString(anchorSeconds, info, this._effectiveGridBeats(info));
 
 			if (this._isFileDrag(types)) {
-				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
-				if (!fileId) return;
-				const fileNode = vfs.getNode(fileId);
-				if (!fileNode || fileNode.type !== "file") return;
+				const fileIds = await this._resolveDroppedFileIds(e.dataTransfer);
+				if (fileIds.length === 0) return;
 				const stinger = xmlStore.insertNewChild(sectionNode.id, "Stinger", { syncTo: syncToString });
-				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id) });
+				this._addOptionsToContainer(stinger.id, fileIds);
 				return;
 			}
 
@@ -2344,11 +2371,20 @@ export class WaSectionView extends HTMLElement {
 			const delayString = this._stingerDropDelayString(e, lane, basePos, info);
 
 			if (this._isFileDrag(types)) {
-				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
-				if (!fileId) return;
-				const fileNode = vfs.getNode(fileId);
-				if (!fileNode || fileNode.type !== "file") return;
-				xmlStore.insertNewChild(stinger.id, "Option", { src: vfs.getExportPath(fileNode.id), delay: delayString });
+				const fileIds = await this._resolveDroppedFileIds(e.dataTransfer);
+				const fileNodes = fileIds.map((id) => vfs.getNode(id)).filter((n) => n && n.type === "file");
+				if (fileNodes.length === 0) return;
+				// All land at the same drop position, per Hans (2026-09-15):
+				// "filerna läggas in som <Option>s i samma <Stinger> på den
+				// plats där de släpps" — same `delay` for every one of them.
+				fileNodes.forEach((fileNode) => {
+					xmlStore.insertNewChild(stinger.id, "Option", {
+						src: vfs.getExportPath(fileNode.id),
+						delay: delayString,
+						label: this._labelFromFileName(fileNode)
+					});
+				});
+				this._setLabel(stinger.id, this._labelFromFileName(fileNodes[0]));
 				return;
 			}
 
@@ -2824,16 +2860,14 @@ export class WaSectionView extends HTMLElement {
 	_buildLayerControls(node, siblings) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-controls";
-		// Volume fader, Mute and Solo temporarily hidden for <Layer> — per
-		// Hans (2026-09-15): "De funkar inte och jag hinner inte titta på det
-		// just nu." Stinger keeps all four (not reported as broken, and this
-		// function is shared between the two — see the class comment above).
-		// Revisit/remove this guard once fixed.
-		if (node.tagName !== "Layer") {
-			wrap.appendChild(this._buildGainFader(node));
-			wrap.appendChild(this._buildMuteButton(node));
-			wrap.appendChild(this._buildSoloButton(node, siblings));
-		}
+		// Volume fader, Mute and Solo temporarily hidden for both <Layer> and
+		// <Stinger> — per Hans (2026-09-15): "De funkar inte och jag hinner
+		// inte titta på det just nu" (first just for Layer, then "Ta bort för
+		// <Stinger> också" once he noticed it's the same shared function).
+		// Revisit and restore these three once fixed:
+		// wrap.appendChild(this._buildGainFader(node));
+		// wrap.appendChild(this._buildMuteButton(node));
+		// wrap.appendChild(this._buildSoloButton(node, siblings));
 		wrap.appendChild(this._buildOutputButton(node));
 		return wrap;
 	}
@@ -3385,7 +3419,16 @@ export class WaSectionView extends HTMLElement {
 			} else if (allowGrow) {
 				this._growTimelineTo(offsetSeconds + explicitLengthSeconds);
 			}
-			drawWaveform(canvas, buffer, WAVEFORM_COLOR);
+			// A loop-repeat tile is a dimmed echo of the original (see the
+			// .loop-repeat CSS) — actually drawing its waveform is a full
+			// per-sample scan over the whole buffer (see waveform.js's
+			// drawWaveform), repeated for every single tile. A Layer with a
+			// very short loopEnd relative to the section's total length can
+			// tile into the hundreds/thousands, per Hans (2026-09-15) — a real
+			// performance problem he suspected and asked to test removing
+			// this for exactly that reason. The box itself (and its correct
+			// width, from the decode above) is still shown either way.
+			if (!isRepeat) drawWaveform(canvas, buffer, WAVEFORM_COLOR);
 		});
 		return canvas;
 	}
@@ -3427,7 +3470,7 @@ export class WaSectionView extends HTMLElement {
 				}
 				const rowHeight = (laneHeight - 4) / options.length;
 				options.forEach((option, idx) => {
-					this._renderNestedOption(box, option, info, token, 0, { top: idx * rowHeight, height: rowHeight });
+					this._renderNestedOption(box, option, info, token, 0, { top: idx * rowHeight, height: rowHeight }, false, isRepeat);
 				});
 				box.appendChild(this._buildDisclosureButton(segment.id, true));
 			}
@@ -3479,7 +3522,10 @@ export class WaSectionView extends HTMLElement {
 	// isOpen branch). interactive (Stinger only, per Hans — a Segment's
 	// Options here stay a read-only preview) overrides the CSS default of
 	// pointer-events:none so a drag on this element is actually reachable.
-	_renderNestedOption(segmentBox, option, info, token, offsetSeconds, layout, interactive = false) {
+	// isRepeat (a closed Segment's own nested-Options preview, called once
+	// per loop-repeat tile — see _renderSegmentBox) skips the waveform draw,
+	// same reasoning/perf fix as _renderTimedBox's own isRepeat handling.
+	_renderNestedOption(segmentBox, option, info, token, offsetSeconds, layout, interactive = false, isRepeat = false) {
 		const explicitLength = readLength(option, info);
 		const srcAttr = findSrcAttribute(xmlStore.schema, option);
 		const resolvedUrl = srcAttr ? resolvePlayableUrl(srcAttr.value) : null;
@@ -3497,15 +3543,25 @@ export class WaSectionView extends HTMLElement {
 		applyWidth(explicitLength ?? info.barDuration * FALLBACK_BOX_BARS);
 		segmentBox.appendChild(nested);
 
+		// Shown alongside the waveform (not instead of it) — per Hans
+		// (2026-09-15): "Label ska visas på resp. <Option> i <Section>
+		// preview tillsammans med ljudvågen." Same .box-label convention
+		// every other timed box already uses.
+		const label = document.createElement("span");
+		label.className = "box-label";
+		label.textContent = this._displayLabel(option, "Option");
+		nested.appendChild(label);
+
 		if (!resolvedUrl) return nested;
-		const canvas = document.createElement("canvas");
-		nested.appendChild(canvas);
+		const canvas = isRepeat ? null : document.createElement("canvas");
+		if (canvas) nested.appendChild(canvas);
 		this._decode(resolvedUrl).then((buffer) => {
 			if (token !== this._renderToken || !buffer) return;
 			// No explicit length -> this Option's box (and any audible tail
 			// past its containing Segment's own quantized length) grows to
 			// its real duration, same as a top-level box would.
 			if (explicitLength === null) applyWidth(buffer.duration);
+			if (!canvas) return;
 			canvas.width = Math.max(nested.offsetWidth, 1);
 			canvas.height = Math.max(nested.offsetHeight, 1);
 			drawWaveform(canvas, buffer, "#45b58c");
@@ -3602,11 +3658,22 @@ export class WaSectionView extends HTMLElement {
 		applyWidth(explicitLength ?? info.barDuration * FALLBACK_BOX_BARS);
 
 		if (resolvedUrl) {
-			const canvas = document.createElement("canvas");
-			box.appendChild(canvas);
+			// No canvas at all for a loop-repeat tile (isRepeat) — see the
+			// matching comment in _renderWaveformOnly for why: a full
+			// per-sample waveform draw for every one of potentially
+			// hundreds/thousands of repeat tiles (a Layer with a short
+			// loopEnd relative to the section's length) is a real,
+			// reported performance problem. box.offsetWidth/offsetHeight
+			// below would also force a synchronous layout read per tile,
+			// on top of the draw itself — skipped along with it. The box's
+			// own width (from the decode below) still resolves normally
+			// either way.
+			const canvas = isRepeat ? null : document.createElement("canvas");
+			if (canvas) box.appendChild(canvas);
 			this._decode(resolvedUrl).then((buffer) => {
 				if (token !== this._renderToken || !buffer) return;
 				if (explicitLength === null) applyWidth(buffer.duration);
+				if (!canvas) return;
 				canvas.width = Math.max(box.offsetWidth, 1);
 				canvas.height = Math.max(box.offsetHeight, 1);
 				drawWaveform(canvas, buffer, kind === "Option" ? "#45b58c" : WAVEFORM_COLOR);
@@ -3731,29 +3798,58 @@ export class WaSectionView extends HTMLElement {
 		return types.includes(VFS_FILE_DRAG_TYPE) || types.includes(NATIVE_FILE_DRAG_TYPE);
 	}
 
-	// Resolves a drop's dataTransfer to a VFS file id, only callable at drop
-	// time (a native file drag's actual FileList isn't readable during
-	// dragover). A file already in the VFS just returns its id; a real OS
-	// file (or a batch of them, or a .zip) gets added to the VFS first —
-	// exactly what dropping it directly onto File Manager would do — then
-	// treated the same as if it had already been there. Returns the first
-	// non-zip file's id (a .zip has no single "this is the dropped file" to
-	// place in the Preview, so it's only imported, not used to create/replace
-	// anything here).
-	async _resolveDroppedFileId(dataTransfer) {
-		const existingId = dataTransfer.getData(VFS_FILE_DRAG_TYPE);
-		if (existingId) return existingId;
+	// Resolves a drop's dataTransfer to an ARRAY of VFS file ids — every one
+	// of them, not just the first, per Hans (2026-09-15): a multi-selection
+	// dragged out of File Manager (see getDraggedFileIds) should all land
+	// together, not just whichever happened to be first. Only callable at
+	// drop time (a native file drag's actual FileList isn't readable during
+	// dragover). Files already in the VFS just return their ids (folders
+	// filtered out — dropping one onto a Section preview target has nothing
+	// meaningful to do); a real OS file (or a batch of them, or a .zip) gets
+	// added to the VFS first — exactly what dropping it directly onto File
+	// Manager would do — then treated the same as if it had already been
+	// there. A .zip is only imported, never included in the returned list
+	// (it has no single "this is the dropped file" to place here).
+	async _resolveDroppedFileIds(dataTransfer) {
+		const existingIds = getDraggedFileIds(dataTransfer).filter((id) => vfs.getNode(id)?.type === "file");
+		if (existingIds.length > 0) return existingIds;
 
-		let firstUploadedId = null;
+		const uploadedIds = [];
 		for (const file of dataTransfer.files) {
 			if (file.name.toLowerCase().endsWith(".zip")) {
 				await importZip(vfs, ROOT_ID, file);
 				continue;
 			}
 			const node = vfs.uploadFile(ROOT_ID, file);
-			if (!firstUploadedId) firstUploadedId = node.id;
+			uploadedIds.push(node.id);
 		}
-		return firstUploadedId;
+		return uploadedIds;
+	}
+
+	// Strips a file's extension for use as an auto-generated `label` — per
+	// Hans (2026-09-15): dropping one or more files onto a <Segment>/<Layer>/
+	// <Stinger>/<Option> writes the (first) file's own name, sans extension,
+	// as that element's `label`.
+	_labelFromFileName(fileNode) {
+		const dot = fileNode.name.lastIndexOf(".");
+		return dot > 0 ? fileNode.name.slice(0, dot) : fileNode.name;
+	}
+
+	_setLabel(nodeId, label) {
+		const node = ops.findNodeById(xmlStore.root, nodeId);
+		if (!node) return;
+		xmlStore.updateAttributes(nodeId, { ...node.attributes, label });
+	}
+
+	// Only a <Layer> uses this softer form (see _createSegmentWithOptions) —
+	// per Hans, it's a longer-lived container a user drops into repeatedly
+	// over a session, unlike the Segment/Options a single drop actually
+	// creates (always freshly labeled), so it shouldn't get renamed out from
+	// under whatever identity it already has.
+	_setLabelIfUnset(nodeId, label) {
+		const node = ops.findNodeById(xmlStore.root, nodeId);
+		if (!node || node.attributes.label !== undefined) return;
+		xmlStore.updateAttributes(nodeId, { ...node.attributes, label });
 	}
 
 	// A Segment-without-options or an Option accepts a drop directly on it:
@@ -3784,10 +3880,10 @@ export class WaSectionView extends HTMLElement {
 			box.classList.remove("drop-active");
 
 			if (this._isFileDrag(types)) {
-				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
-				if (!fileId) return;
-				if (node.tagName === "Segment" || node.tagName === "Stinger") this._addOptionToContainer(node.id, fileId);
-				else this._replaceBoxSrc(node.id, fileId);
+				const fileIds = await this._resolveDroppedFileIds(e.dataTransfer);
+				if (fileIds.length === 0) return;
+				if (node.tagName === "Segment" || node.tagName === "Stinger") this._addOptionsToContainer(node.id, fileIds);
+				else this._replaceBoxSrc(node.id, fileIds[0]);
 				return;
 			}
 
@@ -3818,6 +3914,11 @@ export class WaSectionView extends HTMLElement {
 		return draggedIndex !== -1 && draggedIndex < rawIndex ? rawIndex - 1 : rawIndex;
 	}
 
+	// Target is always an <Option> here (see _wireBoxDropTarget: a Segment/
+	// Stinger box goes to _addOptionsToContainer instead) — only the first
+	// dropped file is used, an Option has exactly one src of its own. Also
+	// sets `label` from that file's name, per Hans (2026-09-15) — unconditionally,
+	// same as every other single-element drop target (Segment/Stinger/Option).
 	_replaceBoxSrc(nodeId, fileId) {
 		const fileNode = vfs.getNode(fileId);
 		if (!fileNode || fileNode.type !== "file") return;
@@ -3826,22 +3927,29 @@ export class WaSectionView extends HTMLElement {
 		if (!node) return;
 		const existing = findSrcAttribute(xmlStore.schema, node);
 		const attrName = existing?.attrName || getSchemaSrcAttributeName(xmlStore.schema, node.tagName) || "src";
-		xmlStore.updateAttributes(nodeId, { ...node.attributes, [attrName]: exportPath });
+		xmlStore.updateAttributes(nodeId, { ...node.attributes, [attrName]: exportPath, label: this._labelFromFileName(fileNode) });
 	}
 
-	// Dropping a file onto a <Segment> or <Stinger> box adds it as a new
-	// <Option> child instead of overwriting the container's own src
-	// attribute — per Hans (2026-09-03). A container that already had its
-	// own src (the "just one Option's worth of audio" shorthand) gets that
-	// promoted to a real <Option> first, so the audio it already had isn't
-	// silently discarded — it ends up as the earlier of the two Options, the
-	// newly dropped file the later one. This is specific to the Section
+	// Dropping one or more files onto a <Segment> or <Stinger> box adds each
+	// as a new <Option> child instead of overwriting the container's own src
+	// attribute — per Hans (2026-09-03, extended to multiple files and to set
+	// labels 2026-09-15). A container that already had its own src (the
+	// "just one Option's worth of audio" shorthand) gets that promoted to a
+	// real <Option> first, so the audio it already had isn't silently
+	// discarded — it ends up as the earliest Option, the newly dropped
+	// file(s) after it, in drop order. This is specific to the Section
 	// preview: dropping a file on a <Segment> row in the XML editor's tree
 	// (wa-xml-tree.js) stays a plain src set there, per Hans.
-	_addOptionToContainer(containerId, fileId) {
-		const fileNode = vfs.getNode(fileId);
-		if (!fileNode || fileNode.type !== "file") return;
-		const exportPath = vfs.getExportPath(fileNode.id);
+	//
+	// Each new Option gets its own file's name as `label`; the container
+	// itself gets the *first* file's name, unconditionally (same as every
+	// other direct drop target here) — unlike a <Layer> (see
+	// _createSegmentWithOptions's _setLabelIfUnset), a Segment/Stinger drop
+	// target isn't a longer-lived container the same way, so there's nothing
+	// to protect by leaving an existing label alone.
+	_addOptionsToContainer(containerId, fileIds) {
+		const fileNodes = fileIds.map((id) => vfs.getNode(id)).filter((n) => n && n.type === "file");
+		if (fileNodes.length === 0) return;
 		const containerNode = ops.findNodeById(xmlStore.root, containerId);
 		if (!containerNode) return;
 		const optionSrcAttr = getSchemaSrcAttributeName(xmlStore.schema, "Option") || "src";
@@ -3853,7 +3961,13 @@ export class WaSectionView extends HTMLElement {
 			xmlStore.updateAttributes(containerId, next);
 			xmlStore.insertNewChild(containerId, "Option", { [optionSrcAttr]: existingSrc });
 		}
-		xmlStore.insertNewChild(containerId, "Option", { [optionSrcAttr]: exportPath });
+		fileNodes.forEach((fileNode) => {
+			xmlStore.insertNewChild(containerId, "Option", {
+				[optionSrcAttr]: vfs.getExportPath(fileNode.id),
+				label: this._labelFromFileName(fileNode)
+			});
+		});
+		this._setLabel(containerId, this._labelFromFileName(fileNodes[0]));
 	}
 
 	// Layer background (not hitting an existing Segment/Option box): a
@@ -3897,8 +4011,8 @@ export class WaSectionView extends HTMLElement {
 			}
 
 			if (this._isFileDrag(types)) {
-				const fileId = await this._resolveDroppedFileId(e.dataTransfer);
-				if (fileId) await this._createSegmentWithOption(layer.id, posString, fileId, info);
+				const fileIds = await this._resolveDroppedFileIds(e.dataTransfer);
+				if (fileIds.length > 0) await this._createSegmentWithOptions(layer.id, posString, fileIds, info);
 				return;
 			}
 
@@ -4013,21 +4127,31 @@ export class WaSectionView extends HTMLElement {
 		xmlStore.updateAttributes(segmentId, { ...segment.attributes, pos: posString });
 	}
 
-	// The Option is left without its own explicit length, so it always plays/
-	// renders at its real decoded duration — any part of that beyond the
-	// Segment's own (quantized) length is what naturally shows as a tail past
-	// the Segment's box (see _renderNestedOption/_renderTimedBox). The Segment
-	// itself gets quantizeDroppedFileLength's rounded length once the file
-	// has actually decoded; if decoding fails, it's left without an explicit
-	// length too and just falls back to the usual 1-bar placeholder width.
-	async _createSegmentWithOption(layerId, posString, fileId, info) {
-		const fileNode = vfs.getNode(fileId);
-		if (!fileNode || fileNode.type !== "file") return;
-		const exportPath = vfs.getExportPath(fileNode.id);
+	// Each Option is left without its own explicit length, so it always
+	// plays/renders at its real decoded duration — any part of that beyond
+	// the Segment's own (quantized) length is what naturally shows as a tail
+	// past the Segment's box (see _renderNestedOption/_renderTimedBox). The
+	// Segment itself gets quantizeDroppedFileLength's rounded length from
+	// the *first* file's decoded duration once it's actually decoded (with
+	// several files dropped together, there's no single "right" duration to
+	// quantize from — the first one, matching whichever file's name the
+	// Segment/Options end up labeled from, is as good a choice as any); if
+	// decoding fails, it's left without an explicit length too and just
+	// falls back to the usual 1-bar placeholder width. Per Hans (2026-09-15,
+	// extended from one file to several — see _addOptionsToContainer for the
+	// label-setting this delegates to).
+	async _createSegmentWithOptions(layerId, posString, fileIds, info) {
+		const fileNodes = fileIds.map((id) => vfs.getNode(id)).filter((n) => n && n.type === "file");
+		if (fileNodes.length === 0) return;
 		const segment = xmlStore.insertNewChild(layerId, "Segment", { pos: posString });
-		xmlStore.insertNewChild(segment.id, "Option", { src: exportPath });
+		this._addOptionsToContainer(segment.id, fileNodes.map((n) => n.id));
+		// A Layer is a longer-lived container across many drops over a
+		// session, unlike the Segment/Options just created above (always
+		// freshly labeled) — only give it a label if it doesn't already have
+		// one of its own. Per Hans (2026-09-15).
+		this._setLabelIfUnset(layerId, this._labelFromFileName(fileNodes[0]));
 
-		const buffer = await this._decode(fileNode.sessionUrl);
+		const buffer = await this._decode(fileNodes[0].sessionUrl);
 		if (!buffer) return;
 		const quantizedSeconds = quantizeDroppedFileLength(buffer.duration, info);
 		const segmentNow = ops.findNodeById(xmlStore.root, segment.id);
@@ -4126,16 +4250,16 @@ export class WaSectionView extends HTMLElement {
 
 			const draggedSegmentId = e.dataTransfer.getData(SEGMENT_DRAG_TYPE);
 			const draggedOptionId = e.dataTransfer.getData(OPTION_DRAG_TYPE);
-			const fileId = this._isFileDrag(types) ? await this._resolveDroppedFileId(e.dataTransfer) : null;
-			if (!draggedSegmentId && !draggedOptionId && !fileId) return; // e.g. a zip-only native drop
+			const fileIds = this._isFileDrag(types) ? await this._resolveDroppedFileIds(e.dataTransfer) : [];
+			if (!draggedSegmentId && !draggedOptionId && fileIds.length === 0) return; // e.g. a zip-only native drop
 
 			const newLayer = xmlStore.insertNewChild(sectionNode.id, "Layer", {}, insertIndex);
 			if (draggedSegmentId) {
 				this._moveSegment(draggedSegmentId, newLayer.id, posString);
 				return;
 			}
-			if (fileId) {
-				await this._createSegmentWithOption(newLayer.id, posString, fileId, info);
+			if (fileIds.length > 0) {
+				await this._createSegmentWithOptions(newLayer.id, posString, fileIds, info);
 				return;
 			}
 			const segment = xmlStore.insertNewChild(newLayer.id, "Segment", { pos: posString });

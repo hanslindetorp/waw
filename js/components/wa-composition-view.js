@@ -718,7 +718,11 @@ export class WaCompositionView extends HTMLElement {
 	// Same cursor-anchored, independent-axis pinch/ctrl-wheel zoom as
 	// wa-section-view.js's own _onWheelZoom — see there for the full
 	// rationale; mirrored here rather than shared since that file's version
-	// is written against its own Layer-scroll element.
+	// is written against its own Layer-scroll element. No label-column
+	// equivalent here (this view has no separate sticky row-name sidebar —
+	// Section/transition boxes sit directly in .rows), so unlike
+	// wa-section-view.js's own _pinchAxisAt there's only a ruler zone (H
+	// only) and everything else (both) — no "V only" zone to carve out.
 	_onWheelZoom(e) {
 		if (!e.ctrlKey) return;
 		e.preventDefault();
@@ -734,19 +738,25 @@ export class WaCompositionView extends HTMLElement {
 		// A genuine trackpad pinch synthesizes as ctrl+wheel with only
 		// deltaY ever populated — a pinch isn't a directional X/Y gesture
 		// the way a two-finger swipe is, so deltaX stays ~0 regardless of
-		// pinch direction. Without this fallback, horizontal (time) zoom
-		// was effectively unreachable via the most common "pinch to zoom"
-		// gesture — only vertical (row height) ever responded. Falls back
-		// to deltaY driving both axes together (a uniform zoom) whenever
-		// deltaX is negligible; a genuine horizontal-only gesture (real
-		// deltaX, e.g. a dedicated horizontal scroll wheel) still zooms
-		// just that axis, unaffected. Per Hans (2026-09-08): "nu funkar
-		// bara vertikal".
+		// pinch direction. Without the deltaY fallback below, horizontal
+		// (time) zoom would be unreachable via the most common "pinch to
+		// zoom" gesture — only vertical (row height) would ever respond
+		// (Hans, 2026-09-08: "nu funkar bara vertikal"). But since that
+		// fallback means a real pinch's *one* scalar drives both axes by
+		// roughly the same factor every time, H and V always moved together
+		// (Hans, 2026-09-15: "de sitter ihop") — routing by *where* the
+		// pinch happens fixes that without giving up H reachability: over
+		// the ruler (the time axis header, one element spanning its own
+		// full width) zooms pxPerSecond only; anywhere else zooms both
+		// together, same as before.
+		const overRuler = e.composedPath().some((el) => el.classList?.contains("ruler"));
+		if (!overRuler) {
+			const factorY = Math.exp(-e.deltaY * 0.01);
+			this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));
+		}
 		const rawDeltaX = Math.abs(e.deltaX) > 0.01 ? e.deltaX : e.deltaY;
 		const factorX = Math.exp(-rawDeltaX * 0.01);
-		const factorY = Math.exp(-e.deltaY * 0.01);
 		this._pxPerSecond = Math.min(MAX_PX_PER_SEC, Math.max(MIN_PX_PER_SEC, this._pxPerSecond * factorX));
-		this._rowHeight = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, this._rowHeight * factorY));
 
 		this._renderComposition(node);
 
