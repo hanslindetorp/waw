@@ -35,9 +35,11 @@ export function registerPanels(panelEls) {
 
 // Called once at startup with the handful of nested (shadow-DOM) elements
 // that have their own persistable layout state beyond plain panel collapse/
-// width: the XML tree's column visibility/order/width, and the two
-// draggable-divider "split" panels (see wa-xml-tree.js's columns-change,
-// wa-xml-editor.js's/wa-section-view.js's split-change — both dispatched
+// width: the XML tree's column visibility/order/width, the two
+// draggable-divider "split" panels, and wa-section-view.js's own Layer/
+// Stinger label column width (see wa-xml-tree.js's columns-change,
+// wa-xml-editor.js's/wa-section-view.js's split-change and
+// wa-section-view.js's own label-width-change — all dispatched
 // `composed: true` so they're actually observable here). Any ref can be
 // null/undefined (e.g. still not found at startup) — every use below is
 // optional-chained.
@@ -47,6 +49,7 @@ export function registerLayoutExtras(refs) {
 	layoutExtras.xmlTree?.addEventListener("collapse-change", scheduleSave);
 	layoutExtras.xmlEditor?.addEventListener("split-change", scheduleSave);
 	layoutExtras.sectionView?.addEventListener("split-change", scheduleSave);
+	layoutExtras.sectionView?.addEventListener("label-width-change", scheduleSave);
 }
 
 function captureState() {
@@ -65,6 +68,8 @@ function captureState() {
 	if (splits.xmlEditorTreeInspector !== undefined || splits.sectionLayerStinger !== undefined) {
 		state.splits = splits;
 	}
+	const sectionLabelWidth = layoutExtras.sectionView?.getLabelWidth();
+	if (typeof sectionLabelWidth === "number") state.sectionLabelWidth = sectionLabelWidth;
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -101,6 +106,9 @@ function applyState(state) {
 	}
 	if (typeof state.splits?.sectionLayerStinger === "number") {
 		layoutExtras.sectionView?.setSplitRatio(state.splits.sectionLayerStinger);
+	}
+	if (typeof state.sectionLabelWidth === "number") {
+		layoutExtras.sectionView?.setLabelWidth(state.sectionLabelWidth);
 	}
 }
 

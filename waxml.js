@@ -947,7 +947,7 @@ class AudioObject extends EventTarget{
 
       let val = storedVariable || storedParameter;
 
-      if(typeof val === "undefined"){
+      if(typeof val === "undefined" || typeof val.valueOf() === "undefined"){
           
           if(this._parentAudioObj){
               return this._parentAudioObj.getParameter(paramName);

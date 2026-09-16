@@ -2006,6 +2006,9 @@
     <xs:attribute name="src" type="fileName"/>
     <xs:attribute name="length" type="length"/>
     <!-- <xs:attribute name="delay" type="length"/> -->
+    <!-- "retrig" added here (per Hans, 2026-09-16) - it was missing on
+         <Segment>, present only on <Stinger>. -->
+    <xs:attribute name="retrig" type="retrigMode"/>
   </xs:complexType>
 
   <xs:complexType name="stingerContentType">

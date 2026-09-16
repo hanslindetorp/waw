@@ -182,7 +182,7 @@ export class WaFilePreview extends HTMLElement {
 	}
 
 	connectedCallback() {
-		selection.addEventListener("change", (e) => this._onSelectionChange(e.detail.id));
+		selection.addEventListener("change", (e) => this._onSelectionChange(e.detail.id, e.detail.autoplay));
 
 		this._playBtn.addEventListener("click", () => this._audio.play());
 		this._stopBtn.addEventListener("click", () => {
@@ -206,7 +206,7 @@ export class WaFilePreview extends HTMLElement {
 		this._onSelectionChange(selection.id);
 	}
 
-	async _onSelectionChange(id) {
+	async _onSelectionChange(id, autoplay = false) {
 		const node = id ? vfs.getNode(id) : null;
 		if (!isPreviewableAudioFile(node)) return; // not a file, or e.g. a .xml/.zip — leave whatever's showing alone
 
@@ -214,6 +214,15 @@ export class WaFilePreview extends HTMLElement {
 		this._statusEl.textContent = "Loading waveform…";
 		this._resetPlayback();
 		this._audio.src = node.sessionUrl;
+		// Per Hans (2026-09-16): double-clicking an audio file in File
+		// Manager (see wa-file-manager.js's own _handleFileDoubleClick) both
+		// shows *and* starts playing its preview — independent of the
+		// waveform decode below (a separate, slower Web Audio decode purely
+		// for drawing the peaks), so playback starts immediately rather than
+		// waiting on that. Browsers can refuse an unprompted play() call
+		// (autoplay policy) — nothing useful to do here if that happens, the
+		// user can just press the play button themselves.
+		if (autoplay) this._audio.play().catch(() => {});
 
 		this._requestToken += 1;
 		const token = this._requestToken;

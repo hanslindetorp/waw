@@ -3,6 +3,7 @@ import { importZip } from "../vfs/zip-import.js";
 import { selection } from "../state/selection.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
 import { STATE_FILE_NAME } from "../project/workstation-state.js";
+import { isPreviewableAudioFile } from "./wa-file-preview.js";
 
 // Image extensions added (2026-09-10) so a project thumbnail — used by the
 // Library (DEMO) view, see wa-library-view.js — can actually be uploaded via
@@ -250,7 +251,7 @@ export class WaFileManager extends HTMLElement {
 			draggedIds.forEach((id) => this._moveNode(id, ROOT_ID));
 			return;
 		}
-		this._handleFiles(e.dataTransfer.files, ROOT_ID);
+		this._handleDataTransfer(e.dataTransfer, ROOT_ID);
 	}
 
 	async _handleFiles(fileList, parentId) {
@@ -261,6 +262,71 @@ export class WaFileManager extends HTMLElement {
 				vfs.uploadFile(parentId, file);
 			}
 		}
+	}
+
+	// dataTransfer.files alone flattens a dropped OS folder into a single,
+	// unusable zero-byte "file" entry named after the folder — per Hans
+	// (2026-09-16): "mappen [blir] en konstig fil som inte går att göra
+	// något med." dataTransfer.items' webkitGetAsEntry() (Chrome/Edge/
+	// Safari — not in the DOM spec, but supported everywhere this app
+	// targets) gives the real FileSystemEntry instead, which can be a real
+	// directory to recurse into. Read out synchronously (before any
+	// `await`) — dataTransfer's own item list is only valid for the
+	// duration of the drop event handler's synchronous execution, same
+	// reasoning as _resolveDroppedFileIds' equivalent note in
+	// wa-section-view.js. Falls back to the plain file-list path (no
+	// folder support, same as before) wherever webkitGetAsEntry isn't
+	// available at all.
+	async _handleDataTransfer(dataTransfer, parentId) {
+		const items = dataTransfer.items;
+		if (items && items.length > 0 && typeof items[0]?.webkitGetAsEntry === "function") {
+			const entries = [...items].map((item) => item.webkitGetAsEntry()).filter(Boolean);
+			if (entries.length > 0) {
+				for (const entry of entries) await this._importEntry(entry, parentId);
+				return;
+			}
+		}
+		await this._handleFiles(dataTransfer.files, parentId);
+	}
+
+	// A real directory becomes a real VFS folder, recursively — everything
+	// else (a plain file, or a .zip) is handled exactly like _handleFiles
+	// already does for a flat drop.
+	async _importEntry(entry, parentId) {
+		if (entry.isFile) {
+			const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+			if (file.name.toLowerCase().endsWith(".zip")) {
+				await importZip(vfs, parentId, file);
+			} else {
+				vfs.uploadFile(parentId, file);
+			}
+			return;
+		}
+		if (!entry.isDirectory) return;
+		const folder = vfs.createFolder(parentId, entry.name);
+		const children = await this._readAllEntries(entry.createReader());
+		for (const child of children) await this._importEntry(child, folder.id);
+	}
+
+	// FileSystemDirectoryReader.readEntries() isn't guaranteed to return a
+	// directory's full contents in one call (a real, documented quirk of
+	// this API) — it has to be called repeatedly until it finally returns
+	// an empty batch, which is what actually signals "no more entries".
+	_readAllEntries(reader) {
+		return new Promise((resolve, reject) => {
+			const all = [];
+			const readBatch = () => {
+				reader.readEntries((batch) => {
+					if (batch.length === 0) {
+						resolve(all);
+						return;
+					}
+					all.push(...batch);
+					readBatch();
+				}, reject);
+			};
+			readBatch();
+		});
 	}
 
 	_createFolder(parentId) {
@@ -405,8 +471,16 @@ export class WaFileManager extends HTMLElement {
 		row.querySelector(".name").textContent = node.name;
 		row.addEventListener("click", (e) => this._handleRowClick(e, node));
 
+		// Per Hans (2026-09-16): "preview för fil ska bara visas vid
+		// dubbelklick av ljudfil ... vilket också ska starta playback" — an
+		// audio file's double-click means preview+play instead of the usual
+		// rename-on-dblclick every other file type still gets (see
+		// _wireRename); renaming an audio file is still reachable via its
+		// own pencil icon.
+		const isAudio = isPreviewableAudioFile(node);
+		if (isAudio) this._wireFileDoubleClick(row, node);
 		this._wireDragSource(row, node);
-		this._wireRename(row, node);
+		this._wireRename(row, node, { dblClickToRename: !isAudio });
 		this._wireDelete(row, node);
 
 		li.appendChild(row);
@@ -415,14 +489,33 @@ export class WaFileManager extends HTMLElement {
 
 	// Double-clicking the name, or clicking the pencil icon, swaps the name
 	// span for an inline text input — no native prompt() dialog.
-	_wireRename(row, node) {
+	// dblClickToRename:false (an audio file — see _renderFileNode) leaves
+	// only the pencil icon wired, since double-clicking its row now means
+	// preview+play instead (_wireFileDoubleClick).
+	_wireRename(row, node, { dblClickToRename = true } = {}) {
 		const nameEl = row.querySelector(".name");
 		const start = (e) => {
 			e.stopPropagation();
 			this._startRename(row, node);
 		};
-		nameEl.addEventListener("dblclick", start);
+		if (dblClickToRename) nameEl.addEventListener("dblclick", start);
 		row.querySelector(".act-rename").addEventListener("click", start);
+	}
+
+	// Per Hans (2026-09-16): "preview för fil ska bara visas vid dubbelklick
+	// av ljudfil i File Manager vilket också ska starta playback av
+	// ljudfilen i preview." Collapses to just this file (a double-click
+	// unambiguously means "this one", regardless of whatever multi-selection
+	// existed before) and marks it the active selection with autoplay — see
+	// selection.js's own select()/wa-file-preview.js's _onSelectionChange.
+	_wireFileDoubleClick(row, node) {
+		row.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			this._selectedIds = new Set([node.id]);
+			this._selectionAnchorId = node.id;
+			this._updateSelectionHighlight();
+			this._setActiveSelection(node.id, { autoplay: true });
+		});
 	}
 
 	_startRename(row, node) {
@@ -489,6 +582,15 @@ export class WaFileManager extends HTMLElement {
 	// collapses the selection down to just that row, same as a real file
 	// picker (dragging an unselected item drags only it, not whatever else
 	// happened to be selected before).
+	//
+	// Deliberately does NOT call _setActiveSelection here — per Hans
+	// (2026-09-16): "Preview av en fil ska bara visas när man klickar
+	// (mousedown + mouseup) på en fil," never just from starting to drag
+	// it. A plain click-and-drag (no separate prior click) used to fire a
+	// dragstart before any "click" event, silently switching the Preview
+	// panel to that file the instant the drag threshold was crossed — this
+	// only updates the file manager's own local selection/highlight, which
+	// is all a drag's own payload needs.
 	_wireDragSource(row, node) {
 		row.draggable = true;
 		row.addEventListener("dragstart", (e) => {
@@ -497,7 +599,6 @@ export class WaFileManager extends HTMLElement {
 				this._selectedIds = new Set([node.id]);
 				this._selectionAnchorId = node.id;
 				this._updateSelectionHighlight();
-				this._setActiveSelection(node.id);
 			}
 			const draggedNodes = [...this._selectedIds].map((id) => vfs.getNode(id)).filter(Boolean);
 			// Folders can only be moved within the file manager — unlike a
@@ -572,7 +673,14 @@ export class WaFileManager extends HTMLElement {
 	// folders, matching render order). Mirrors wa-xml-tree.js's own
 	// _handleRowClick. Per Hans (2026-09-15): "Det ska gå att multi-markera
 	// flera filer (som i en vanlig filväljare)."
+	//
+	// Skips _setActiveSelection for an audio file specifically (everything
+	// else — an .xml file included, which is how document-sync.js decides
+	// what to open for editing — still activates on a plain click, per Hans
+	// 2026-09-16: only an audio file's *preview* now needs a double-click;
+	// nothing else about single-click selection changes).
 	_handleRowClick(e, node) {
+		const activatesOnClick = !isPreviewableAudioFile(node);
 		if (e.shiftKey && this._selectionAnchorId) {
 			const orderedIds = this._flattenVisibleIds();
 			const anchorIndex = orderedIds.indexOf(this._selectionAnchorId);
@@ -581,7 +689,7 @@ export class WaFileManager extends HTMLElement {
 				const [from, to] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
 				this._selectedIds = new Set(orderedIds.slice(from, to + 1));
 				this._updateSelectionHighlight();
-				this._setActiveSelection(node.id);
+				if (activatesOnClick) this._setActiveSelection(node.id);
 				return;
 			}
 		}
@@ -590,13 +698,13 @@ export class WaFileManager extends HTMLElement {
 			else this._selectedIds.add(node.id);
 			this._selectionAnchorId = node.id;
 			this._updateSelectionHighlight();
-			this._setActiveSelection(node.id);
+			if (activatesOnClick) this._setActiveSelection(node.id);
 			return;
 		}
 		this._selectedIds = new Set([node.id]);
 		this._selectionAnchorId = node.id;
 		this._updateSelectionHighlight();
-		this._setActiveSelection(node.id);
+		if (activatesOnClick) this._setActiveSelection(node.id);
 	}
 
 	_clearFileSelection() {
@@ -611,9 +719,9 @@ export class WaFileManager extends HTMLElement {
 	// sync with whatever was last clicked here — _isLocalSelectionUpdate
 	// stops the resulting "change" event (_onExternalSelectionChange) from
 	// immediately collapsing the multi-selection this same click just built.
-	_setActiveSelection(id) {
+	_setActiveSelection(id, options) {
 		this._isLocalSelectionUpdate = true;
-		selection.select(id);
+		selection.select(id, options);
 		this._isLocalSelectionUpdate = false;
 	}
 

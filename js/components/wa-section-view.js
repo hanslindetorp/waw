@@ -86,10 +86,12 @@ const DEFAULT_ROW_HEIGHT = 56;
 // alongside the label text — the fader alone needs 50-200px on its own —
 // and made user-resizable via a drag handle (see _wireLabelResize) rather
 // than a fixed constant, since the right width depends on how long a
-// project's own Layer/Stinger labels tend to be.
-const DEFAULT_LABEL_WIDTH = 320;
+// project's own Layer/Stinger labels tend to be. Doubled again to 640 (per
+// Hans, 2026-09-16: still too little room) — MAX_LABEL_WIDTH raised to
+// leave headroom to size it wider still.
+const DEFAULT_LABEL_WIDTH = 640;
 const MIN_LABEL_WIDTH = 140;
-const MAX_LABEL_WIDTH = 560;
+const MAX_LABEL_WIDTH = 800;
 const RULER_HEIGHT = 32;
 const FALLBACK_BOX_BARS = 1;
 const WAVEFORM_COLOR = "#4fa3ff";
@@ -864,6 +866,18 @@ template.innerHTML = `
 			pointer-events: none;
 			white-space: nowrap;
 			z-index: 1;
+		}
+		/* An Option nested inside a closed Segment/Stinger box (.nested-option
+		   is itself a .timed-box descendant, so the rule above already
+		   matches its own .box-label too) would otherwise sit at the exact
+		   same top-left spot as that Segment/Stinger's OWN label, colliding
+		   directly on top of it. Per Hans (2026-09-16): same green as its own
+		   waveform, anchored to the bottom (with a small margin) instead of
+		   the top — the Segment/Stinger's own label stays exactly as it was. */
+		.nested-option .box-label {
+			top: auto;
+			bottom: 2px;
+			color: #45b58c;
 		}
 		/* Same spot as .box-label, swapped in on double-click (see
 		   _startAttributeEdit) — a real input, so (unlike .box-label) it needs
@@ -2033,6 +2047,23 @@ export class WaSectionView extends HTMLElement {
 	_onLabelResizeEnd() {
 		window.removeEventListener("pointermove", this._onLabelResizeMove);
 		window.removeEventListener("pointerup", this._onLabelResizeEnd);
+		// composed: this element lives inside wa-preview's shadow root, so
+		// workstation-state.js (outside it) needs composed to hear this. Per
+		// Hans (2026-09-16): the label column's width wasn't persisted at all
+		// before — every reload reset it back to DEFAULT_LABEL_WIDTH.
+		this.dispatchEvent(new CustomEvent("label-width-change", { bubbles: true, composed: true }));
+	}
+
+	// Read by workstation-state.js when saving; setLabelWidth is its
+	// counterpart when loading a project.
+	getLabelWidth() {
+		return this._labelWidth;
+	}
+
+	setLabelWidth(width) {
+		if (typeof width !== "number" || !Number.isFinite(width)) return;
+		this._labelWidth = Math.min(MAX_LABEL_WIDTH, Math.max(MIN_LABEL_WIDTH, width));
+		this._applyLabelWidth();
 	}
 
 	// Pushes this._labelWidth out to everything that depends on it: the
