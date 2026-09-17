@@ -2794,16 +2794,23 @@ export class WaSectionView extends HTMLElement {
 	}
 
 	// What a Layer/Segment/Option box shows as its own name: its `label`
-	// attribute first, then `id`, then its src/source value (schema-aware,
-	// via findSrcAttribute — so a bare <Option src="kick.wav"/> at least
-	// shows which file it is), and only the bare element name as a last
-	// resort when none of those are set.
+	// attribute first, then `id`, then its src/source value's own filename
+	// (schema-aware, via findSrcAttribute — so a bare <Option src="drums/
+	// kick.wav"/> at least shows "kick", same bare-filename convention as an
+	// auto-set label from a file drop — see _labelFromFileName), and only the
+	// bare element name as a last resort when none of those are set.
 	_displayLabel(node, fallback) {
 		if (node.attributes.label) return node.attributes.label;
 		if (node.attributes.id) return node.attributes.id;
 		const srcAttr = findSrcAttribute(xmlStore.schema, node);
-		if (srcAttr && srcAttr.value) return srcAttr.value;
+		if (srcAttr && srcAttr.value) return this._filenameFromSrcValue(srcAttr.value);
 		return fallback;
+	}
+
+	_filenameFromSrcValue(value) {
+		const base = value.split("/").pop();
+		const dot = base.lastIndexOf(".");
+		return dot > 0 ? base.slice(0, dot) : base;
 	}
 
 	_buildLayerLabel(layer, rowsNeeded, siblings) {
@@ -4163,11 +4170,10 @@ export class WaSectionView extends HTMLElement {
 	// the Segment's own (quantized) length is what naturally shows as a tail
 	// past the Segment's box (see _renderNestedOption/_renderTimedBox). The
 	// Segment itself gets quantizeDroppedFileLength's rounded length from
-	// the *first* file's decoded duration once it's actually decoded (with
-	// several files dropped together, there's no single "right" duration to
-	// quantize from — the first one, matching whichever file's name the
-	// Segment/Options end up labeled from, is as good a choice as any); if
-	// decoding fails, it's left without an explicit length too and just
+	// the *longest* of the dropped files' decoded durations, per Hans
+	// (2026-09-16) — so a short file dropped alongside a longer one never
+	// gets truncated to the short one's length. If every file fails to
+	// decode, the Segment is left without an explicit length too and just
 	// falls back to the usual 1-bar placeholder width. Per Hans (2026-09-15,
 	// extended from one file to several — see _addOptionsToContainer for the
 	// label-setting this delegates to).
@@ -4182,9 +4188,10 @@ export class WaSectionView extends HTMLElement {
 		// one of its own. Per Hans (2026-09-15).
 		this._setLabelIfUnset(layerId, this._labelFromFileName(fileNodes[0]));
 
-		const buffer = await this._decode(fileNodes[0].sessionUrl);
-		if (!buffer) return;
-		const quantizedSeconds = quantizeDroppedFileLength(buffer.duration, info);
+		const buffers = await Promise.all(fileNodes.map((n) => this._decode(n.sessionUrl)));
+		const longestDuration = buffers.reduce((max, buffer) => (buffer && buffer.duration > max ? buffer.duration : max), 0);
+		if (longestDuration === 0) return;
+		const quantizedSeconds = quantizeDroppedFileLength(longestDuration, info);
 		const segmentNow = ops.findNodeById(xmlStore.root, segment.id);
 		if (segmentNow) {
 			xmlStore.updateAttributes(segment.id, { ...segmentNow.attributes, length: secondsToLengthString(quantizedSeconds) });

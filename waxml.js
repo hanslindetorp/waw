@@ -18468,11 +18468,14 @@ class Music extends EventTarget {
 				this.active = typeof o.active === "number" ? o.active : 1;
 				this.sounds = [];
 				
-				let delay = this.parameters.delay || this.parameters.pos;
-				if(delay){
+				// let delay = this.parameters.delay || this.parameters.pos;
+				if(this.parameters.delay){
 					// if specified with negative value
-					this.offset = this.parentObj.divisionToTime(delay);
-				} else {
+					this.offset = this.parentObj.divisionToTime(this.parameters.delay);
+				} else if(this.parameters.pos){
+					// old syntax with positive upbeat value
+					this.offset = this.parentObj.musicalPositionToTime(this.parameters.pos);
+				} else if(this.parameters.upbeat){
 					// old syntax with positive upbeat value
 					this.offset = -this.parentObj.divisionToTime(this.parameters.upbeat);
 				}
