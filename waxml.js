@@ -13284,6 +13284,10 @@ class WebAudio extends EventTarget {
 		});
 	}
 
+	set(key, val, transitionTime, fromSequencer){
+		this.setVariable(key, val, transitionTime, fromSequencer);
+	};
+
 	setVariable(key, val, transitionTime, fromSequencer){
 
 		// move to a separate object
@@ -16733,7 +16737,7 @@ class Music extends EventTarget {
 									pos: barTime
 								});
 								myInstance.currentBar++;
-								// waxml.log(`Bar, ${myInstance.currentBar}`);
+								// console.log(`Bar, ${myInstance.currentBar}`);
 							} else if(beatTime > currentTime){
 								waxml.start("#click_beat", {time:beatTime});
 								// console.log("click_beat", beatTime.toFixed(2), currentTime.toFixed(2));
@@ -17451,7 +17455,7 @@ class Music extends EventTarget {
 							
 							let pos = this.getPosition(nextTime-myInstance.musicalStart);
 							// pos.bar = myInstance.currentBar;
-							waxml.log(`SECTION, ${tag}, 
+							console.log(`SECTION, ${tag}, 
 								tempo: ${this.parameters.tempo}, 
 								timeSign: ${this.parameters.timeSign.nominator}/${this.parameters.timeSign.denominator},
 								${posObjectToString(pos)}`);
@@ -18821,7 +18825,7 @@ class Music extends EventTarget {
 					let label = this.parameters.type == "leadIn" ? "LEAD-IN" : "MOTIF";
 					
 						
-					waxml.log([label, 
+					console.log([label, 
 						description, 
 						"cuePoint: " + this.parameters.cuePoint,
 						posObjectToString(pos)
@@ -20645,15 +20649,19 @@ class Music extends EventTarget {
 							// it will look for a section tagged A-B.
 
 							// console.log(iMus.lastSelectedSectionString, "->", selection.string);
-							// interludeSelector = `${iMus.lastSelectedSectionString}-${selection.string}`;
+							interludeSelector = `${iMus.lastSelectedSectionString}-${selection.string}`;
 							
 	
-							// interludeSelection = new Selection(myInstance, ).selectForPlayback(interludeSelector);
+							interludeSelection = new Selection(myInstance).selectForPlayback(`.${interludeSelector}`);
 							// interludeSection = interludeSelection.sections.pop();
 
 
 							// WAXML 2.0 is instead using attributes "from" and "to" to tag interlude
 							// So, if you play A and then B, it will look for a section tagged with from="A" and to="B".
+
+							// 2026-09-18
+							// I had to reenter the old class-based selection method for stingers leading to interludes.
+
 
 							// The real WAXML way of findin would be to use the selector "section[from=A][to=B]", but
 							// for compatibility with iMusic, we will use a simple loop through all sections
@@ -20689,8 +20697,8 @@ class Music extends EventTarget {
 
 							// XXX
 							// temporarily disabled 2026-09-07
-							// [...interludeSelection.motifs,...interludeSelection.leadIns].forEach(obj => obj.play(options, arg2, arg3));
-	
+							interludeSelection.stingers.forEach(obj => obj.play(options, arg2, arg3));
+
 							// then play interlude and store time until it changes
 							options.interludeSelector = interludeSelector;
 							returnValues = {};
@@ -20706,7 +20714,7 @@ class Music extends EventTarget {
 								returnValues = selection.play(options, arg2, selector).returnVal;
 								defaultInstance.interludeSection = null;
 								let delay = waxml.toSignificant(returnValues.delay);
-								waxml.log(`AUTO-TRIG->${selector}, delay: ${delay}`);
+								console.log(`AUTO-TRIG->${selector}, delay: ${delay}`);
 							}, delay * 1000);
 							
 						} else {
@@ -20745,7 +20753,7 @@ class Music extends EventTarget {
 	
 			if(returnValues){
 				// let delay = waxml.toSignificant(returnValues.delay);
-				// waxml.log(`TRIG->${selector}, delay: ${delay}`);
+				// console.log(`TRIG->${selector}, delay: ${delay}`);
 				return returnValues;
 			}
 	
@@ -22105,6 +22113,7 @@ class Selection{
         this.tracks = [];
         this.motifs = [];
         this.leadIns = [];
+        this.stingers = [];
         this.string = "";
         this.iMusObj = iMusObj;
 
@@ -22128,6 +22137,7 @@ class Selection{
                         if(iMusicHelpers.inArray(selector, obj.parameters.classList)){
                             this.motifs.push(obj);
                             this.objects.push(obj);
+                            this.stingers.push(obj);
                         }
                     }
 
@@ -22137,6 +22147,7 @@ class Selection{
                         if(obj.parameters.id == selector){
                             this.motifs.push(obj);
                             this.objects.push(obj);
+                            this.stingers.push(obj);
                         }
                     }
 

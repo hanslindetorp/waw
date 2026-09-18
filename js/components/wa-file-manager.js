@@ -4,6 +4,7 @@ import { selection } from "../state/selection.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
 import { STATE_FILE_NAME } from "../project/workstation-state.js";
 import { isPreviewableAudioFile } from "./wa-file-preview.js";
+import { openFileConflictDialog } from "./wa-file-conflict-dialog.js";
 
 // Image extensions added (2026-09-10) so a project thumbnail — used by the
 // Library (DEMO) view, see wa-library-view.js — can actually be uploaded via
@@ -248,20 +249,85 @@ export class WaFileManager extends HTMLElement {
 		// icons in Finder's list view.
 		const draggedIds = getDraggedFileIds(e.dataTransfer);
 		if (draggedIds.length > 0) {
-			draggedIds.forEach((id) => this._moveNode(id, ROOT_ID));
+			this._moveNodesWithConflictCheck(draggedIds, ROOT_ID);
 			return;
 		}
 		this._handleDataTransfer(e.dataTransfer, ROOT_ID);
 	}
 
+	// Per Hans (2026-09-18): dropping one or more plain (non-zip) files onto
+	// a folder that already has a same-named file must ask once — "Replace",
+	// "Keep both" (auto-renamed), or "Cancel" (the whole batch, not just the
+	// colliding files) — via wa-file-conflict-dialog.js, rather than silently
+	// overwriting or silently failing. A .zip's own name never collides with
+	// anything this way — it's extracted (importZip), never itself placed in
+	// the folder under that name — so zips skip the conflict check entirely.
 	async _handleFiles(fileList, parentId) {
-		for (const file of Array.from(fileList)) {
-			if (file.name.toLowerCase().endsWith(".zip")) {
-				await importZip(vfs, parentId, file);
-			} else {
+		const files = Array.from(fileList);
+		const zipFiles = files.filter((f) => f.name.toLowerCase().endsWith(".zip"));
+		const plainFiles = files.filter((f) => !f.name.toLowerCase().endsWith(".zip"));
+
+		for (const file of zipFiles) await importZip(vfs, parentId, file);
+		if (plainFiles.length === 0) return;
+
+		const existingNames = new Set(
+			vfs
+				.listFolder(parentId)
+				.filter((n) => n.type === "file")
+				.map((n) => n.name)
+		);
+		const conflictingNames = [...new Set(plainFiles.filter((f) => existingNames.has(f.name)).map((f) => f.name))];
+		let action = null;
+		if (conflictingNames.length > 0) {
+			action = await openFileConflictDialog(conflictingNames);
+			if (action !== "replace" && action !== "keep-both") return; // "cancel", or dismissed without choosing
+		}
+
+		for (const file of plainFiles) {
+			if (!existingNames.has(file.name)) {
 				vfs.uploadFile(parentId, file);
+			} else if (action === "replace") {
+				this._replaceFileByName(parentId, file);
+			} else {
+				vfs.uploadFile(parentId, this._renameFile(file, this._dedupeFileName(parentId, file.name)));
 			}
 		}
+	}
+
+	// Same-named file already present in `parentId` is deleted first, so the
+	// newly uploaded one lands under the exact same name (and so the exact
+	// same VFS export path) it replaces — every XML `src`/`source` reference
+	// resolves that path fresh at use-time (findByExportPath, called from
+	// resolvePlayableUrl/wa-section-view.js's own drop handling — never a
+	// cached file id), so a reference that pointed at the old file now
+	// resolves straight to the new one, with nothing else to update.
+	_replaceFileByName(parentId, file) {
+		const existing = vfs.listFolder(parentId).find((n) => n.type === "file" && n.name === file.name);
+		if (existing) vfs.delete(existing.id);
+		vfs.uploadFile(parentId, file);
+	}
+
+	// Finder-style "Keep both": "kick.wav" -> "kick (2).wav", trying the next
+	// number up until one isn't already taken in that folder.
+	_dedupeFileName(parentId, name) {
+		const existing = new Set(
+			vfs
+				.listFolder(parentId)
+				.filter((n) => n.type === "file")
+				.map((n) => n.name)
+		);
+		if (!existing.has(name)) return name;
+		const dot = name.lastIndexOf(".");
+		const base = dot > 0 ? name.slice(0, dot) : name;
+		const ext = dot > 0 ? name.slice(dot) : "";
+		let i = 2;
+		let candidate = `${base} (${i})${ext}`;
+		while (existing.has(candidate)) candidate = `${base} (${++i})${ext}`;
+		return candidate;
+	}
+
+	_renameFile(file, newName) {
+		return newName === file.name ? file : new File([file], newName, { type: file.type, lastModified: file.lastModified });
 	}
 
 	// dataTransfer.files alone flattens a dropped OS folder into a single,
@@ -282,30 +348,31 @@ export class WaFileManager extends HTMLElement {
 		if (items && items.length > 0 && typeof items[0]?.webkitGetAsEntry === "function") {
 			const entries = [...items].map((item) => item.webkitGetAsEntry()).filter(Boolean);
 			if (entries.length > 0) {
-				for (const entry of entries) await this._importEntry(entry, parentId);
+				await this._importEntries(entries, parentId);
 				return;
 			}
 		}
 		await this._handleFiles(dataTransfer.files, parentId);
 	}
 
-	// A real directory becomes a real VFS folder, recursively — everything
-	// else (a plain file, or a .zip) is handled exactly like _handleFiles
-	// already does for a flat drop.
-	async _importEntry(entry, parentId) {
-		if (entry.isFile) {
-			const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-			if (file.name.toLowerCase().endsWith(".zip")) {
-				await importZip(vfs, parentId, file);
-			} else {
-				vfs.uploadFile(parentId, file);
-			}
-			return;
+	// A real directory becomes a real VFS folder, recursively. Every plain
+	// file at a given level (this call's own `entries`, or a directory's own
+	// children one recursion level down) is batched through _handleFiles
+	// together, so a single drop that touches several folders at once still
+	// gets exactly one conflict dialog per folder level, not one per file.
+	async _importEntries(entries, parentId) {
+		const fileEntries = entries.filter((entry) => entry.isFile);
+		const dirEntries = entries.filter((entry) => entry.isDirectory);
+
+		if (fileEntries.length > 0) {
+			const files = await Promise.all(fileEntries.map((entry) => new Promise((resolve, reject) => entry.file(resolve, reject))));
+			await this._handleFiles(files, parentId);
 		}
-		if (!entry.isDirectory) return;
-		const folder = vfs.createFolder(parentId, entry.name);
-		const children = await this._readAllEntries(entry.createReader());
-		for (const child of children) await this._importEntry(child, folder.id);
+		for (const dirEntry of dirEntries) {
+			const folder = vfs.createFolder(parentId, dirEntry.name);
+			const children = await this._readAllEntries(dirEntry.createReader());
+			await this._importEntries(children, folder.id);
+		}
 	}
 
 	// FileSystemDirectoryReader.readEntries() isn't guaranteed to return a
@@ -637,23 +704,76 @@ export class WaFileManager extends HTMLElement {
 			e.preventDefault();
 			e.stopPropagation();
 			row.classList.remove("drop-target");
-			getDraggedFileIds(e.dataTransfer).forEach((id) => this._moveNode(id, node.id));
+			this._moveNodesWithConflictCheck(getDraggedFileIds(e.dataTransfer), node.id);
 		});
 	}
 
-	_moveNode(draggedId, targetFolderId) {
-		if (!draggedId || draggedId === targetFolderId) return;
+	_canMoveNode(draggedId, targetFolderId) {
+		if (!draggedId || draggedId === targetFolderId) return false;
 		const draggedNode = vfs.getNode(draggedId);
-		if (!draggedNode || draggedNode.parentId === targetFolderId) return;
+		if (!draggedNode || draggedNode.parentId === targetFolderId) return false;
 
 		// A folder can't be dropped into itself or one of its own
 		// descendants — getPath(targetFolderId) is the target's own ancestor
 		// chain (itself included), so if the dragged node shows up in it,
 		// the target is inside (or is) the thing being dragged.
 		const targetPath = vfs.getPath(targetFolderId);
-		if (targetPath.some((n) => n.id === draggedId)) return;
+		return !targetPath.some((n) => n.id === draggedId);
+	}
 
-		vfs.moveFile(draggedId, targetFolderId);
+	// Per Hans (2026-09-18): "Samma sak ska hända om man drar en fil från en
+	// plats till en annan i File Manager" — moving one or more files to a
+	// folder that already has a same-named file gets the exact same
+	// Replace/Keep both/Cancel prompt as dropping them in from Finder (see
+	// _handleFiles). Folders are never subject to this — Hans's wording
+	// scopes it to files, and folder names aren't checked here at all — so a
+	// dragged folder always just moves. Collision is judged against the
+	// target's contents as they were *before* this batch (`existingNames`),
+	// same reasoning as _handleFiles: a later same-batch move should never
+	// treat an earlier same-batch move's own result as "pre-existing".
+	async _moveNodesWithConflictCheck(draggedIds, targetFolderId) {
+		const validIds = draggedIds.filter((id) => this._canMoveNode(id, targetFolderId));
+		if (validIds.length === 0) return;
+
+		const existingNames = new Set(
+			vfs
+				.listFolder(targetFolderId)
+				.filter((n) => n.type === "file")
+				.map((n) => n.name)
+		);
+		const conflictingNames = [
+			...new Set(
+				validIds
+					.map((id) => vfs.getNode(id))
+					.filter((n) => n && n.type === "file" && existingNames.has(n.name))
+					.map((n) => n.name)
+			)
+		];
+		let action = null;
+		if (conflictingNames.length > 0) {
+			action = await openFileConflictDialog(conflictingNames);
+			if (action !== "replace" && action !== "keep-both") return;
+		}
+
+		for (const id of validIds) {
+			const node = vfs.getNode(id);
+			if (!node) continue;
+			// Note: if two dragged files share the same name and "replace" was
+			// chosen, the first one moved in is itself now sitting in
+			// targetFolderId under that name — the second one's own "existing"
+			// lookup below then matches *it*, not the original pre-batch file,
+			// so only the last of same-named duplicates survives. Reasonable
+			// enough for a pathological case Hans's request doesn't cover.
+			if (node.type === "file" && existingNames.has(node.name)) {
+				if (action === "replace") {
+					const existing = vfs.listFolder(targetFolderId).find((n) => n.type === "file" && n.name === node.name);
+					if (existing) vfs.delete(existing.id);
+				} else {
+					vfs.rename(id, this._dedupeFileName(targetFolderId, node.name));
+				}
+			}
+			vfs.moveFile(id, targetFolderId);
+		}
 	}
 
 	_promptUploadInto(folderId) {
