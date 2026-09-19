@@ -4,7 +4,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { createXmlNode } from "../xml-editor/xml-tree-ops.js";
 import { selection } from "../state/selection.js";
 import { bindCurrentFile, getCurrentFileId } from "./document-sync.js";
-import { initWorkstationState, flushWorkstationState } from "./workstation-state.js";
+import { STATE_FILE_NAME, initWorkstationState, flushWorkstationState } from "./workstation-state.js";
 import { resetEditHistory } from "./edit-history.js";
 import { listTemplates, importTemplateFiles } from "./template-loader.js";
 
@@ -188,13 +188,50 @@ async function buildProjectZipBlob() {
 	return zip.generateAsync({ type: "blob" });
 }
 
+// Bundles the project for handing to a web developer to embed (the "Share..."
+// dialog's "Export..." button — see wa-api-view.js) — every real file in the
+// VFS *except* workstation-state.json (Workstation's own editor state, never
+// meant to end up on a live site — see workstation-state.js's own
+// top-of-file comment) plus the actual waxml.js this session is running,
+// fetched fresh so the exported copy always matches whatever version is
+// currently deployed. Deliberately separate from buildProjectZipBlob (Save/
+// Save As use that one) — those need workstation-state.json for a later
+// reopen in Workstation itself, and never need waxml.js alongside it. Per
+// Hans (2026-09-18).
+async function buildWebExportZipBlob() {
+	if (typeof JSZip === "undefined") {
+		throw new Error("JSZip is not loaded (check the <script> tag in index.html).");
+	}
+
+	const zip = new JSZip();
+	const addFolder = (folderId, zipFolder) => {
+		vfs.listFolder(folderId).forEach((node) => {
+			if (node.type === "folder") {
+				addFolder(node.id, zipFolder.folder(node.name));
+			} else if (node.name !== STATE_FILE_NAME) {
+				zipFolder.file(node.name, node.file);
+			}
+		});
+	};
+	addFolder(ROOT_ID, zip);
+
+	if (xmlStore.root && !getCurrentFileId()) {
+		zip.file(PROJECT_FILE_NAME, xmlStore.codeValue);
+	}
+
+	const waxmlSource = await fetch("waxml.js").then((res) => res.text());
+	zip.file("waxml.js", waxmlSource);
+
+	return zip.generateAsync({ type: "blob" });
+}
+
 // Always prompts for a location and never remembers it for later plain
 // Saves — a deliberately separate action from Save As (below), which does
 // remember it, per Hans (2026-09-03): Export is for handing someone a copy,
 // Save/Save As are for your own working file.
 export async function exportProjectAsZip() {
-	const blob = await buildProjectZipBlob();
-	await pickSaveLocation(blob, "waw-project.zip");
+	const blob = await buildWebExportZipBlob();
+	await pickSaveLocation(blob, "waw-export.zip");
 }
 
 // The standard "Save": writes back to whatever file the project was last

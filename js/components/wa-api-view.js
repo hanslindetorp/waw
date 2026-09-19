@@ -1,4 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
+import { exportProjectAsZip } from "../project/project-manager.js";
 
 // How a published WAXML project (see wa-library-view.js's Library (DEMO)
 // sketch) gets embedded into someone else's web app. Per Hans (2026-09-11):
@@ -141,12 +142,30 @@ template.innerHTML = `
 			border-color: var(--waw-success, #4caf7d);
 			color: var(--waw-success, #4caf7d);
 		}
+		.export-btn {
+			background: var(--waw-accent, #4fa3ff);
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: #0c0c0c;
+			border-radius: 4px;
+			padding: 0.3rem 0.75rem;
+			font: inherit;
+			font-weight: 600;
+			cursor: pointer;
+		}
+		.export-btn:hover {
+			filter: brightness(1.08);
+		}
+		.export-btn:disabled {
+			cursor: default;
+			filter: none;
+			opacity: 0.7;
+		}
 	</style>
 	<div class="api-content">
-		<h2>API</h2>
 		<p>To implement a WAXML project into a web based application, you need to:</p>
 		<ol>
-			<li>Save your project and place it in the root of your web project.</li>
+			<li><button class="export-btn" type="button">Export...</button></li>
+			<li>Unzip the exported file and place its contents in the root of your website.</li>
 			<li>Copy the HTML code below at the bottom of the <code>&lt;body&gt;</code> element in the HTML document.</li>
 			<li>Use the Javascript API to trigger different objects in WAXML and to set variables.</li>
 			<li>You can also use the HTML attributes below for triggers and variables without having to touch javascript at all.</li>
@@ -183,11 +202,13 @@ export class WaApiView extends HTMLElement {
 		this._setAttrsSlot = this.shadowRoot.querySelector(".set-attrs-slot");
 		this._trigJsSlot = this.shadowRoot.querySelector(".trig-js-slot");
 		this._setJsSlot = this.shadowRoot.querySelector(".set-js-slot");
+		this._exportBtn = this.shadowRoot.querySelector(".export-btn");
 		this._onStoreChange = () => this._render();
 	}
 
 	connectedCallback() {
 		xmlStore.addEventListener("change", this._onStoreChange);
+		this._exportBtn.addEventListener("click", () => this._export());
 		this._render();
 	}
 
@@ -294,6 +315,25 @@ export class WaApiView extends HTMLElement {
 			// Clipboard access can be denied/unavailable (e.g. no secure
 			// context) — the code is still right there to select by hand, so
 			// this is never worth surfacing as an error.
+		}
+	}
+
+	// exportProjectAsZip (project-manager.js) both builds the zip and shows
+	// the actual save dialog itself (a real native "Save As" picker via the
+	// File System Access API where available, otherwise a plain download) —
+	// per Hans (2026-09-18): "När man klickar på knappen visas en
+	// dialogruta." This button just triggers it and shows a brief busy state
+	// while JSZip does its (potentially not-instant) work.
+	async _export() {
+		this._exportBtn.disabled = true;
+		this._exportBtn.textContent = "Exporting...";
+		try {
+			await exportProjectAsZip();
+		} catch (err) {
+			console.error("Export failed:", err);
+		} finally {
+			this._exportBtn.disabled = false;
+			this._exportBtn.textContent = "Export...";
 		}
 	}
 }

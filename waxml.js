@@ -12542,6 +12542,18 @@ class WebAudio extends EventTarget {
 						this.loadExternalLibraries()
 						.then(() => {
 
+
+
+							let musicStructure = this._xml.querySelector("Composition");
+							if(musicStructure){
+								// Handle the music structure
+								this.plugins.forEach(plugin => {
+									if(plugin.name == "iMusic"){
+										plugin.update(musicStructure);
+									}
+								});
+							}
+
 							this.initEvents();
 
 
