@@ -2,7 +2,7 @@ import "./components/wa-panel.js";
 import "./components/wa-file-menu.js";
 import "./components/wa-edit-menu.js";
 import "./components/wa-view-menu.js";
-import "./components/wa-player-bar.js";
+import "./components/wa-bottom-bar.js";
 import "./components/wa-file-manager.js";
 import "./components/wa-preview.js";
 import "./components/wa-xml-editor.js";
@@ -37,21 +37,22 @@ loadDefaultSchema().then(createDefaultProject);
 // View menu wiring (per Hans, 2026-09-10): swaps which top-level view is
 // visible without ever touching xmlStore/vfs/playerStore — the real project
 // keeps running in the background exactly as-is under Workstation whichever
-// view is showing. The header's own <wa-player-bar> only makes sense in
-// Workstation (the Library view has its own, reused instance — see
-// wa-library-view.js) so it hides along with <main> in the other views.
+// view is showing. <wa-bottom-bar> (2026-09-20, replacing the header's own
+// <wa-player-bar>) only makes sense in Workstation (the Library view has its
+// own, reused <wa-player-bar> instance — see wa-library-view.js) so it hides
+// along with <main> in the other views.
 const VIEW_TITLES = {
 	workstation: "WAXML Workstation — BETA",
 	library: "WAXML Library (DEMO)"
 };
 const appTitleEl = document.getElementById("appTitle");
-const headerPlayerBarEl = document.getElementById("headerPlayerBar");
+const bottomBarEl = document.getElementById("bottomBar");
 const mainPanelsEl = document.querySelector("main.app-panels");
 const libraryViewEl = document.querySelector("wa-library-view");
 
 function applyView(view) {
 	mainPanelsEl.hidden = view !== "workstation";
-	headerPlayerBarEl.hidden = view !== "workstation";
+	bottomBarEl.hidden = view !== "workstation";
 	libraryViewEl.hidden = view !== "library";
 	appTitleEl.textContent = VIEW_TITLES[view] || VIEW_TITLES.workstation;
 }

@@ -1,18 +1,23 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { isEditableContext } from "../project/edit-history.js";
+import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 
-// One knob per root-level <Var> — lets you nudge a global variable live
-// while playing, right from the player bar (per Hans, top-right, next to
-// the PLAY trigger-selector field). Turning a knob never touches xmlStore —
-// per Hans, it calls waxml.setVariable(name, value) directly, same as any
-// other purely-live control (see live-property.js's own applyLiveProperty).
-// This also means a knob's own current position is *not* the document's
-// source of truth (a <Var>'s XML attributes never change) — it's tracked
-// only in this component's own _values map, for as long as it stays alive.
+// One knob per <Var> child of a "scope" node — lets you nudge a variable
+// live while playing, right from the player/bottom bar. Turning a knob never
+// touches xmlStore — per Hans, it calls waxml.setVariable(name, value)
+// directly, same as any other purely-live control (see live-property.js's
+// own applyLiveProperty). This also means a knob's own current position is
+// *not* the document's source of truth (a <Var>'s XML attributes never
+// change) — it's tracked only in this component's own _values map, for as
+// long as it stays alive.
 //
-// Only direct children of the document root are shown — matches how
-// root-level <Command> trigger-shortcuts work in this same bar.
+// The scope defaults to the document root (matching how root-level
+// <Command> trigger-shortcuts work in wa-player-bar.js) but can be pointed
+// at any other node via setScopeNode() — per Hans (2026-09-20): wa-bottom-
+// bar.js's own "local" row uses a second <wa-var-knobs> instance scoped to
+// whatever element is currently selected, showing only *its* own <Var>
+// children, side by side with the always-root-scoped "global" instance.
 
 const KNOB_PX_PER_RANGE = 130; // dragging this many px sweeps a knob's full range
 const KNOB_SIZE = 24;
@@ -58,6 +63,7 @@ template.innerHTML = `
 		   Hans (2026-09-10). */
 		.var-knobs {
 			display: flex;
+			flex-wrap: wrap;
 			align-items: flex-start;
 			gap: 1rem;
 		}
@@ -162,9 +168,37 @@ export class WaVarKnobs extends HTMLElement {
 		this._container = this.shadowRoot.querySelector(".var-knobs");
 		this._values = new Map(); // node id -> current live value, this component's own state (see class comment)
 		this._wasDocumentLoaded = false;
+		this._scopeNodeId = null; // null = document root (the default/global instance)
 		this._onXmlStoreChange = () => this._render();
 		this._onPlayerStoreChange = () => this._onPlayerChange();
 		this._onKeyDown = this._onKeyDown.bind(this);
+	}
+
+	// Points this instance at a specific node's own <Var> children instead of
+	// the document root — pass null to go back to root. Per Hans (2026-09-20).
+	setScopeNode(nodeId) {
+		this._scopeNodeId = nodeId;
+		this._render();
+	}
+
+	_getScopeNode() {
+		if (!xmlStore.root) return null;
+		if (!this._scopeNodeId) return xmlStore.root;
+		return findNodeById(xmlStore.root, this._scopeNodeId);
+	}
+
+	// Reads this instance's own unwrapped content width (every knob on one
+	// line) regardless of how much room the host currently has — used by
+	// wa-bottom-bar.js to balance how much of the bar's width triggers vs.
+	// variables get (see its own _recalcLayout). Toggles flex-wrap off just
+	// long enough to measure, then restores it — .var-knobs already wraps
+	// for actual display (see its own CSS); this only defeats that briefly
+	// to read the *unwrapped* intrinsic width. Per Hans (2026-09-20).
+	getNaturalWidth() {
+		this._container.style.flexWrap = "nowrap";
+		const width = this._container.scrollWidth;
+		this._container.style.flexWrap = "";
+		return width;
 	}
 
 	connectedCallback() {
@@ -192,8 +226,9 @@ export class WaVarKnobs extends HTMLElement {
 		if (e.key !== "Backspace" && e.key !== "Delete") return;
 		if (isEditableContext()) return;
 		const selectedId = xmlStore.selectedNodeId;
-		if (!selectedId || !xmlStore.root) return;
-		const isOwnVar = xmlStore.root.children.some((c) => c.tagName === "Var" && c.id === selectedId);
+		const scopeNode = this._getScopeNode();
+		if (!selectedId || !scopeNode) return;
+		const isOwnVar = scopeNode.children.some((c) => c.tagName === "Var" && c.id === selectedId);
 		if (!isOwnVar) return;
 		e.preventDefault();
 		xmlStore.removeNode(selectedId);
@@ -207,8 +242,9 @@ export class WaVarKnobs extends HTMLElement {
 	_onPlayerChange() {
 		const isLoaded = playerStore.isDocumentLoaded;
 		if (isLoaded && !this._wasDocumentLoaded) {
+			const scopeNode = this._getScopeNode();
 			this._values.forEach((value, nodeId) => {
-				const node = xmlStore.root && findChild(xmlStore.root, nodeId);
+				const node = scopeNode && findChild(scopeNode, nodeId);
 				const varName = node && (node.attributes.name || node.attributes.id);
 				if (varName) playerStore.setVariable(varName, value);
 			});
@@ -218,7 +254,8 @@ export class WaVarKnobs extends HTMLElement {
 
 	_render() {
 		this._container.innerHTML = "";
-		const varNodes = xmlStore.root ? xmlStore.root.children.filter((c) => c.tagName === "Var") : [];
+		const scopeNode = this._getScopeNode();
+		const varNodes = scopeNode ? scopeNode.children.filter((c) => c.tagName === "Var") : [];
 		this.hidden = varNodes.length === 0;
 
 		const liveIds = new Set(varNodes.map((n) => n.id));
@@ -391,8 +428,8 @@ export class WaVarKnobs extends HTMLElement {
 	}
 }
 
-function findChild(root, id) {
-	return root.children.find((c) => c.id === id);
+function findChild(scopeNode, id) {
+	return scopeNode.children.find((c) => c.id === id);
 }
 
 customElements.define("wa-var-knobs", WaVarKnobs);
