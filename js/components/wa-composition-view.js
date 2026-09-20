@@ -16,6 +16,7 @@ import {
 } from "../xml-editor/section-model.js";
 import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
+import { isEditableContext } from "../project/edit-history.js";
 
 // Composition preview (see wa-preview.js) — a sibling of wa-section-view.js
 // at the same visual level (ruler on top, rows below, pinch/button zoom),
@@ -618,6 +619,7 @@ export class WaCompositionView extends HTMLElement {
 
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 		this._onSectionTrig = this._onSectionTrig.bind(this);
+		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
 	connectedCallback() {
@@ -635,6 +637,7 @@ export class WaCompositionView extends HTMLElement {
 		// old window.iMus-instance-reading guesswork this file used to do
 		// (see the removed _readPlayingSectionId).
 		window.waxml?.addEventListener("section-trig", this._onSectionTrig);
+		document.addEventListener("keydown", this._onKeyDown);
 		this._onStoreChange();
 	}
 
@@ -643,6 +646,38 @@ export class WaCompositionView extends HTMLElement {
 		this._clearPendingBlink();
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
 		window.waxml?.removeEventListener("section-trig", this._onSectionTrig);
+		document.removeEventListener("keydown", this._onKeyDown);
+	}
+
+	// Backspace/Delete removes the <Composition> itself, when it's both
+	// selected and the one this view is currently showing. Per Hans's bug
+	// report (2026-09-22): a <Section> (regular or transition, wherever
+	// it's selected) already deletes fine — wa-section-view.js's own
+	// _onKeyDown resolves the Section itself too, not just its descendants
+	// (see nearestSection/_isNodeWithinSection there) — but nothing handled
+	// a directly-selected <Composition>, since it isn't a descendant of
+	// anything any other view tracks.
+	//
+	// defaultPrevented guard: xmlStore.removeNode selects the deleted
+	// node's *parent* (see its own comment) — deleting a Section whose
+	// parent is this very Composition therefore re-selects the Composition
+	// itself, synchronously, before wa-section-view.js's own handler (same
+	// keydown event, just an earlier listener) returns. Without this guard,
+	// this handler would then see "its own" Composition newly selected and
+	// delete that too, cascading a single Backspace into removing both the
+	// Section *and* its whole Composition. Same guard shape as wa-player-
+	// bar.js's/wa-bottom-bar.js's own (2026-09-10/18) for the same reason:
+	// several independent keydown listeners on `document`, each reacting to
+	// their own slice of the tree — whichever one actually deletes
+	// something must stop every other one still to run for this same key.
+	_onKeyDown(e) {
+		if (e.key !== "Backspace" && e.key !== "Delete") return;
+		if (e.defaultPrevented) return;
+		if (isEditableContext()) return;
+		const node = this._getActiveCompositionNode();
+		if (!node || xmlStore.selectedNodeId !== node.id) return;
+		e.preventDefault();
+		xmlStore.removeNode(node.id);
 	}
 
 	// waxml.js's own authoritative "a Section is about to sound" signal —
