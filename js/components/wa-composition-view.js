@@ -93,6 +93,15 @@ function transitionClass(fromNode, toNode) {
 	return fromClass || toClass || "";
 }
 
+// undefined/empty are both "not actually set" — same convention as
+// section-model.js's own (unexported) ownAttr. Used by _insertTransition to
+// copy a transition's tempo/timeSign from its "to" Section's own effective
+// value.
+function ownAttrValue(node, attrName) {
+	const v = node?.attributes[attrName];
+	return v !== undefined && v !== "" ? v : undefined;
+}
+
 // Grid-snapping for a transition edge drag (see _wireEdgeDrag) — same
 // "finest resolution whose on-screen spacing is still usable at the
 // current zoom" idea as wa-section-view.js's own _effectiveGridBeats,
@@ -1289,7 +1298,22 @@ export class WaCompositionView extends HTMLElement {
 		});
 	}
 
+	// A transition's tempo/timeSign are explicitly copied from the "to"
+	// Section's own *effective* value — its own attribute if it has one,
+	// else whatever it itself inherits from compositionNode (same
+	// own-else-Composition resolution as readSectionInfo's own ownAttr) —
+	// rather than the transition inheriting Composition's value on its own
+	// were these left unset. Per Hans (2026-09-21): a transition should
+	// play at the tempo/meter it's arriving *into*, even when that "to"
+	// Section overrides Composition's own tempo/timeSign. Takes precedence
+	// over insertNewChild's own Composition-copy fallback (below) since
+	// it's set directly in `attrs` before that ever runs.
 	_insertTransition(compositionNode, target, attrs) {
+		["tempo", "timeSign"].forEach((attrName) => {
+			if (attrs[attrName] !== undefined) return;
+			const value = ownAttrValue(target, attrName) ?? ownAttrValue(compositionNode, attrName);
+			if (value !== undefined) attrs[attrName] = value;
+		});
 		const compNow = ops.findNodeById(xmlStore.root, compositionNode.id);
 		if (!compNow) return;
 		const targetIndex = compNow.children.findIndex((c) => c.id === target.id);

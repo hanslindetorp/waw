@@ -60,6 +60,27 @@ function displayLabel(node) {
 	return node.tagName;
 }
 
+// <Mixer> children that carry no audio signal of their own, so never get a
+// channel strip — every other tag the schema's shared "waxml" choice group
+// allows there (Chain, GainNode, every native *Node, Synth,
+// ObjectBasedAudio, AmbientAudio, Snapshot, Noise, Wam, a nested Mixer,
+// Include, ...) is a real audio-producing/-processing node and still gets
+// one, even outside a <Chain> (see _buildChannelStrip's own "any other
+// element type" fallback branch). Per Hans (2026-09-21):
+//   - Var: a variable declaration, not an audio path.
+//   - Send: an aux-send *of* another channel's signal, not a signal source
+//     of its own — belongs inside a <Chain>, never a top-level channel.
+//   - Envelope: a control-rate automation curve driving a parameter over
+//     time, not itself an audio output.
+// Include is NOT excluded (per Hans, 2026-09-21, correcting an earlier
+// guess) — it pulls in another whole WAXML document as content, acting as
+// a sub-master with a real audio output of its own.
+const MIXER_NO_SIGNAL_TAGS = new Set(["Var", "Send", "Envelope"]);
+
+function hasAudioSignal(node) {
+	return !MIXER_NO_SIGNAL_TAGS.has(node.tagName);
+}
+
 // Fader taper: 0dB sits at FADER_ZERO_DB_POS up the track (a typical mixer
 // convention — the top portion is a small +dB boost range, the much larger
 // bottom portion tapers down to silence), not a plain linear dB scale.
@@ -1750,8 +1771,14 @@ export class WaMixerView extends HTMLElement {
 		this._sendLabel.style.height = `${sendSectionHeight}px`;
 
 		this._channels.innerHTML = "";
-		const totalCount = mixerNode.children.length;
-		mixerNode.children.forEach((child, index) => {
+		// Only children with an actual audio signal become channel strips —
+		// per Hans (2026-09-21), see hasAudioSignal's own comment. index/
+		// totalCount are computed from this same filtered list so the solo
+		// crossfade position (index/(totalCount-1), see _buildSoloButton)
+		// only ever spans the channels actually shown, not skipped ones.
+		const signalChildren = mixerNode.children.filter(hasAudioSignal);
+		const totalCount = signalChildren.length;
+		signalChildren.forEach((child, index) => {
 			this._channels.appendChild(this._buildChannelStrip(child, index, totalCount, sectionHeights));
 		});
 		this._channels.appendChild(this._buildAddChannelStrip(mixerNode));

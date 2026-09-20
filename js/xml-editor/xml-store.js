@@ -193,6 +193,28 @@ class XmlStore extends EventTarget {
 		if (tagName === "Section" && !attributes?.class && !isTransitionSection) {
 			attributes = { ...attributes, class: ops.generateSectionClass(this.root) };
 		}
+		// Every new <Section> (regular/looped or transition) gets tempo/
+		// timeSign copied onto it explicitly from its own <Composition>
+		// parent, whenever Composition actually has them set — never a
+		// caller-supplied value (e.g. wa-composition-view.js's own
+		// _insertTransition, which resolves a transition's tempo/timeSign
+		// from its "to" Section instead), and never a hardcoded default when
+		// Composition itself doesn't have them either (that's left to the
+		// normal live tempo/timeSign inheritance — see
+		// attribute-inheritance.js/section-model.js). Per Hans (2026-09-21).
+		if (tagName === "Section") {
+			const parentNode = ops.findNodeById(this.root, parentId);
+			if (parentNode?.tagName === "Composition") {
+				const compAttrs = parentNode.attributes;
+				const copied = {};
+				["tempo", "timeSign"].forEach((attrName) => {
+					if (attributes?.[attrName] !== undefined) return;
+					const value = compAttrs[attrName];
+					if (value !== undefined && value !== "") copied[attrName] = value;
+				});
+				if (Object.keys(copied).length) attributes = { ...copied, ...attributes };
+			}
+		}
 		// Every new <Var> gets a name (see generateVarName — required for
 		// setVariable()/"$name" to reach it at all) plus a sensible starting
 		// mapin/default, so a freshly-created one is immediately usable as a
