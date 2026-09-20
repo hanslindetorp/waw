@@ -12,7 +12,7 @@ import { listTemplates, importTemplateFiles } from "./template-loader.js";
 // xmlStore. The schema (waxml.xsd) is an app-level constant, not project
 // data, so none of these touch xmlStore.schema.
 
-const PROJECT_FILE_NAME = "wa.xml";
+export const PROJECT_FILE_NAME = "wa.xml";
 
 // The file "Save" (as opposed to "Save As...") writes back to, once one
 // exists — either handed to us by Open (see openProjectFromFile) or set by
@@ -129,7 +129,11 @@ export { listTemplates };
 
 // Breadth-first search for a file literally named wa.xml (case-insensitive),
 // falling back to the first .xml/.waxml file found anywhere in the project.
-function findXmlEntryPoint() {
+// Exported for wa-api-view.js's own use — the Share dialog's HTML code
+// example shows this file's *name* (see getMainDocumentName below), live so
+// it stays right after a rename or after a differently-named XML file is
+// imported as the project's entry point.
+export function findXmlEntryPoint() {
 	let fallback = null;
 	const queue = [ROOT_ID];
 
@@ -148,6 +152,14 @@ function findXmlEntryPoint() {
 	}
 
 	return fallback;
+}
+
+// The name to show in the Share dialog's <script data-source="..."> example
+// (see wa-api-view.js) — just findXmlEntryPoint()'s own name, or the default
+// PROJECT_FILE_NAME before any document exists yet (a doc-less blank state,
+// e.g. right after vfs.clear() and before createDefaultProject finishes).
+export function getMainDocumentName() {
+	return findXmlEntryPoint()?.name || PROJECT_FILE_NAME;
 }
 
 // Bundles every real file in the VFS (spec avsnitt 1.5's "Exportera projekt

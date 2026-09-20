@@ -1,5 +1,6 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
-import { exportProjectAsZip } from "../project/project-manager.js";
+import { vfs } from "../vfs/VFS.js";
+import { exportProjectAsZip, getMainDocumentName } from "../project/project-manager.js";
 
 // How a published WAXML project (see wa-library-view.js's Library (DEMO)
 // sketch) gets embedded into someone else's web app. Per Hans (2026-09-11):
@@ -185,6 +186,7 @@ template.innerHTML = `
 			</section>
 			<section class="api-section">
 				<h3>JavaScript API</h3>
+				<p>These examples show how to trigger parts of the music and change variables in real time from a web page, using JavaScript and the global <code>waxml</code> variable.</p>
 				<div class="trig-js-slot"></div>
 				<div class="set-js-slot"></div>
 			</section>
@@ -208,17 +210,23 @@ export class WaApiView extends HTMLElement {
 
 	connectedCallback() {
 		xmlStore.addEventListener("change", this._onStoreChange);
+		// The HTML code example's data-source shows the project's actual entry
+		// XML file *name*, live — a rename or a differently-named imported
+		// entry point only ever changes via a vfs "change" (xmlStore's own
+		// "change" only fires for document *content* edits, not VFS renames).
+		vfs.addEventListener("change", this._onStoreChange);
 		this._exportBtn.addEventListener("click", () => this._export());
 		this._render();
 	}
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("change", this._onStoreChange);
+		vfs.removeEventListener("change", this._onStoreChange);
 	}
 
 	_render() {
 		this._htmlCodeSlot.replaceChildren(
-			this._buildCodeBlock([plainLine(`<script src="waxml.js" data-source="[path to the main wa.xml document in the project]" />`)])
+			this._buildCodeBlock([plainLine(`<script src="waxml.js" data-source="${getMainDocumentName()}" />`)])
 		);
 
 		const commands = rootTrigCommands(xmlStore.root);
@@ -235,7 +243,10 @@ export class WaApiView extends HTMLElement {
 			this._buildCodeBlock(
 				// A <Var> only carries a name — the value half is always a
 				// placeholder for the host developer to fill in themselves.
-				vars.length ? vars.map((v) => withPlaceholder(`<a data-waxml-click-set="${varName(v)}=`, "value", `" />`)) : null,
+				// Bracketed ([value], still italic) here specifically because
+				// it sits inside a quoted HTML attribute value — unlike the JS
+				// call below, where a bare `value` is already unambiguous.
+				vars.length ? vars.map((v) => withPlaceholder(`<a data-waxml-click-set="${varName(v)}=`, "[value]", `" />`)) : null,
 				"No <Var> elements at the document root yet."
 			)
 		);
