@@ -50,6 +50,11 @@ export function registerLayoutExtras(refs) {
 	layoutExtras.xmlEditor?.addEventListener("split-change", scheduleSave);
 	layoutExtras.sectionView?.addEventListener("split-change", scheduleSave);
 	layoutExtras.sectionView?.addEventListener("label-width-change", scheduleSave);
+	// wa-webcam-input.js's own model toggles/camera choice/saved-entry Var
+	// mappings — never WAXML document content (per Hans, 2026-09-22: INPUT
+	// stays outside the WAXML spec), just Workstation's own editor state,
+	// same as everything else here.
+	layoutExtras.webcamInput?.addEventListener("state-change", scheduleSave);
 }
 
 function captureState() {
@@ -70,6 +75,8 @@ function captureState() {
 	}
 	const sectionLabelWidth = layoutExtras.sectionView?.getLabelWidth();
 	if (typeof sectionLabelWidth === "number") state.sectionLabelWidth = sectionLabelWidth;
+	const webcamState = layoutExtras.webcamInput?.getState();
+	if (webcamState) state.webcamInput = webcamState;
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -109,6 +116,9 @@ function applyState(state) {
 	}
 	if (typeof state.sectionLabelWidth === "number") {
 		layoutExtras.sectionView?.setLabelWidth(state.sectionLabelWidth);
+	}
+	if (state.webcamInput) {
+		layoutExtras.webcamInput?.applyState(state.webcamInput);
 	}
 }
 

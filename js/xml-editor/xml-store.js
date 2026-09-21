@@ -246,6 +246,31 @@ class XmlStore extends EventTarget {
 		return child;
 	}
 
+	// Creates a new root-level <Var>, in the same "grouped with every other
+	// root Var" spot wa-bottom-bar.js's own "+" button already used (right
+	// after the last existing root Var, else right after the last root
+	// Command, else as root's very first child) — factored out here so that
+	// button and wa-var-picker.js's own "New Variable..." flow can't drift
+	// apart. `name` is optional — omit it (rather than passing undefined
+	// through) to let insertNewChild's own Var defaulting generate one, same
+	// as the bottom bar's "+" already relied on. Never selects the new node
+	// (matches every other "+"-created root Command/Var in this app — per
+	// Hans, 2026-09-13, creating one shouldn't disturb the current selection).
+	addRootVar(name) {
+		if (!this.root) return null;
+		const rootChildren = this.root.children;
+		const lastVarIndex = rootChildren.reduce((last, c, i) => (c.tagName === "Var" ? i : last), -1);
+		let index;
+		if (lastVarIndex >= 0) {
+			index = lastVarIndex + 1;
+		} else {
+			const firstCommandIndex = rootChildren.findIndex((c) => c.tagName === "Command");
+			index = firstCommandIndex >= 0 ? firstCommandIndex + 1 : 0;
+		}
+		const attributes = name ? { name } : {};
+		return this.insertNewChild(this.root.id, "Var", attributes, index, { select: false });
+	}
+
 	// Selecting the parent (rather than clearing to nothing) on delete is
 	// deliberate: a view that only shows itself while something inside its
 	// own subtree is selected (Section preview, Mixer preview) would

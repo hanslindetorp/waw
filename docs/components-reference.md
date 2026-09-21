@@ -6,16 +6,22 @@ och en för sig. Radnummer är ungefärliga (filerna växer) men pekar rätt
 inom några rader.
 
 ## Innehåll
-- [Paneler](#paneler): wa-file-manager, wa-xml-editor (+ wa-xml-tree,
+- [Paneler](#paneler): wa-input-panel (+ wa-webcam-input, wa-var-picker),
+  wa-file-manager (+ wa-file-preview), wa-xml-editor (+ wa-xml-tree,
   wa-node-inspector, wa-schema-input), wa-preview (+ wa-section-view,
-  wa-mixer-view), wa-xml-code
-- [Header](#header): wa-file-menu, wa-player-bar
-- [Delat ramverk](#delat-ramverk): wa-panel
+  wa-composition-view, wa-mixer-view), wa-xml-code
+- [Header](#header): wa-file-menu, wa-edit-menu, wa-view-menu,
+  wa-player-bar
+- [Bottom bar](#bottom-bar): wa-bottom-bar, wa-var-knobs
+- [Library (DEMO), Share och API](#library-demo-share-och-api):
+  wa-library-view, wa-share-dialog, wa-api-view
+- [Delat ramverk](#delat-ramverk): wa-panel, wa-file-conflict-dialog,
+  wa-notice-dialog, wa-voice-picker, toast
 - [Kärn-datamoduler](#kärn-datamoduler): xml-store, xml-tree-ops,
-  schema-parser, attribute-controls, src-attribute, xml-tokenizer,
-  section-model, waveform
+  schema-parser, attribute-controls, src-attribute, variable-references,
+  xml-tokenizer, section-model, waveform
 - [Persistence](#persistence): VFS, zip-import, drag-types, selection,
-  document-sync, project-manager, workstation-state
+  view, document-sync, project-manager, workstation-state
 - [Ljud/uppspelning](#ljuduppspelning): player-store, waxml-bridge,
   live-property, gain-units
 - [Bootstrap](#bootstrap): app.js, index.html
@@ -24,9 +30,66 @@ inom några rader.
 
 ## Paneler
 
-### wa-file-manager.js (~485 rader)
+### wa-input-panel.js (~80 rader)
 
-Filträdet för `vfs` — panel 1. Renderas rekursivt (`_renderChildren` →
+Panel 1 (längst till vänster, kollapsad som standard). Ren layout-wrapper
+— en stapel kollapsbara "input-kanal"-sektioner (idag bara en:
+`data-section="webcam"`, som hostar `<wa-webcam-input>`). Äger ingen
+egen state alls, bara kollapsa/expandera-togglingen av varje sektions
+`.section-body`. Tänkt att växa med fler sektioner (MIDI, OSC, "External
+JavaScript") senare — se
+[architecture-overview.md](architecture-overview.md#input-panelen-och-webbkameran-nytt-2026-09-22)
+för hela INPUT-lagrets arkitektur (utanför WAXML-schemat, skriver bara
+till vanliga root-`<Var>` via `playerStore.setVariable()`).
+
+### wa-webcam-input.js (~1125 rader)
+
+MediaPipe hand-/pose-/face-landmark-spårning i webbläsaren, porterad
+nära verbatim från Hans egen referensimplementation
+(https://msw.waxml.org/, hämtad 2026-09-22). Laddar
+`@mediapipe/tasks-vision` (version låst, `MEDIAPIPE_VERSION`) som ett
+dynamiskt CDN-modulimport, plus tre modeller (`hand_landmarker`,
+`pose_landmarker_lite`, `face_landmarker`) — alla tre laddas en gång och
+hålls varma över senare Stop/Start-togglingar (`_ensureModelsLoaded`),
+aldrig automatiskt bara för att panelen är synlig.
+
+**Matte** (ren, DOM-fri, samma namn/formler som referensen): `dist2d`/
+`dist3d` för två punkter, `area2d`/`area3d`/`circum2d`/`circum3d` för tre
+(triangel), `area2d`/`circum2d` för fler (polygon) — `calcValues(pts,
+type)` väljer rätt formelset från antal valda landmärken
+(`typeForCount`).
+
+**Interaktion**: klick på en landmärkespunkt i canvasen väljer/avväljer
+den (`_onCanvasClick`/`_nearestLandmark`, hit-test mot alla just nu
+synliga landmärken från de påslagna modellerna); "Add" sparar den
+aktuella kombinationen som en ny rad (`_savedEntries`, `_buildSavedRow`)
+med löpande liveberäknade värden. Varje beräknad metrik-nyckel (x/y/z,
+dist2d/dist3d, ...) har en egen mappnings-kontroll
+(`_buildMapControl`/`_refreshMapControl`) som öppnar `wa-var-picker.js`
+och skickar `playerStore.setVariable(name, value)` för just de metriker
+som faktiskt är mappade (`_sendMappedValues`) — allt annat är bara
+visningsläge.
+
+**Persistence**: `getState()`/`applyState()` (modell-toggles, vald
+kamera, sparade rader + deras mappningar) — kopplas in av
+`workstation-state.js`s `registerLayoutExtras({ webcamInput })` via ett
+`"state-change"`-event (`composed: true`). Aldrig `wa.xml`-innehåll, se
+architecture-overview.
+
+### wa-var-picker.js (~225 rader)
+
+Popup "välj ett root-`<Var>`, eller skapa ett nytt" — öppnad från
+`wa-webcam-input.js`s per-metrik-mappningskontroller. Samma imperativa
+mönster som `wa-voice-picker.js`s `openVoicePicker` (se Delat ramverk
+nedan): `const name = await openVarPicker(anchorRect);`. "New
+Variable..." skapar `<Var>`:et direkt (`xmlStore.addRootVar(name)`) med
+ett föreslaget, redan genererat namn (`generateVarName`) redigerbart
+innan commit — till skillnad från en voice (bara en textsträng) skapar
+den här pickern alltså faktiskt ett nytt element vid val.
+
+### wa-file-manager.js (~865 rader — mer än fördubblad sedan förra genomgången)
+
+Filträdet för `vfs` — panel 2 (efter Input-panelen, se ovan). Renderas rekursivt (`_renderChildren` →
 `_renderFolderNode`/`_renderFileNode`), mappar sorteras före filer, sen
 alfabetiskt. Expanderat/kollapsat state hålls i en `_collapsedIds`-`Set`
 (samma mönster som `wa-xml-tree.js`s eget). Full omritning av hela trädet
@@ -62,15 +125,75 @@ som bara accepterar filer.
 redigering sker inte här utan i `document-sync.js`, som lyssnar på samma
 `selection`-singleton.
 
-### wa-xml-editor.js (~45 rader)
+**Multi-select (nytt, 2026-09-15)**: egen Finder/Explorer-stil
+`_selectedIds`-`Set`, skild från den delade `selection`-singleton —
+Cmd/Ctrl-klick togglar en rad, Shift-klick markerar det synliga
+intervallet från senaste vanliga klick (`_flattenVisibleIds`, respekterar
+hopfällda mappar). Drar man en rad som redan är markerad följer HELA
+multi-markeringen med i draget (annars kollapsas markeringen till bara
+den dragna raden, som i ett riktigt filväljarfönster) — se
+[architecture-overview.md](architecture-overview.md#file-manager-multi-select-mappdrop-och-namnkollisioner-nytt-2026-09-1518)
+för hela mönstret, delat med `xmlStore`s egen multi-select.
 
-Ren komposition, ingen egen logik. Staplar `<wa-schema-input>` (fast
-höjd, överkant), `<wa-xml-tree>` (`flex: 1 1 auto`, scrollar) och
-`<wa-node-inspector>` (docked underst, `max-height: 40%`) i sitt shadow
-DOM. All kommunikation mellan dem sker via det delade `xmlStore`-
-singleton-objektet, inte via denna wrapper.
+**Namnkollision (nytt, 2026-09-18)**: `_handleFiles`/
+`_moveNodesWithConflictCheck` frågar via `wa-file-conflict-dialog.js`
+(Replace/Keep both/Cancel) innan en uppladdning eller intern flytt skulle
+skriva över en redan existande fil med samma namn i målmappen — gäller
+både ett Finder-drop och ett drag internt i File Manager, aldrig `.zip`
+(packas alltid upp, blir aldrig en egen fil att kollidera).
 
-#### wa-xml-tree.js (~1088 rader)
+**Riktigt mapp-drop från OS (nytt, 2026-09-16)**: `_handleDataTransfer`
+läser `dataTransfer.items`/`webkitGetAsEntry()` (synkront, innan någon
+`await`) för att få en riktig `FileSystemEntry` att rekursera igenom
+(`_importEntries`/`_readAllEntries`) — en dropped mapp blir en riktig VFS-
+mapp i stället för att plattas till en oanvändbar fil. Faller tillbaka
+till den gamla `dataTransfer.files`-vägen om `webkitGetAsEntry` saknas.
+
+**Ljudfil-förhandsvisning (ändrat, 2026-09-16)**: ett enkelklick på en
+ljudfil (`isPreviewableAudioFile`, importerad från `wa-file-preview.js`,
+se nedan) väljer bara — förhandsvisning + autoplay kräver nu ett
+dubbelklick (`_wireFileDoubleClick`). Allt annat (mappar, `.xml`-filer)
+är oförändrat enkelklicksaktiverat. Byt-namn-på-dubbelklick är avstängt
+just för ljudfiler (`dblClickToRename: false`) eftersom dubbelklicket
+redan betyder något annat där — pennikonen fungerar fortfarande.
+
+### wa-file-preview.js (~310 rader, ny)
+
+Panel 2:s (File Manager) egen yta har ingen waveform-vy — den här filen är
+det: en alltid monterad, `xmlStore`-oberoende komponent som lyssnar direkt
+på `selection` (samma singleton File Manager skriver till) och visar
+waveform + transport (play/stop/loop/gå-till-start) + klicka-för-att-söka
+för en markerad ljudfil, oavsett om filen ens refereras någonstans i XML:et
+än. Spelar upp via en vanlig `<audio>`-tagg, inte WAXML-motorn/bridgen —
+det här är en fristående asset-preview, inte en del av kompositionsgrafen,
+så den varken behöver eller vill ha motorns gesture-gate:ade
+`AudioContext`-livscykel. `bridge.audioContext` (en egen `WaxmlBridge`-
+instans) återanvänds bara för `decodeAudioBuffer`s waveform-peaks, för att
+undvika en andra samtidig `AudioContext`. Exporterar
+`isPreviewableAudioFile(node)` (`.mp3/.wav/.ogg/.m4a`), delad med
+`wa-file-manager.js` och `wa-preview.js` (som växlar till samma "file"-
+state — se nedan — när en ljudfil markeras i File Manager, oavsett vilken
+XML-nod som råkade vara markerad sen tidigare).
+
+### wa-xml-editor.js (~125 rader — växte från 45)
+
+Ren komposition, i grunden ingen egen logik. Staplar `<wa-schema-input>`
+(dold sedan 2026-09-15 — se nedan; fast höjd, överkant), `<wa-xml-tree>`
+(scrollar, ensam ägare av sin egen scroll-region) och
+`<wa-node-inspector>` (docked underst) i sitt shadow DOM, delaren mellan
+träd/Inspector nu dragbar och persisterad (`getSplitRatio`/
+`setSplitRatio`, ett `"split-change"`-event — samma
+`workstation-state.js`-mönster som `wa-panel.js`s eget). All annan
+kommunikation mellan barnen sker via det delade `xmlStore`-singleton-
+objektet, inte via denna wrapper.
+
+`<wa-schema-input>` göms med `display: none` (inte borttagen) sedan
+2026-09-15 — vilket schema som är laddat är i praktiken fast i den här
+appen, så en bytbar/borttagbar schema-chip är bara skräp just nu; kommer
+tillbaka den dag XML-editorn/Code-panelen bryts ut till ett mer
+generellt, icke-WAXML-specifikt verktyg.
+
+#### wa-xml-tree.js (~1540 rader — växte från 1088)
 
 Rendermodellen är **inte** ett nästlat DOM-träd utan en platt,
 indenterad CSS-grid ("Finder list view") — `_flatten()` gör en
@@ -104,10 +227,35 @@ från Y-position i raden: övre 25% = "före", nedre 25% = "efter", mitten =
 `src`, infoga `AudioBufferSourceNode` före/efter), gated av schemats
 deklarerade src-attribut och tillåtna barn.
 
-Inga tangentbordsgenvägar i den här filen (bara Enter/Escape inuti
-attribut-redigeringsfältet).
+**Multi-select, klipp, "reveal" (nytt, 2026-09-06/08)**: klickhanteringen
+(`_handleRowClick`, samma Finder/Explorer-mönster `wa-file-manager.js`
+sen fick sin egen variant av) ropar `xmlStore.selectNode`/
+`toggleNodeSelection`/`selectRange` beroende på Cmd/Ctrl-/Shift-modifierare
+— se
+[architecture-overview.md](architecture-overview.md#multi-select-kopieraklipp-ut-klistra-in-nytt-2026-09-0607).
+En rad vars id finns i `xmlStore.clipboardCutIds` (en väntande cut, inte
+än flyttad) får en streckad "markerad för klipp"-stil. `selectNode`s
+`reveal: true`-läge (satt externt, t.ex. av ett dubbelklick i Section/
+Composition-preview) expanderar varje hopfälld förälder till noden och
+scrollar in den.
 
-#### wa-node-inspector.js (~980 rader)
+**Persisterad kolumn-/hopfällningsstate (nytt, 2026-09-15)**:
+`getColumnsState()`/`applyColumnsState()` och
+`getCollapsedState()`/`applyCollapsedState()` — lästa/satta av
+`workstation-state.js` via `registerLayoutExtras`, skickar egna
+`"columns-change"`/`"collapse-change"`-event (`composed: true`) så en
+kolumnändring eller en fälld/expanderad rad faktiskt sparas i
+`workstation-state.json`, inte bara i minnet för sessionen.
+
+Inga egna tangentbordsgenvägar i den här filen (Undo/Redo/Copy/Cut/Paste
+är globala, se `wa-edit-menu.js` — bara Enter/Escape inuti attribut-
+redigeringsfältet hanteras lokalt här). Radering av en nod är fortfarande
+bara `✕`-knappen i raden, eller en vy-specifik Backspace/Delete-lyssnare
+(Mixer-kanaler, Section/Composition-preview, Command-/Var-genvägarna i
+bottom bar) — ingen generell "Backspace tar bort markerad nod"-genväg
+finns för XML-trädet självt.
+
+#### wa-node-inspector.js (~1350 rader — växte från 980)
 
 Attributpanelen för markerad nod. Med aktivt schema visas **varje**
 schema-deklarerat attribut (även osatta) — inget separat "lägg till
@@ -124,6 +272,11 @@ samma pennikon-cykling mellan medlemstyper). Se
 för `_isLocalEdit`-mönstret och live-audio-nudgen som skiljer den här
 filens `onChange` från en trivial attributsättning.
 
+Ett `voice`-attributs kontroll (`_renderVoiceControl`, nytt 2026-09-15)
+öppnar `wa-voice-picker.js` (se Delat ramverk nedan) i stället för ett
+fritt textfält — samma `<Layer>`/`<Stinger>`-delade "voice"-grupperings-
+koncept som schemat definierar.
+
 #### wa-schema-input.js (~209 rader)
 
 Låter användaren byta aktivt XSD-schema: filuppladdning
@@ -136,14 +289,15 @@ laddas om), och varken trädet eller markeringen nollställs. Element/
 attribut som blir schema-ogiltiga med det nya schemat renderas bara fritt
 (oskyddad text/tagg) tills användaren nästa gång interagerar med dem.
 
-### wa-preview.js (~309 rader)
+### wa-preview.js (~400 rader — växte från 309)
 
-Panel 3 — kontext-beroende förhandsvisning av markerad nod. Håller en
-`Map` av "states" (`empty`/`section`/`mixer`/`audio`/`missing`/`fallback`)
-och togglar vilken som är synlig via CSS (`display: none` på alla utom
-den aktiva) — `<wa-section-view>` och `<wa-mixer-view>` förblir båda
-monterade hela tiden och lyssnar själva på `xmlStore`, samma mönster som
-låter dem hålla sitt eget state levande medan de är dolda.
+Panel 4 — kontext-beroende förhandsvisning av markerad nod. Håller en
+`Map` av "states" (nu nio: `empty`/`section`/`composition`/`file`/`mixer`/
+`wam`/`audio`/`missing`/`fallback`) och togglar vilken som är synlig via
+CSS (`display: none` på alla utom den aktiva) — `<wa-section-view>`,
+`<wa-composition-view>` och `<wa-mixer-view>` förblir alla monterade hela
+tiden och lyssnar själva på `xmlStore`, samma mönster som låter dem hålla
+sitt eget state levande medan de är dolda.
 
 **"Sticky" context-vy**: markera något *inuti* en redan visad `<Section>`
 eller `<Mixer>` (t.ex. klicka en Layer-box i arrange-vyn, eller ett filter
@@ -151,13 +305,31 @@ i en channel strip) byter inte bort panelen till en bar attributlista —
 `isDescendantOfTag(node, tagName)` gör en riktig träd-vandring uppåt
 (`.parent`-kedjan) istället för en hårdkodad tagg-whitelist, så det gäller
 för *alla* framtida elementtyper nästlade i en Mixer/Section, inte bara
-de som fanns när koden skrevs.
+de som fanns när koden skrevs. Samma idé har nu en syster,
+`findAncestorOrSelf` (nytt, 2026-09-05/07), som returnerar den faktiska
+förälder-noden i stället för bara ett booleskt svar — den avgör "vilken
+`<Section>` hör den här markeringen till" för Layer/Segment/Option/
+Stinger/Command, så att t.ex. en klickning rakt in i ett `<Layer>` från
+XML-trädet öppnar rätt Section-vy i stället för att falla igenom till en
+bar attributlista. Ett särfall: en vanlig (icke-`open`) markering av en
+Section (eller dess ättling) som redan tillhör den Composition som just
+nu visas i Composition-preview byter INTE bort panelen från Composition-
+vyn — bara ett explicit "öppna" (dubbelklick, `selectNode`s `open`-läge)
+tvingar bytet, samma "sticky"-princip som Mixer/Section ovan.
+
+**Ny "file"-state** (nytt, 2026-09-10): en markering i `selection`
+(File Manager, helt fristående från `xmlStore`) tar över panelen på
+samma sätt som en ny XML-markering skulle, om filen är en förhandsvisbar
+ljudfil (`isPreviewableAudioFile`, från `wa-file-preview.js`) — visar
+`<wa-file-preview>`. En efterföljande, orelaterad `xmlStore`-`"change"`
+(t.ex. en live attributändring nån annanstans) rycker inte undan
+file-vyn av misstag; bara en genuint NY XML-trädmarkering gör det.
 
 För allt annat: hittar schemat en src/source-attribut-deklaration
 (`findSrcAttribute`) → visar waveform + WAXML play/stop-knappar (via
 `WaxmlBridge`); annars fallback-vy med rå attributlista.
 
-#### wa-section-view.js (~2670 rader — den näst största filen i appen)
+#### wa-section-view.js (~4340 rader — nu den STÖRSTA filen i appen, gick om Mixern)
 
 DAW-stil arrange-vy för **en** `<Section>`s interna tidslinje-struktur.
 
@@ -219,7 +391,19 @@ bekräfta/fixa motorn. Ett Options `pos` betyder olika saker beroende på
 förälder (ignoreras i ett Segment, meningsfullt i en Stinger) — känd
 skarp kant i schemat.
 
-#### wa-mixer-view.js (~2500 rader — den största filen i appen)
+**Per-rad Layer/Stinger-kontroller, delvis pausade (nytt 2026-09-11,
+pausat 2026-09-15)**: `_buildLayerControls` bygger en volymfader+VU,
+Mute/Solo och en output-routingknapp för varje Layer-/Stinger-rad — men
+just nu är bara output-knappen faktiskt synlig, fader/Mute/Solo är
+avstängda i väntan på en fix (koden finns kvar, tre rader kommenterade
+ut). Se
+[architecture-overview.md](architecture-overview.md#section-preview-daw-vyn-för-section-nytt-2026-08–09)
+för hela historiken, inklusive Solo-designen (inget eget XML-attribut,
+mutear syskon i stället) och "reveal"-gesten (`selectNode`s `reveal`-
+läge, expanderar/scrollar XML-trädet till noden — satt av ett
+dubbelklick på en Layer-etikett eller Segment/Option-box här).
+
+#### wa-mixer-view.js (~3115 rader — näst störst, omkörd av Section-vyn)
 
 Analog-mixer-stil channel-strip-vy för en `<Mixer>`. Se
 [architecture-overview.md](architecture-overview.md#mixer-vyn-den-mest-komplexa-panelen)
@@ -268,9 +452,41 @@ mönster som kanaltyp-menyn (`_toggleChannelTypeMenu`). Nya filter får
 typberoende startfrekvens (`FILTER_TYPE_DEFAULT_FREQUENCY`: highshelf
 4000Hz, peaking 400Hz, lowshelf 150Hz, övriga 300Hz).
 
-### wa-xml-code.js (~235 rader)
+**Bara element med signal blir kanaler (nytt, 2026-09-21)**:
+`hasAudioSignal()`/`MIXER_NO_SIGNAL_TAGS` (`Var`, `Send`, `Envelope`)
+filtrerar bort `<Mixer>`-barn som inte är egna ljudkällor innan
+channel-strip-listan byggs — `<Include>` räknas medvetet INTE hit. Se
+[architecture-overview.md](architecture-overview.md#mixer-vyn-den-mest-komplexa-panelen)
+för det, och för Var-styrd solo (`solo="$namn"` låser både storslidern
+och varje kanals Solo-knapp mot klick, `this._soloLocked`).
 
-Rå XML-textpanelen — panel 4. **DOM-struktur**: tre exakt överlappande,
+#### wa-composition-view.js (~1775 rader, ny)
+
+Composition Preview — se
+[architecture-overview.md](architecture-overview.md#composition-preview-vy-för-spelsekvensen-av-sections-nytt-2026-09-05→21)
+för hela beskrivningen (spelsekvens-vy för `<Composition>`s `<Section>`-
+barn, en syster-arkitektur till Section-vyn ovan men ingen delad kod
+mellan dem förutom `section-model.js`s DOM-fria matte). Sammanfattat här:
+
+- Reguljära vs. transition-Sections (`from`/`to`/`syncTo` — `syncTo` är
+  det nya namnet på schemats gamla `quantize`, 2026-09-07), med en
+  "From Section:"-popup för att välja transitionens startpunkt.
+- `tempo`/`timeSign` kopieras explicit ner från `<Composition>` (eller,
+  för en transition, från "to"-Sectionens eget effektiva värde) redan vid
+  skapande — se `_insertTransition` och `xmlStore.insertNewChild`s egen
+  Section-gren.
+- `<Composition>` själv är raderbar med Backspace/Delete (nytt,
+  2026-09-21) — `_onKeyDown`, med samma `defaultPrevented`-vakt mot
+  dubbel-radering som `wa-bottom-bar.js`/`wa-player-bar.js` använder.
+- Playhead/pending-feedback drivs av `waxml.js`s egna
+  "Section-på-väg-att-trigga"-event (`_onSectionTrig`), inte en klient-
+  sidig gissning.
+- Multi-select + kopiera/klipp ut/klistra in via samma delade
+  `xmlStore`-mekanik som resten av editorn — ingen egen implementation.
+
+### wa-xml-code.js (~265 rader)
+
+Rå XML-textpanelen — panel 5. **DOM-struktur**: tre exakt överlappande,
 absolut-positionerade lager (`.line-bg` för radmarkering, `.highlight`
 för syntax-färgad, icke-interaktiv `<pre>`-liknande text, och en riktig
 `<textarea>` överst med `color: transparent`/synlig caret) — det klassiska
@@ -290,57 +506,274 @@ radnummer till caret-positionen → `xmlStore.getNodeIdAtLine()` →
 med en subtil bakgrund. **Ingen auto-scroll** åt något håll när
 markeringen ändras externt — bara highlight/klass uppdateras.
 
+Bugg fixad 2026-09-08: `.gutter`/`.line-bg`/`.highlight` klipptes till den
+synliga panelhöjden av sitt eget `overflow: hidden` (i stället för att
+klippas av `.content`s, det avsedda stället) — `_syncScroll`s
+`translateY` flyttade då bara en redan avklippt box runt på skärmen i
+stället för att genuint scrolla fram rader bortom det som råkade synas
+först. Fixat med `align-self: flex-start` (`.gutter`, opt-ar ut ur flex-
+radens standard cross-axis-stretch) och `inset` bytt mot `top/left/right`
+utan `bottom` (`.line-bg`/`.highlight`) — alla tre får nu sin naturliga,
+odelade höjd i stället.
+
 ---
 
 ## Header
 
-### wa-file-menu.js (~209 rader)
+### wa-file-menu.js (~335 rader — omskriven 2026-09-03/14, växte från 209)
 
-Tre menyval: **New Project**, **Open Project**, **Export Project...**.
+Fem menyval: **New**, **Open...**, **Save**, **Save As...**, **Share...**
+— **Export Project...** och en Templates-sektion som tidigare satt här är
+båda borta (2026-09-14, se
+[architecture-overview.md](architecture-overview.md#file-menyn--savesave-asshare-nytt-2026-09-03-förenklad-2026-09-14)).
 New och Open går båda genom en inline "Släng nuvarande projekt och
-starta/öppna...?"-bekräftelse (ingen `confirm()`) innan de anropar
-`createDefaultProject()`/öppnar filväljaren (`accept=".zip,.xml,.waxml"`)
-→ `openProjectFromFile(file)`. Export har ingen bekräftelse — anropar
-`exportProjectAsZip()` direkt.
+starta/öppna...?"-bekräftelse (ingen `confirm()`), Open via File System
+Access API:s `showOpenFilePicker` där webbläsaren stödjer det (annars
+klassisk `<input type="file">`). Save/Save As anropar
+`saveProject()`/`saveProjectAs()` (se `project-manager.js` nedan) direkt,
+ingen bekräftelse. Share öppnar `document.querySelector("wa-share-dialog")
+.open()` — dialogen själv är monterad direkt i `<body>` (`index.html`),
+inte här.
 
-### wa-player-bar.js (~176 rader)
+Genvägar: ⌘/Ctrl+N/O/S, ⇧⌘/Ctrl+S — `preventDefault()` anropas alltid,
+även om webbläsaren i vissa fall ändå tar N/O själv (reserverade
+webbläsargenvägar); S/⇧S är de som pålitligt fungerar.
 
-Global Play/Stop, oberoende av vilken Preview-vy som visas (se
-architecture-overview.md). Stop, inte Pause — inget separat pausat läge.
-Ett fritt redigerbart CSS-selector-textfält (auto-ifyllt när en `<Section>`
-markeras, men aldrig låst) avgör vad PLAY faktiskt triggar
-(`playerStore.setTriggerSelector`). Ingen tempo- eller transportposition-
-visning. Renderar dessutom en snabbknapp per root-nivå
-`<Command type="trig">`, grupperade visuellt via delat `class`-attribut
-(kommentar i filen flaggar att `<Command>`s schema inte formellt
-deklarerar `class`/`id` — läser alltså odeklarerad data, värt att fixa i
-schemat).
+### wa-edit-menu.js (~240 rader, ny)
+
+Tredje menyn i headern: **Undo**, **Redo**, **Copy**, **Cut**, **Paste**
+(med plattforms-korrekta genvägshintar, ⌘ på Mac annars "Ctrl"). Undo/
+Redo delegerar rakt till `edit-history.js` (`undo()`/`redo()`,
+`canUndo()`/`canRedo()` styr disabled-state); Copy/Cut/Paste till
+`xmlStore.copySelection()`/`cutSelection()`/`pasteIntoSelection()` — se
+[architecture-overview.md](architecture-overview.md#multi-select-kopiera-klipp-ut-klistra-in-nytt-2026-09-0607).
+Egna globala Cmd/Ctrl+C/X/V-genvägar (skippade i redigerbara fält,
+`isEditableContext()`) plus ett obetingat Escape som släpper en väntande
+cut (`xmlStore.clearPendingCut()`) — den enda av de fem åtgärderna som
+INTE kräver ett modifierat tangenttryck. Ett misslyckat paste (t.ex.
+schema-ogiltig tagg för målet) visas som en `showToast()`-varning
+(`js/ui/toast.js`, se Delat ramverk nedan) i stället för att tigas ihjäl.
+
+### wa-view-menu.js (~130 rader, ny)
+
+Fjärde menyn: **Workstation** / **Library (DEMO)** — togglar
+`js/state/view.js`s `viewState` (se Persistence nedan). Samma
+dropdown-stomme som `wa-file-menu.js`/`wa-edit-menu.js`, kopierad snarare
+än delad (ingen egen logik gemensam bortom formen). Hade tidigare även en
+tredje post, **API**, som togs bort 2026-09-13 när den vyn flyttade in i
+Share-dialogen (se nedan) — bara två poster kvar nu.
+
+### wa-player-bar.js (~520 rader — samma fil, ny hemvist 2026-09-20)
+
+Filen är i grunden oförändrad (Play/Stop, det fritt redigerbara CSS-
+selector-fältet, root-nivå `<Command type="trig">`-genvägar grupperade
+via delat `class`, Var-rattar via `<wa-var-knobs>`) men **headern har
+inte längre en egen instans** — den ytan flyttade ut till
+`wa-bottom-bar.js` (se nedan). Komponenten lever kvar och monteras nu bara
+en gång, i Library (DEMO)-vyns bottombar
+(`js/components/wa-library-view.js`), med ett nytt `minimal`-attribut
+(rent CSS) som döljer Play-knappen/selector-fältet/"+"-knapparna och bara
+visar Stop + de befintliga shortcut-knapparna + Var-rattarna — Library-
+vyn har redan en egen, större Stop-kontroll på annat håll i sitt eget UI.
+`[hidden]` reserverar numer en Var-knapps höjd i förväg (`min-height`) så
+komponenten inte hoppar i storlek första gången en `<Var>`-ratt dyker upp.
+
+---
+
+## Bottom bar
+
+### wa-bottom-bar.js (~640 rader, ny — den globala transporten, 2026-09-20)
+
+Ersättaren för headerns gamla `<wa-player-bar>`, se
+[architecture-overview.md](architecture-overview.md#bottom-bar--triggersvariables-flyttade-ut-ur-headern-nytt-2026-09-20)
+för hela designen (global rad + villkorlig lokal rad, dynamisk
+Triggers/Variables-breddbalansering). Kort sammanfattat per fil:
+
+- **Två `<wa-var-knobs>`-instanser**: `.global-knobs` (scope: `null` =
+  dokumentroten) och `.local-knobs` (scope: `this._localScopeNode()`,
+  bara monterad/synlig via `:host(.has-local)`).
+- **`_qualifyingCommands(scopeNode)`** filtrerar `<Command>`-barn till de
+  som faktiskt är användbara: `type="trig"` med ett `value`, ELLER
+  `type="set"` med ett `variable` — grupperade visuellt precis som förr
+  via delat `class`.
+- **`_recalcLayout()`** (kört på render + `resize`) mäter varje kolumns
+  "unwrapped" naturliga bredd (`naturalWrapWidth`, tvingar tillfälligt
+  `flex-wrap: nowrap` på både `.shortcuts`-containern och varje enskild
+  `.shortcut-group` för att få ett sant mått) och sätter CSS-custom-
+  propertyn `--trig-col-w` — grid-template-columns egen `1fr` för
+  Variables-kolumnen absorberar resten.
+- **`_onKeyDown`**: Space togglar Play/Stop (samma
+  `defaultPrevented`-vakt mot `wa-player-bar.js`s identiska lyssnare, som
+  fortfarande kan vara monterad samtidigt i Library-vyn); Backspace/Delete
+  tar bort en markerad `<Command>` som hör till antingen den globala
+  (root) eller den aktuella lokala scope-noden.
+- **`_addVarElement()`** anropar bara `xmlStore.addRootVar()` — den
+  faktiska grupperings-/index-logiken bor numer i `xmlStore` självt (se
+  Kärn-datamoduler nedan), delad med `wa-var-picker.js`s "New
+  Variable..."-flöde.
+
+### wa-var-knobs.js (~435 rader — generaliserad 2026-09-20, tidigare odokumenterad)
+
+En ratt per `<Var>`-barn till en "scope"-nod. Att vrida en ratt rör
+**aldrig** `xmlStore` — den anropar `playerStore.setVariable(name, value)`
+direkt, som vilken annan ren live-kontroll som helst (jämför
+`live-property.js`s `applyLiveProperty`) — en ratts position lever bara i
+komponentens egen `_values`-`Map`, inte i dokumentet.
+
+- **`setScopeNode(nodeId)`** (`null` = dokumentroten) pekar om instansen
+  — det som gör att samma komponent kan återanvändas för både den globala
+  och den lokala raden i `wa-bottom-bar.js`.
+- **`getNaturalWidth()`**: läser den ovikta bredden (tvingar `flex-wrap:
+  nowrap` tillfälligt, mäter, återställer) — bottom bars egen
+  breddbalansering (ovan) läser detta.
+- **Värdet återställs vid omladdning**: en `<Var>`s levande `Variable`-
+  objekt börjar alltid om på sitt XML-`default` vid en ny
+  `waxml.updateFromString()` — `_onPlayerChange` upptäcker övergången
+  `isDocumentLoaded: false → true` och skickar tillbaka varje ratts redan
+  uppdragna värde direkt, så en strukturell ändring nån annanstans i
+  dokumentet inte tyst nollställer en ratt användaren just ställt in.
+- Dra-gest väljer INTE noden (bara ett rent klick gör, avgjort i
+  `pointerup` genom att jämföra mot ett litet `DRAG_THRESHOLD_PX`) —
+  samma "dra ≠ markera"-princip som Mixerns rattar. Dubbelklick
+  återställer till `default`.
+- Backspace/Delete tar bort den markerade `<Var>`, om den är ett av den
+  här instansens egna scope-barn (samma `defaultPrevented`-vakt som
+  `wa-bottom-bar.js`/`wa-player-bar.js`, eftersom flera instanser kan
+  vara monterade samtidigt).
+
+---
+
+## Library (DEMO), Share och API
+
+### wa-library-view.js (~570 rader, ny)
+
+Spotify-lik "bibliotek av produktioner"-sketch (se
+[architecture-overview.md](architecture-overview.md#view-meny-library-demo-och-share-dialogen-nytt-2026-09-1013))
+— monterad direkt i `<body>` (`index.html`), togglad synlig av `app.js`
+via `viewState`. Tio påhittade produktioner (`FAKE_PRODUCTIONS`, statiska
+namn/beskrivningar/CSS-gradient-thumbnails, ingen bild-fil behövs) plus
+det riktiga, öppna projektet — alltid inklistrat mitt i listan
+(`Math.floor(list.length / 2)`) och alltid markerat aktivt (grön prick).
+`describeRealProject(root)` bygger en riktig, faktabaserad beskrivning
+(inga externa tjänster) genom att räkna Sections/transitions/Layers/
+Stingers/ljudfiler/Mixer-kanaler/övriga Web Audio-noder direkt ur
+`xmlStore.root`. Bottombaren är en rak `<wa-player-bar minimal>`-instans
+(se ovan).
+
+### wa-share-dialog.js (~115 rader, ny)
+
+Modal overlay ("Share...", File-menyn) som bara wrappar `<wa-api-view>` i
+en dialog-stomme (backdrop, header med stängknapp, Escape/backdrop-klick
+stänger) — `open()`/`close()` togglar `hidden`. Ingen egen logik utöver
+det; allt innehåll kommer från `wa-api-view.js`.
+
+### wa-api-view.js (~355 rader — oförändrat innehåll, ompositionerad 2026-09-13)
+
+Var tidigare en egen top-level "API"-vy (View-menyn); bor numer bara
+inuti Share-dialogen, komponenten själv är i övrigt oförändrad. Fem
+genererade kodblock (HTML `<script data-source="...">`-taggen, plus
+`trig`/`set` var sin variant av HTML-attribut och JavaScript-API), byggda
+live från det öppna projektets root-nivå `<Command type="trig">` och
+`<Var>` (`rootTrigCommands`/`rootVars`, samma filter `wa-player-bar.js`s
+egna shortcuts/knobs använder). Kodblocken byggs av riktiga DOM-text-
+noder, aldrig `innerHTML` — en Commands `value`/ett Vars `name` (fri,
+användarskriven XML-text) kan aldrig tolkas som markup. En riktig
+**Export...**-knapp (nytt, 2026-09-18) anropar `exportProjectAsZip()` och
+visar ett kort "Exporting..."-läge medan JSZip jobbar.
 
 ---
 
 ## Delat ramverk
 
-### wa-panel.js (~213 rader)
+### wa-panel.js (~340 rader — växte från 213)
 
-Generisk visa/dölj/resize-wrapper, används av alla fyra huvudpaneler (se
-architecture-overview.md). Kollapsad krymper panelen till en smal
-ikonrand och lämnar sin bredd till närmaste expanderade panel till
-vänster (`_findAbsorbingNeighbor`) — inte nödvändigtvis den enda panelen
-märkt `fill`. Publik `collapsed`-getter; `toggleCollapse(force)` skickar
-ett `"collapse-change"`-CustomEvent (tillagt 2026-08-30 för
-`workstation-state.js`s räkning).
+Generisk visa/dölj/resize-wrapper, används av alla fem huvudpaneler (se
+architecture-overview.md — Input-panelen inräknad sedan 2026-09-22).
+Kollapsad krymper panelen till en smal ikonrand och lämnar sin bredd till
+närmaste expanderade panel till vänster (`_findAbsorbingNeighbor`) — inte
+nödvändigtvis den enda panelen märkt `fill`. Publik `collapsed`-getter;
+`toggleCollapse(force)` skickar ett `"collapse-change"`-CustomEvent
+(tillagt 2026-08-30 för `workstation-state.js`s räkning). En bredd-
+ändring (drag i resize-handtaget, eller `setWidthBasis()`) skickar numer
+även `"width-change"` (nytt, 2026-09-03/04) — samma
+`workstation-state.js`-lyssnare, så en manuellt satt panelbredd
+persisteras precis som kollaps-state.
+
+### wa-file-conflict-dialog.js (~155 rader, ny)
+
+Modal fråga vid namnkollision (se `wa-file-manager.js` ovan) — Replace/
+Keep both/Cancel. Används imperativt: `const action = await
+openFileConflictDialog(names)`, löser till `"replace"` | `"keep-both"` |
+`"cancel"` (även vid Escape/backdrop-klick). Samma
+skapa-elementet-lägg-i-body-och-vänta-in-ett-Promise-mönster som
+`wa-voice-picker.js`/`wa-var-picker.js`/`wa-io-picker.js`.
+
+### wa-notice-dialog.js (~110 rader, ny)
+
+Minimal en-knapps "OK"-popup för ett engångsmeddelande — `xmlStore`s
+`"notice"`-event (se `_applyActiveFadeTimeWorkaround`, Kärn-datamoduler
+nedan) är den enda anroparen just nu. Används fire-and-forget:
+`showNotice("...")`, inget returvärde att vänta in (bara en knapp, inget
+val). Samma backdrop+dialog-stomme som `wa-file-conflict-dialog.js`.
+
+### wa-voice-picker.js (~205 rader, ny)
+
+Popup "välj en redan använd voice, eller skriv en ny" — öppnas från
+`wa-node-inspector.js`s `voice`-attributkontroll. Alla `<Layer>`/
+`<Stinger>`/etc. som delar samma `voice`-värde behandlas av `waxml.js`
+som ETT monofoniskt instrument, så att välja från vad som redan
+finns i dokumentet (i stället för att skriva om det för hand varje gång)
+skyddar mot en tyst felstavning som råkar skapa en andra, orelaterad
+voice-grupp. Samma imperativa `await openVoicePicker(existingVoices,
+anchorRect)`-mönster som de andra pickers-komponenterna ovan.
+
+### js/ui/toast.js (~45 rader, ny)
+
+Minimal, beroendefri notis-toast — `showToast(message, { kind, durationMs
+})`, fästs direkt i `document.body` (inte i någon komponents shadow DOM,
+eftersom det här är en app-bred angelägenhet). Enda anroparen just nu:
+`wa-edit-menu.js`s Paste, vid ett avslaget (schema-ogiltigt) klistra-in-
+försök. Inget annat notis-/banner-verktyg finns i appen sen tidigare —
+`console.warn` används för bakgrunds-only-problem, native `alert()`/
+`confirm()` undviks medvetet överallt (jämför File-menyns egna inline-
+bekräftelser).
 
 ---
 
 ## Kärn-datamoduler
 
-### xml-store.js, xml-tree-ops.js, schema-parser.js
+### xml-store.js (~715 rader — mer än fördubblad sedan förra genomgången), xml-tree-ops.js (~475 rader), schema-parser.js
 
 Se [architecture-overview.md](architecture-overview.md) — dessa tre är
 kärnan i hela redigeringsupplevelsen och beskrivs där i detalj
 (dokumentträdets form, strukturell/icke-strukturell-flaggan, det interna
 trädid:t kontra XML `id`-attributet, schema-tolkningen och 2026-08-30-
-buggen i `applyBaseKeyword`).
+buggen i `applyBaseKeyword`). Sen dess har `xml-store.js` fått: en riktig
+multi-selektion (`selectedNodeIds`, `toggleNodeSelection`/`selectRange`)
+och copy/cut/paste (`copySelection`/`cutSelection`/`pasteIntoSelection`,
+schema-validerat innan commit); `addRootVar(name)` (delad av
+`wa-bottom-bar.js`s "+"-knapp och `wa-var-picker.js`s "New
+Variable..."-flöde); en Composition-sidans live-nudge-allowlist
+(`LIVE_NUDGE_ALLOWED_ATTRS`/`LIVE_NUDGEABLE_COMPOSITION_TAGS`, för
+`<Section>`/`<Layer>`/`<Stinger>`s generiska `.set()`); och `"notice"` —
+den enda UI-riktade eventtypen modulen skickar, för
+`_applyActiveFadeTimeWorkaround`s `<Layer active>`/`fadeTime="0"`-
+workaround (se `wa-notice-dialog.js` ovan). `xml-tree-ops.js` fick
+motsvarande hjälpfunktioner: `cloneNode` (id-ombytt kloning, för paste/
+duplicera), `reparentNode`/`isDescendantOf` (för cut-paste respektive
+paste-in-i-sig-själv-skyddet), `generateVarName`/`generateCommandId`/
+`generateSectionClass` (auto-namngivning för nya `<Var>`/`<Command>`/
+`<Section>`).
+
+### variable-references.js (~25 rader, ny)
+
+`isVariableControlled(value)`/`variableNameFromValue(value)` — avgör om
+ett attributs råa strängvärde är en `"$namn"`-referens till ett `<Var>`
+(regex kopierad från `waxml.js`s egen `WebAudioUtils.nrOfVariableNames`,
+eftersom `waxml.js` bara laddas som en `<script>`-tagg och inte exponerar
+sina interna hjälpare på `window`). Central i två helt olika sammanhang:
+`xml-store.js`s regel att en `$var`-referens alltid tvingar en full
+ombyggnad (se ovan), och `wa-mixer-view.js`s Var-styrda solo-lås.
 
 ### attribute-controls.js (~49 rader)
 
@@ -391,20 +824,23 @@ Beroendefri waveform-rendering (min/max-peakar per pixelkolumn på en
 
 ## Persistence
 
-### VFS.js, zip-import.js, drag-types.js, selection.js, document-sync.js, project-manager.js, workstation-state.js
+### VFS.js, zip-import.js, drag-types.js, selection.js, view.js, document-sync.js, project-manager.js, workstation-state.js
 
 Se [architecture-overview.md](architecture-overview.md) för hela
-livscykeln (Ny/Öppna/Exportera, `document-sync.js`s "utcheckad fil"-
+livscykeln (Ny/Öppna/Spara/Dela, `document-sync.js`s "utcheckad fil"-
 mönster, `workstation-state.js`s design). Ett par detaljer värda att
 komplettera med här:
 
-- **`drag-types.js`** (14 rader, hela filen): en `VFS_FILE_DRAG_TYPE`-
-  MIME-typ-konstant plus `vfsDragState = { fileId: null }` — ett muterbart
-  sidokanal-objekt som kringgår webbläsarens "protected mode" för
-  `dataTransfer` under `dragover` (där `getData()` inte fungerar än), så
-  ett drop-mål kan slå upp VILKEN fil som dras redan innan drop (t.ex. för
-  att förhandsvisa dess riktiga avkodade längd). Sätts av
-  `wa-file-manager.js` vid `dragstart`/`dragend`.
+- **`drag-types.js`** (nu ~36 rader, växte från 14): en
+  `VFS_FILE_DRAG_TYPE`-MIME-typ-konstant plus `vfsDragState = { fileId,
+  fileIds }` — ett muterbart sidokanal-objekt som kringgår webbläsarens
+  "protected mode" för `dataTransfer` under `dragover` (där `getData()`
+  inte fungerar än), så ett drop-mål kan slå upp VILKEN/VILKA filer som
+  dras redan innan drop. `fileIds` (plural, nytt för multi-select-draget,
+  2026-09-15) kompletterar det ursprungliga `fileId` snarare än att
+  ersätta det. Sätts av `wa-file-manager.js` vid `dragstart`/`dragend`;
+  `getDraggedFileIds(dataTransfer)` är den delade läsaren andra drop-mål
+  (t.ex. `wa-xml-tree.js`) använder.
 - **`zip-import.js`**: filändelse-whitelist (`SUPPORTED_EXTENSIONS`) —
   allt annat hoppas TYST över vid zip-uppackning. `.json` lades till
   2026-08-30 specifikt för `workstation-state.json`.
@@ -412,40 +848,91 @@ komplettera med här:
   som revokeras explicit vid `delete()`/`updateFileContent()` — inget
   läckage av object-URLs över en sessions livstid, så länge allt går via
   VFS:ens egna metoder (aldrig genom att peta i `_nodes` direkt).
+- **`js/state/view.js`** (~27 rader, ny): `viewState`, en minimal
+  singleton (`"workstation"` | `"library"`) för vilken top-level-vy som
+  visas — helt fristående från `xmlStore`/`vfs`/`playerStore`, se
+  `wa-view-menu.js` ovan och architecture-overview.md.
+- **`project-manager.js`** (~315 rader, växte): `saveProject()`/
+  `saveProjectAs()` (nytt, 2026-09-03) bygger projektets egen zip
+  (`buildProjectZipBlob`, `workstation-state.json` inkluderat) och
+  skriver via File System Access API eller `<a download>`;
+  `exportProjectAsZip()` bygger i stället `buildWebExportZipBlob` (nytt,
+  2026-09-18) — samma `vfs`-vandring men UTAN `workstation-state.json`
+  och MED en färsk `fetch("waxml.js")`-kopia bifogad. Se
+  architecture-overview.md för hela skillnaden. `savedFileHandle` är
+  modul-privat state (inte en komponents) — samma "var kom/gick projektet
+  senast"-resonemang som `document-sync.js`s `currentFileId`.
+  `loadTemplate()`/`listTemplates()` finns kvar men saknar sen 2026-09-14
+  en anropande meny-post (dödkod, se architecture-overview.md).
+- **`workstation-state.js`** (~185 rader, växte): utöver panel-kollaps
+  persisteras nu även varje panels bredd (`panelWidths`, via `wa-panel.js`s
+  `"width-change"`), XML-trädets kolumner/hopfällning
+  (`xmlTreeColumns`/`xmlTreeCollapsed`), tre delare (`splits`:
+  `xmlEditorTreeInspector`, `sectionLayerStinger`), Section-vyns
+  label-kolumnbredd (`sectionLabelWidth`), och `wa-webcam-input.js`s egen
+  state (`webcamInput` — modell-toggles, kamera, sparade
+  landmärkes-mappningar). `registerLayoutExtras()` är navet alla dessa
+  vy-specifika lyssnare kopplas in genom.
 
 ---
 
 ## Ljud/uppspelning
 
-### player-store.js, waxml-bridge.js, live-property.js, gain-units.js
+### player-store.js (~340 rader, växte), waxml-bridge.js, live-property.js, gain-units.js
 
 Se [architecture-overview.md](architecture-overview.md#live-ljud-utan-att-stoppa-uppspelningen).
 Kort sammanfattning av ansvarsfördelningen: `playerStore` äger globalt
-play/stop-state och lyssnar på `xmlStore`s `structural`-flagga (stoppar +
-tvingar omladdning vid en strukturell ändring, ignorerar attribut-
-ändringar helt); `WaxmlBridge` är enda stället som pratar direkt med det
-globala `window.waxml` (och håller den regeln att `waxml.init()` bara får
+play/stop-state och lyssnar på `xmlStore`s `"change"`-event (stoppar +
+schemalägger en omladdning vid en strukturell ändring; en
+icke-strukturell ändring kan i stället bära en `liveNudge`-detalj som
+nudgar ett Composition-sidans levande objekt direkt, se nedan);
+`WaxmlBridge` är enda stället som pratar direkt med det globala
+`window.waxml` (och håller den regeln att `waxml.init()` bara får
 anropas inifrån en riktig klick-handler); `live-property.js` och
 `gain-units.js` är de två små, delade byggstenarna (`applyLiveProperty`,
 `linearRatioToDb`) som låter `wa-mixer-view.js` och `wa-node-inspector.js`
 peta direkt på redan-spelande ljud utan att gå via `xmlStore`.
 
+Nytt sen förra genomgången: **`isDocumentLoaded`** (skild från
+`isPlaying`) — grafen laddas nu proaktivt vid varje strukturell ändring,
+inte bara lat vid första Play, så VU-mätare/solo-lampor/Var-rattar är
+meningsfulla innan Play någonsin tryckts. **`_applyLiveNudge`** läser
+`xmlStore`s `liveNudge`-detalj och anropar `.set(param, value)` direkt på
+ett `<Section>`/`<Layer>`/`<Stinger>`s levande objekt (ingen omladdning)
+— se `xml-store.js`s `LIVE_NUDGE_ALLOWED_ATTRS`/
+`LIVE_NUDGEABLE_COMPOSITION_TAGS` ovan. `play()` väntar nu in en redan
+pågående omladdning i stället för att bara konstatera att en var på gång
+(bugg per Hans, 2026-09-04).
+
 ---
 
 ## Bootstrap
 
-### app.js (~36 rader)
+### app.js (~90 rader — växte från 36)
 
 Laddar default-schemat (`schemas/waxml.xsd`) → `createDefaultProject()`.
 Registrerar alla `<wa-panel>`-element hos `workstation-state.js`
-(`registerPanels`). En `beforeunload`-guard varnar vid stängning/reload
-— Steg 0 kör helt i RAM, ingen persistence överlever ett refresh förutom
-det man just exporterat som zip.
+(`registerPanels`), plus tre extra shadow-DOM-interna refs
+(`registerLayoutExtras`: `xmlTree`/`xmlEditor`/`sectionView` — ett
+shadow-boundary-hopp in i `wa-xml-editor`/`wa-preview` — och sen
+2026-09-22 `webcamInput`, ett hopp in i `wa-input-panel`). Kopplar
+`xmlStore`s `"notice"`-event till `showNotice()` (se
+`wa-notice-dialog.js` ovan) — den enda platsen appen känner till att den
+kopplingen finns. Driver `viewState`s show/hide-logik
+(`applyView`, togglar `<main>`/`<wa-bottom-bar>`/`<wa-library-view>` och
+`<title>` — se `wa-view-menu.js` ovan). En `beforeunload`-guard varnar
+vid stängning/reload — Steg 0 kör helt i RAM, ingen persistence överlever
+ett refresh förutom det man just exporterat/sparat.
 
 ### index.html
 
-De fyra panelernas markup (med stabila `id`-attribut —
-`fileManager`/`xmlEditor`/`preview`/`xmlCode` — som `workstation-state.js`
-använder som JSON-nycklar), `<wa-file-menu>`/`<wa-player-bar>` i headern.
-Laddar JSZip (CDN) och `waxml.js` (lokal fil, med en no-op placeholder-
+De fem panelernas markup (med stabila `id`-attribut —
+`inputPanel`/`fileManager`/`xmlEditor`/`preview`/`xmlCode` — som
+`workstation-state.js` använder som JSON-nycklar; `inputPanel` kollapsad
+som standard, precis som `xmlCode`). Headern har tre menyer
+(`<wa-file-menu>`/`<wa-edit-menu>`/`<wa-view-menu>`) men ingen
+spelkontroll längre — `<wa-bottom-bar>` sitter i stället som ett eget
+element utanför `<main>`, och `<wa-library-view>`/`<wa-share-dialog>`
+(båda `hidden` som standard) direkt i `<body>`, efter bottom bar. Laddar
+JSZip (CDN) och `waxml.js` (lokal fil, med en no-op placeholder-
 `data-source` som ersätts direkt via `updateFromString()`).

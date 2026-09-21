@@ -447,16 +447,7 @@ export class WaBottomBar extends HTMLElement {
 
 	_addVarElement() {
 		if (!xmlStore.root) return;
-		const rootChildren = xmlStore.root.children;
-		const lastVarIndex = rootChildren.reduce((last, c, i) => (c.tagName === "Var" ? i : last), -1);
-		let index;
-		if (lastVarIndex >= 0) {
-			index = lastVarIndex + 1;
-		} else {
-			const firstCommandIndex = rootChildren.findIndex((c) => c.tagName === "Command");
-			index = firstCommandIndex >= 0 ? firstCommandIndex + 1 : 0;
-		}
-		xmlStore.insertNewChild(xmlStore.root.id, "Var", {}, index, { select: false });
+		xmlStore.addRootVar();
 	}
 
 	// A Command qualifies as a shortcut button if it's a usable "trig" (has
