@@ -8,6 +8,7 @@ import { selection } from "../state/selection.js";
 import "./wa-section-view.js";
 import "./wa-mixer-view.js";
 import "./wa-wam-view.js";
+import "./wa-var-view.js";
 import "./wa-composition-view.js";
 import { isPreviewableAudioFile } from "./wa-file-preview.js";
 
@@ -166,6 +167,10 @@ template.innerHTML = `
 		<wa-wam-view></wa-wam-view>
 	</div>
 
+	<div class="state" data-state="var">
+		<wa-var-view></wa-var-view>
+	</div>
+
 	<div class="state padded" data-state="audio">
 		<p class="node-label"><span class="tag"></span></p>
 		<canvas class="waveform" width="600" height="100"></canvas>
@@ -299,6 +304,17 @@ export class WaPreview extends HTMLElement {
 			// per Hans, selecting a <Wam> shows its own interface even when
 			// it's sitting inside a <Mixer> channel strip's insert chain.
 			this._showState("wam");
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
+		if (node.tagName === "Var") {
+			// Same priority reasoning as the Wam branch above — a <Var> can
+			// sit inside a <Mixer> (it's one of the tags MIXER_NO_SIGNAL_TAGS
+			// excludes from getting its own channel strip) and still needs
+			// its own mapping editor, not the Mixer view. Per Hans (2026-09-24).
+			this._showState("var");
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;

@@ -384,9 +384,40 @@
 
   <xs:simpleType name="curve">
     <xs:annotation>
-      <xs:documentation></xs:documentation>
+      <xs:documentation>Interpolation shape used between a Var's mapin/mapout points. Either one of the standard easing/shape presets, a bare number (a power curve exponent), or a free-form string for forward compatibility.</xs:documentation>
     </xs:annotation>
-    <xs:restriction base="xs:string"/>
+    <xs:union memberTypes="curveEnum xs:string"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="curveEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="linear"/>
+      <xs:enumeration value="step"/>
+      <xs:enumeration value="easeIn"/>
+      <xs:enumeration value="easeOut"/>
+      <xs:enumeration value="easeInOut"/>
+      <xs:enumeration value="easeInQuad"/>
+      <xs:enumeration value="easeOutQuad"/>
+      <xs:enumeration value="easeInOutQuad"/>
+      <xs:enumeration value="easeInCubic"/>
+      <xs:enumeration value="easeOutCubic"/>
+      <xs:enumeration value="easeInOutCubic"/>
+      <xs:enumeration value="easeInQuart"/>
+      <xs:enumeration value="easeOutQuart"/>
+      <xs:enumeration value="easeInOutQuart"/>
+      <xs:enumeration value="easeInQuint"/>
+      <xs:enumeration value="easeOutQuint"/>
+      <xs:enumeration value="easeInOutQuint"/>
+      <xs:enumeration value="easeInSine"/>
+      <xs:enumeration value="easeOutSine"/>
+      <xs:enumeration value="easeInOutSine"/>
+      <xs:enumeration value="easeInElastic"/>
+      <xs:enumeration value="easeOutElastic"/>
+      <xs:enumeration value="easeInOutElastic"/>
+      <xs:enumeration value="bell"/>
+      <xs:enumeration value="sine"/>
+      <xs:enumeration value="half-sine"/>
+    </xs:restriction>
   </xs:simpleType>
 
   <xs:simpleType name="follow">
@@ -461,14 +492,21 @@
 
   <xs:simpleType name="convert">
     <xs:annotation>
-      <xs:documentation></xs:documentation>
+      <xs:documentation>Final value conversion applied after mapin/mapout/curve. Either one of the built-in presets, or a free-form JavaScript expression using "x" as the incoming value.</xs:documentation>
     </xs:annotation>
-    <xs:restriction base="xs:string"/>
+    <xs:union memberTypes="convertEnum xs:string"/>
   </xs:simpleType>
 
-  <xs:simpleType name="steps">
+  <xs:simpleType name="convertEnum">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="MIDI->frequency"/>
+      <xs:enumeration value="dB->power"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="pattern">
     <xs:annotation>
-      <xs:documentation></xs:documentation>
+      <xs:documentation>A number series (e.g. scale degrees) used to quantize a Var's mapped output — see wa-var-view.js's "Pattern" node. Renamed from "steps" (per Hans, 2026-09-24).</xs:documentation>
     </xs:annotation>
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
@@ -1466,7 +1504,7 @@
           <xs:attribute name="trig" type="xs:string"/>
           <xs:attribute name="smoothDerivative" type="smoothDerivative"/>
           <xs:attribute name="curve" type="curve"/>
-          <xs:attribute name="steps" type="steps"/>
+          <xs:attribute name="pattern" type="pattern"/>
           <xs:attribute name="convert" type="convert"/>
         </xs:complexType>
       </xs:element>
@@ -1720,7 +1758,7 @@
     <xs:attribute name="dynamicvalues" type="dynamicvalues"/>  
     <xs:attribute name="targetvariables" type="targetvariables"/>  
     <xs:attribute name="convert" type="convert"/>  
-    <xs:attribute name="steps" type="steps"/>  
+    <xs:attribute name="pattern" type="pattern"/>  
     <xs:attribute name="fadeTime" type="fadeTime"/>
 
     <!-- Objective Audio -->
@@ -1847,7 +1885,7 @@
     <xs:attribute name="dynamicvalues" type="dynamicvalues"/>
     <xs:attribute name="targetvariables" type="targetvariables"/>
     <xs:attribute name="convert" type="convert"/>
-    <xs:attribute name="steps" type="steps"/>
+    <xs:attribute name="pattern" type="pattern"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
 
     <!-- Objective Audio -->

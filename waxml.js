@@ -7708,13 +7708,14 @@ class Mapper{
 		this.sourceValues = [];
 
 
-		let steps = params.steps;
+		let steps = params.steps || params.pattern;
 		// wrap single step array in container if needed
 		if(steps instanceof Array){
 			if(!steps.find(el => el instanceof Array)){
 				steps = [steps];
 			}
 		}
+		// steps is the old name. "pattern" is the new name for the same attribute
 		this.steps = steps;
 
 		this.curve = params.curve;

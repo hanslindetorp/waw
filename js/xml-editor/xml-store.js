@@ -442,6 +442,15 @@ class XmlStore extends EventTarget {
 	// silently do nothing.
 	static ROUTING_REBUILD_ATTRS = new Set(["output", "input", "bus"]);
 
+	// A <Var>'s mapping pipeline (see wa-var-view.js) — none of these are
+	// wired into waxml.js's live-nudge machinery (Var isn't in
+	// LIVE_NUDGEABLE_COMPOSITION_TAGS below), so without this, changing one
+	// would fall all the way through to the default structural=false / no
+	// live nudge case below — a silent no-op that never reaches the engine.
+	// Per Hans (2026-09-24): every add/remove/change of these needs a real
+	// updateFromString() every time.
+	static VAR_MAPPING_ATTRS = new Set(["mapin", "mapout", "curve", "pattern", "convert"]);
+
 	// <Section>/<Layer>/<Stinger> build a Section/Track/Motif at the waxml.js
 	// side, and all three now expose a generic live .set(param, value) —
 	// per Hans (2026-09-08), any attribute change on one of these (loopEnd,
@@ -591,6 +600,12 @@ class XmlStore extends EventTarget {
 		// *other* live-nudgeable Layer attribute is unaffected.
 		if (node.tagName === "Layer" && nextAttributes.active !== undefined && nextAttributes.active !== node.attributes.active) {
 			return true;
+		}
+		// See VAR_MAPPING_ATTRS above.
+		if (node.tagName === "Var") {
+			for (const name of XmlStore.VAR_MAPPING_ATTRS) {
+				if (nextAttributes[name] !== node.attributes[name]) return true;
+			}
 		}
 		// <Composition> itself (no live object of its own, see
 		// LIVE_NUDGEABLE_COMPOSITION_TAGS above) and anything else inside one
