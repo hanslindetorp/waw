@@ -1,4 +1,5 @@
 import { createDefaultProject, openProjectFromFile, saveProject, saveProjectAs } from "../project/project-manager.js";
+import { resetWebcamInputForNewProject } from "../project/workstation-state.js";
 
 const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const MOD_KEY_LABEL = IS_MAC ? "⌘" : "Ctrl+";
@@ -227,6 +228,7 @@ export class WaFileMenu extends HTMLElement {
 	_startNew() {
 		this._open();
 		this._confirmThen("Discard the current project and start a new default project?", () => {
+			resetWebcamInputForNewProject();
 			createDefaultProject();
 			this._close();
 		});

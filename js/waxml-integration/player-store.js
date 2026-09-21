@@ -286,11 +286,24 @@ class PlayerStore extends EventTarget {
 	// doesn't reload the document first: a <Var>'s own Variable object exists
 	// as soon as the graph is loaded at all, and turning a Var knob before
 	// the graph has ever loaded wouldn't mean anything yet anyway (nothing
-	// would be listening).
+	// would be listening). This is the real waxml.set()/setVariable() call —
+	// every caller (a Var knob being dragged, a Command type="set" shortcut,
+	// wa-webcam-input.js's own mapped metrics, ...) already goes through
+	// here, whatever the source.
+	//
+	// Dispatches "variable-change" (separate from the generic "change" used
+	// for isPlaying/documentLoaded/triggerSelector, which carries no useful
+	// detail for this) so any UI showing that same variable's value —
+	// wa-var-knobs.js's own knob, today — can visually follow along
+	// regardless of *what* just set it, without that UI needing its own
+	// polling loop. Per Hans (2026-09-23): "knobben ska också följa med när
+	// variabeln ändras men attributet value ska inte sättas i XML" — this
+	// event is display-only, never a write back into the document.
 	setVariable(name, value) {
 		if (!this._documentLoaded || !name) return;
 		try {
 			bridge.setVariable(name, value);
+			this.dispatchEvent(new CustomEvent("variable-change", { detail: { name, value } }));
 		} catch {
 			// waxml not loaded — nothing we can do until it is.
 		}

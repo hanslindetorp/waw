@@ -122,6 +122,16 @@ function applyState(state) {
 	}
 }
 
+// Called by wa-file-menu.js's "File > New..." (only there, never on Open —
+// per Hans, 2026-09-23): a brand new project has nothing for a webcam
+// mapping to be pointing at, so stop any running tracking and collapse the
+// panel back to its fresh-project default rather than leaving a camera
+// running against a document that's about to disappear.
+export function resetWebcamInputForNewProject() {
+	layoutExtras.webcamInput?.stop();
+	panels.find((p) => p.id === "inputPanel")?.toggleCollapse(true);
+}
+
 function findNodeByAttributeId(node, targetId) {
 	if (node.attributes.id === targetId) return node;
 	for (const child of node.children) {

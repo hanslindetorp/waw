@@ -167,10 +167,12 @@ export class WaVarKnobs extends HTMLElement {
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 		this._container = this.shadowRoot.querySelector(".var-knobs");
 		this._values = new Map(); // node id -> current live value, this component's own state (see class comment)
+		this._knobRuntime = new Map(); // node id -> { applyVisual, min, max } — see _onVariableChange
 		this._wasDocumentLoaded = false;
 		this._scopeNodeId = null; // null = document root (the default/global instance)
 		this._onXmlStoreChange = () => this._render();
 		this._onPlayerStoreChange = () => this._onPlayerChange();
+		this._onVariableChange = this._onVariableChange.bind(this);
 		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
@@ -204,6 +206,7 @@ export class WaVarKnobs extends HTMLElement {
 	connectedCallback() {
 		xmlStore.addEventListener("change", this._onXmlStoreChange);
 		playerStore.addEventListener("change", this._onPlayerStoreChange);
+		playerStore.addEventListener("variable-change", this._onVariableChange);
 		document.addEventListener("keydown", this._onKeyDown);
 		this._render();
 	}
@@ -211,7 +214,25 @@ export class WaVarKnobs extends HTMLElement {
 	disconnectedCallback() {
 		xmlStore.removeEventListener("change", this._onXmlStoreChange);
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
+		playerStore.removeEventListener("variable-change", this._onVariableChange);
 		document.removeEventListener("keydown", this._onKeyDown);
+	}
+
+	// Follows a variable set by *anything* (a Command type="set" shortcut,
+	// wa-webcam-input.js's own mapped metrics, ...) — never just the knob's
+	// own drag, which already updates itself directly. Per Hans (2026-09-23).
+	// Never touches xmlStore — same "display only" rule as everything else
+	// in this component (see the class comment).
+	_onVariableChange({ detail: { name, value } }) {
+		const scopeNode = this._getScopeNode();
+		if (!scopeNode) return;
+		const node = scopeNode.children.find((c) => c.tagName === "Var" && (c.attributes.name || c.attributes.id) === name);
+		if (!node) return;
+		const runtime = this._knobRuntime.get(node.id);
+		if (!runtime) return;
+		const clamped = Math.max(runtime.min, Math.min(runtime.max, value));
+		this._values.set(node.id, clamped);
+		runtime.applyVisual(clamped);
 	}
 
 	// Backspace/Delete removes the currently selected root-level <Var> —
@@ -254,6 +275,7 @@ export class WaVarKnobs extends HTMLElement {
 
 	_render() {
 		this._container.innerHTML = "";
+		this._knobRuntime.clear();
 		const scopeNode = this._getScopeNode();
 		const varNodes = scopeNode ? scopeNode.children.filter((c) => c.tagName === "Var") : [];
 		this.hidden = varNodes.length === 0;
@@ -333,6 +355,7 @@ export class WaVarKnobs extends HTMLElement {
 			knob.title = `${varName}: ${formatValue(v, max)}`;
 		};
 		applyVisual(current);
+		this._knobRuntime.set(node.id, { applyVisual, min, max });
 
 		const commit = (v) => {
 			this._values.set(node.id, v);
