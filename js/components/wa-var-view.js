@@ -71,6 +71,19 @@ function isNumericString(str) {
 	return Number.isFinite(Number(str));
 }
 
+// Curve values are names ("easeIn") or numbers ("2") — parseNumberList would
+// reject the names, so this keeps every comma-separated token as a raw
+// string instead of coercing it. Per Hans (2026-09-24): curve can hold one
+// global value or one per mapin/mapout segment ("Per point" mode).
+function parseCsvStrings(str) {
+	if (typeof str !== "string" || str.trim() === "") return null;
+	const parts = str
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s !== "");
+	return parts.length ? parts : null;
+}
+
 const template = document.createElement("template");
 template.innerHTML = `
 	<style>
@@ -234,14 +247,74 @@ template.innerHTML = `
 			align-items: center;
 		}
 		.axis-edit-input {
-			position: absolute;
 			width: 4.5rem;
-			font-size: 0.72rem;
-			padding: 0.1rem 0.25rem;
-			z-index: 2;
+			font-size: 0.75rem;
+			padding: 0.2rem 0.3rem;
 		}
 		.map-wrap {
 			position: relative;
+		}
+		.map-grid {
+			display: flex;
+			gap: 0.45rem;
+			align-items: stretch;
+		}
+		.map-y-labels {
+			display: flex;
+			flex-direction: column;
+			justify-content: space-between;
+			align-items: flex-end;
+		}
+		.map-main {
+			flex: 1;
+			min-width: 0;
+		}
+		.map-x-labels {
+			display: flex;
+			justify-content: space-between;
+			margin-top: 0.25rem;
+		}
+		.axis-label {
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.75rem;
+			color: var(--waw-fg, #e8e8e8);
+			padding: 0.15rem 0.4rem;
+			border-radius: 4px;
+			cursor: text;
+			border-bottom: 1px dotted var(--waw-muted, #8a8a8a);
+			white-space: nowrap;
+		}
+		.axis-label:hover {
+			background: rgba(255, 255, 255, 0.07);
+			border-bottom-color: var(--waw-accent, #4fa3ff);
+		}
+		.coord-tooltip {
+			position: absolute;
+			pointer-events: none;
+			background: #0c0c0c;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: var(--waw-fg, #e8e8e8);
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.68rem;
+			padding: 0.15rem 0.35rem;
+			border-radius: 4px;
+			transform: translate(10px, -100%);
+			white-space: nowrap;
+			z-index: 3;
+		}
+		.coord-tooltip[hidden] {
+			display: none;
+		}
+		.curve-mode-row {
+			font-size: 0.75rem;
+			color: var(--waw-muted, #8a8a8a);
+			gap: 0.9rem;
+		}
+		.curve-mode-row label {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.25rem;
+			cursor: pointer;
 		}
 	</style>
 
@@ -256,11 +329,24 @@ template.innerHTML = `
 		<div class="node enabled map-node">
 			<div class="node-header"><span class="node-title">Map (mapin / mapout)</span></div>
 			<div class="node-body">
-				<div class="map-wrap">
-					<canvas class="map-canvas" width="320" height="200"></canvas>
+				<div class="map-grid">
+					<div class="map-y-labels">
+						<span class="axis-label axis-mapout-max" data-which="mapout" data-endpoint="last" title="Double-click to edit"></span>
+						<span class="axis-label axis-mapout-min" data-which="mapout" data-endpoint="0" title="Double-click to edit"></span>
+					</div>
+					<div class="map-main">
+						<div class="map-wrap">
+							<canvas class="map-canvas" width="320" height="200"></canvas>
+							<div class="coord-tooltip" hidden></div>
+						</div>
+						<div class="map-x-labels">
+							<span class="axis-label axis-mapin-min" data-which="mapin" data-endpoint="0" title="Double-click to edit"></span>
+							<span class="axis-label axis-mapin-max" data-which="mapin" data-endpoint="last" title="Double-click to edit"></span>
+						</div>
+					</div>
 				</div>
 				<p class="warning pattern-warning" hidden>Pattern is active — this graph is read-only (its mapin/mapout points are kept, but only the axis min/max stay editable). Turn Pattern off to edit points again.</p>
-				<p class="hint">Double-click the line to add a point, drag a point to move it (Shift locks to one axis), double-click a point to delete it. Double-click an axis end value to edit it.</p>
+				<p class="hint">Click a point to select it, double-click the line to add a point, drag a point to move it (Shift locks to one axis), double-click a point to delete it. Double-click an axis value to edit it.</p>
 			</div>
 		</div>
 
@@ -284,6 +370,11 @@ template.innerHTML = `
 				<span class="node-title">Curve</span>
 			</div>
 			<div class="node-body" hidden>
+				<div class="row curve-mode-row">
+					<label><input type="radio" name="curve-mode" class="curve-mode-radio" value="all" checked /> All points</label>
+					<label><input type="radio" name="curve-mode" class="curve-mode-radio" value="per" /> Per point</label>
+				</div>
+				<p class="hint curve-per-point-hint" hidden>Select a point (not the last one) in the Map graph above to edit its own curve.</p>
 				<select class="curve-select"></select>
 				<input type="number" class="curve-power" step="0.1" placeholder="power, e.g. 2" hidden />
 			</div>
@@ -316,7 +407,14 @@ export class WaVarView extends HTMLElement {
 		this._mapCanvas = this.shadowRoot.querySelector(".map-canvas");
 		this._mapCtx = this._mapCanvas.getContext("2d");
 		this._mapWrap = this.shadowRoot.querySelector(".map-wrap");
+		this._coordTooltip = this.shadowRoot.querySelector(".coord-tooltip");
 		this._patternWarning = this.shadowRoot.querySelector(".pattern-warning");
+		this._axisLabels = {
+			mapoutMax: this.shadowRoot.querySelector(".axis-mapout-max"),
+			mapoutMin: this.shadowRoot.querySelector(".axis-mapout-min"),
+			mapinMin: this.shadowRoot.querySelector(".axis-mapin-min"),
+			mapinMax: this.shadowRoot.querySelector(".axis-mapin-max")
+		};
 
 		this._patternToggle = this.shadowRoot.querySelector(".pattern-toggle");
 		this._patternBody = this._patternToggle.closest(".node").querySelector(".node-body");
@@ -325,6 +423,8 @@ export class WaVarView extends HTMLElement {
 
 		this._curveToggle = this.shadowRoot.querySelector(".curve-toggle");
 		this._curveBody = this._curveToggle.closest(".node").querySelector(".node-body");
+		this._curveModeRadios = [...this.shadowRoot.querySelectorAll(".curve-mode-radio")];
+		this._curvePerPointHint = this.shadowRoot.querySelector(".curve-per-point-hint");
 		this._curveSelect = this.shadowRoot.querySelector(".curve-select");
 		this._curvePower = this.shadowRoot.querySelector(".curve-power");
 
@@ -338,10 +438,11 @@ export class WaVarView extends HTMLElement {
 
 		this._activeNodeId = null;
 		this._ramCache = new Map(); // nodeId -> { mapin, mapout, pattern, curve, convert } (raw attribute strings)
-		this._drag = null; // { index, isEndpoint, axisLock: "x"|"y"|null, startX, startY }
+		this._drag = null; // { index, isEndpoint, axisLock: "x"|"y"|null, startX, startY, isNew }
 		this._rafId = null;
 		this._disposed = false;
 		this._convertDomain = null; // { min, max } — set by _render, read by the live-dot poll
+		this._selectedPointIndex = null; // index into mapin/mapout — see Curve node's "Per point" mode
 
 		this._onStoreChange = this._onStoreChange.bind(this);
 		this._onMapPointerDown = this._onMapPointerDown.bind(this);
@@ -360,6 +461,17 @@ export class WaVarView extends HTMLElement {
 		window.addEventListener("mousemove", this._onMapPointerMove);
 		window.addEventListener("mouseup", this._onMapPointerUp);
 
+		Object.values(this._axisLabels).forEach((el) => {
+			el.addEventListener("dblclick", () => {
+				const node = xmlStore.getSelectedNode();
+				if (!node || node.tagName !== "Var") return;
+				const which = el.dataset.which;
+				const arr = which === "mapin" ? this._currentMapin : this._currentMapout;
+				const index = el.dataset.endpoint === "last" ? arr.length - 1 : 0;
+				this._editAxisValue(node, which, index, el);
+			});
+		});
+
 		this._patternToggle.addEventListener("change", () => this._onPatternToggle());
 		this._patternInput.addEventListener("change", () => this._onPatternInputCommit());
 		this._patternInput.addEventListener("keydown", (e) => {
@@ -367,6 +479,7 @@ export class WaVarView extends HTMLElement {
 		});
 
 		this._curveToggle.addEventListener("change", () => this._onCurveToggle());
+		this._curveModeRadios.forEach((r) => r.addEventListener("change", () => this._onCurveModeChange()));
 		this._curveSelect.addEventListener("change", () => this._onCurveSelectChange());
 		this._curvePower.addEventListener("change", () => this._onCurvePowerCommit());
 
@@ -419,7 +532,10 @@ export class WaVarView extends HTMLElement {
 	_onStoreChange() {
 		const node = xmlStore.getSelectedNode();
 		if (!node || node.tagName !== "Var") return;
-		if (node.id !== this._activeNodeId) this._patternForcedOpen = false;
+		if (node.id !== this._activeNodeId) {
+			this._patternForcedOpen = false;
+			this._selectedPointIndex = null;
+		}
 		this._activeNodeId = node.id;
 		this._render(node);
 	}
@@ -462,18 +578,39 @@ export class WaVarView extends HTMLElement {
 		this._patternWarning.hidden = !active;
 	}
 
+	// Curve is "All points" mode when its value has no comma, "Per point"
+	// mode when it does — the radio itself just reflects/drives that shape,
+	// no separate hidden mode is tracked. Per Hans (2026-09-24).
 	_renderCurveNode(node, curve) {
 		const active = curve !== undefined;
 		this._curveToggle.checked = active;
 		this._curveBody.hidden = !active;
 		this._curveToggle.closest(".node").classList.toggle("enabled", active);
 		if (!active) return;
-		if (isNumericString(curve)) {
+
+		const curveArr = parseCsvStrings(curve) || ["linear"];
+		const perPoint = curveArr.length > 1;
+		this._curveModeRadios.forEach((r) => (r.checked = r.value === (perPoint ? "per" : "all")));
+
+		const segmentCount = Math.max(0, this._currentMapin.length - 1);
+		const canEditSelected =
+			perPoint && this._selectedPointIndex !== null && this._selectedPointIndex < this._currentMapin.length - 1 && this._selectedPointIndex < segmentCount;
+		this._curvePerPointHint.hidden = !perPoint || canEditSelected;
+		this._curveSelect.disabled = perPoint && !canEditSelected;
+		this._curvePower.disabled = perPoint && !canEditSelected;
+
+		const effectiveValue = perPoint ? (canEditSelected ? curveArr[this._selectedPointIndex] : undefined) : curveArr[0];
+		if (effectiveValue === undefined) return;
+		this._renderCurveValueControl(effectiveValue);
+	}
+
+	_renderCurveValueControl(value) {
+		if (isNumericString(value)) {
 			this._curveSelect.value = CURVE_CUSTOM;
 			this._curvePower.hidden = false;
-			if (document.activeElement !== this._curvePower) this._curvePower.value = curve;
-		} else if (CURVE_OPTIONS.includes(curve)) {
-			this._curveSelect.value = curve;
+			if (document.activeElement !== this._curvePower) this._curvePower.value = value;
+		} else if (CURVE_OPTIONS.includes(value)) {
+			this._curveSelect.value = value;
 			this._curvePower.hidden = true;
 		} else {
 			// Unrecognized custom curve name (hand-typed XML) — fall back to
@@ -542,6 +679,15 @@ export class WaVarView extends HTMLElement {
 		const domain = this._mapDomain(mapin, mapout);
 		this._mapDomainCache = domain;
 
+		// The big, editable min/max values now live outside the canvas as
+		// real DOM elements (see the axis-label spans in the template) —
+		// easier to hit and to show as editable (text cursor, underline) than
+		// the old in-canvas fillText labels were. Per Hans (2026-09-25).
+		this._axisLabels.mapinMin.textContent = fmtNum(mapin[0]);
+		this._axisLabels.mapinMax.textContent = fmtNum(mapin[mapin.length - 1]);
+		this._axisLabels.mapoutMax.textContent = fmtNum(domain.maxOut);
+		this._axisLabels.mapoutMin.textContent = fmtNum(domain.minOut);
+
 		// axes
 		ctx.strokeStyle = "#333";
 		ctx.lineWidth = 1;
@@ -579,30 +725,78 @@ export class WaVarView extends HTMLElement {
 			this._mapPoints = [];
 		} else {
 			this._mapPoints = mapoutPointPositions(mapin, mapout);
-			this._drawMapDots(this._mapPoints, domain, w, h, "#fff", false);
+			this._drawMapDots(this._mapPoints, domain, w, h);
+			// Per Hans (2026-09-25): every point's own x/y value gets a small
+			// tick mark on its axis, thinned out (never overlapping) when
+			// points are close together.
+			this._drawAxisTicks(mapin, mapout, domain, w, h);
 		}
-
-		// axis min/max labels
-		ctx.fillStyle = "#8a8a8a";
-		ctx.font = "10px monospace";
-		ctx.textAlign = "left";
-		ctx.fillText(fmtNum(mapin[0]), MAP_PADDING, h - 4);
-		ctx.textAlign = "right";
-		ctx.fillText(fmtNum(mapin[mapin.length - 1]), w - MAP_PADDING, h - 4);
-		ctx.textAlign = "left";
-		ctx.fillText(fmtNum(domain.maxOut), 2, MAP_PADDING);
-		ctx.fillText(fmtNum(domain.minOut), 2, h - MAP_PADDING);
 	}
 
-	_drawMapDots(points, domain, w, h, color, readOnly) {
+	_drawMapDots(points, domain, w, h) {
 		const ctx = this._mapCtx;
-		ctx.fillStyle = color;
-		points.forEach((p) => {
+		points.forEach((p, i) => {
 			const cx = this._toCanvasX(p.x, domain, w);
 			const cy = this._toCanvasY(p.y, domain, h);
+			ctx.fillStyle = "#fff";
 			ctx.beginPath();
-			ctx.arc(cx, cy, readOnly ? 3 : 4.5, 0, Math.PI * 2);
+			ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
 			ctx.fill();
+			if (i === this._selectedPointIndex) {
+				ctx.strokeStyle = "#facc15";
+				ctx.lineWidth = 1.5;
+				ctx.beginPath();
+				ctx.arc(cx, cy, 7.5, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+		});
+	}
+
+	// Greedily keeps values whose pixel position is at least `minGap` away
+	// from the last kept one (values pre-sorted by pixel position) — so
+	// dense clusters of points never produce overlapping axis tick labels.
+	// Endpoints are always kept.
+	_selectDenseTicks(values, toPixelFn, minGap) {
+		const unique = [...new Set(values)];
+		const withPixel = unique.map((v) => ({ v, px: toPixelFn(v) })).sort((a, b) => a.px - b.px);
+		if (withPixel.length <= 2) return withPixel.map((e) => e.v);
+		const kept = [withPixel[0]];
+		for (let i = 1; i < withPixel.length - 1; i++) {
+			if (withPixel[i].px - kept[kept.length - 1].px >= minGap) kept.push(withPixel[i]);
+		}
+		const last = withPixel[withPixel.length - 1];
+		if (last.px - kept[kept.length - 1].px < minGap) kept.pop();
+		kept.push(last);
+		return kept.map((e) => e.v);
+	}
+
+	_drawAxisTicks(mapin, mapout, domain, w, h) {
+		const ctx = this._mapCtx;
+		ctx.font = "8px monospace";
+		ctx.fillStyle = "#666";
+		ctx.strokeStyle = "#444";
+		ctx.lineWidth = 1;
+
+		const xTicks = this._selectDenseTicks(mapin, (v) => this._toCanvasX(v, domain, w), 24);
+		ctx.textAlign = "center";
+		xTicks.forEach((v) => {
+			const cx = this._toCanvasX(v, domain, w);
+			ctx.beginPath();
+			ctx.moveTo(cx, h - MAP_PADDING);
+			ctx.lineTo(cx, h - MAP_PADDING + 3);
+			ctx.stroke();
+			ctx.fillText(fmtNum(v), cx, h - MAP_PADDING + 12);
+		});
+
+		const yTicks = this._selectDenseTicks(mapout, (v) => this._toCanvasY(v, domain, h), 14);
+		ctx.textAlign = "left";
+		yTicks.forEach((v) => {
+			const cy = this._toCanvasY(v, domain, h);
+			ctx.beginPath();
+			ctx.moveTo(MAP_PADDING - 3, cy);
+			ctx.lineTo(MAP_PADDING, cy);
+			ctx.stroke();
+			ctx.fillText(fmtNum(v), 1, cy + 3);
 		});
 	}
 
@@ -629,6 +823,15 @@ export class WaVarView extends HTMLElement {
 		if (this._currentPattern !== null) return; // read-only while a Pattern is active
 		const { px, py } = this._canvasPointFromEvent(e);
 		const idx = this._hitTestMapPoint(px, py);
+		// Selecting happens on plain mousedown (click or drag-start alike) —
+		// per Hans (2026-09-25): points need to be selectable so the Curve
+		// node's "Per point" mode has something to edit. Clicking empty
+		// canvas space deselects.
+		if (this._selectedPointIndex !== idx) {
+			this._selectedPointIndex = idx === -1 ? null : idx;
+			this._renderMapCanvas(this._currentMapin, this._currentMapout, this._currentCurve, this._currentPattern);
+			this._renderCurveNode(xmlStore.getSelectedNode(), this._currentCurve);
+		}
 		if (idx === -1) return;
 		e.preventDefault();
 		this._drag = {
@@ -681,28 +884,43 @@ export class WaVarView extends HTMLElement {
 		this._currentMapin = mapin;
 		this._currentMapout = mapout;
 		this._renderMapCanvas(mapin, mapout, this._currentCurve, null);
+		this._showCoordTooltip(px, py, mapin[idx], mapout[idx]);
 	}
 
 	_onMapPointerUp() {
 		if (!this._drag) return;
 		this._drag = null;
+		this._hideCoordTooltip();
 		const node = xmlStore.getSelectedNode();
 		if (!node || node.tagName !== "Var") return;
 		this._writeAttrs(node, { mapin: this._currentMapin.join(","), mapout: this._currentMapout.join(",") });
+	}
+
+	// Per Hans (2026-09-25): a coordinate readout follows the cursor while a
+	// point is being created or moved — positioned in .map-wrap's own CSS
+	// pixel space (the canvas is that element's only child, at (0,0), so the
+	// canvas-internal px/py just need the same width/height scale-down the
+	// rest of this file already uses for the reverse conversion).
+	_showCoordTooltip(px, py, x, y) {
+		const rect = this._mapCanvas.getBoundingClientRect();
+		const cssX = px * (rect.width / this._mapCanvas.width);
+		const cssY = py * (rect.height / this._mapCanvas.height);
+		this._coordTooltip.textContent = `${fmtNum(x)}, ${fmtNum(y)}`;
+		this._coordTooltip.style.left = `${cssX}px`;
+		this._coordTooltip.style.top = `${cssY}px`;
+		this._coordTooltip.hidden = false;
+	}
+
+	_hideCoordTooltip() {
+		this._coordTooltip.hidden = true;
 	}
 
 	_onMapDblClick(e) {
 		const node = xmlStore.getSelectedNode();
 		if (!node || node.tagName !== "Var") return;
 		const { px, py } = this._canvasPointFromEvent(e);
-
-		// axis label hit-test (bottom-left/bottom-right for mapin, top/bottom-left for mapout)
 		const w = this._mapCanvas.width,
 			h = this._mapCanvas.height;
-		if (py > h - MAP_PADDING - 6 && px < MAP_PADDING + 30) return this._editAxisValue(node, "mapin", 0);
-		if (py > h - MAP_PADDING - 6 && px > w - MAP_PADDING - 30) return this._editAxisValue(node, "mapin", this._currentMapin.length - 1);
-		if (px < MAP_PADDING + 24 && py < MAP_PADDING + 10) return this._editAxisValue(node, "mapout", this._currentMapout.length - 1);
-		if (px < MAP_PADDING + 24 && py > h - MAP_PADDING - 16 && py < h - MAP_PADDING + 4) return this._editAxisValue(node, "mapout", 0);
 
 		const idx = this._hitTestMapPoint(px, py);
 		if (idx !== -1) {
@@ -712,7 +930,12 @@ export class WaVarView extends HTMLElement {
 			const mapout = [...this._currentMapout];
 			mapin.splice(idx, 1);
 			mapout.splice(idx, 1);
-			this._writeAttrs(node, { mapin: mapin.join(","), mapout: mapout.join(",") });
+			const patch = { mapin: mapin.join(","), mapout: mapout.join(",") };
+			const nextCurve = this._curveArrayAfterDelete(node, idx);
+			if (nextCurve !== undefined) patch.curve = nextCurve;
+			if (this._selectedPointIndex === idx) this._selectedPointIndex = null;
+			else if (this._selectedPointIndex !== null && this._selectedPointIndex > idx) this._selectedPointIndex--;
+			this._writeAttrs(node, patch);
 			return;
 		}
 
@@ -720,7 +943,9 @@ export class WaVarView extends HTMLElement {
 			this._flashPatternWarning();
 			return;
 		}
-		// add a new point on the line at this x
+		// add a new point on the line at this x, then immediately continue
+		// as if the user had grabbed it — see the "coordinate readout on
+		// create" comment above _showCoordTooltip.
 		const domain = this._mapDomainCache;
 		const x = Math.max(domain.minIn, Math.min(domain.maxIn, this._fromCanvasX(px, domain, w)));
 		const y = mapStage1(x, { mapin: this._currentMapin, mapout: this._currentMapout, curve: this._currentCurve });
@@ -728,35 +953,66 @@ export class WaVarView extends HTMLElement {
 		const insertAt = mapin.indexOf(x);
 		const mapout = [...this._currentMapout];
 		mapout.splice(insertAt, 0, y);
-		this._writeAttrs(node, { mapin: mapin.join(","), mapout: mapout.join(",") });
+		const patch = { mapin: mapin.join(","), mapout: mapout.join(",") };
+		const nextCurve = this._curveArrayAfterInsert(node, insertAt);
+		if (nextCurve !== undefined) patch.curve = nextCurve;
+		this._currentMapin = mapin;
+		this._currentMapout = mapout;
+		this._selectedPointIndex = insertAt;
+		this._writeAttrs(node, patch);
+		this._drag = { index: insertAt, isEndpoint: false, axisLock: null, startPx: px, startPy: py };
+		this._showCoordTooltip(px, py, x, y);
+	}
+
+	// Keeps a "Per point" curve array aligned with mapin/mapout when a point
+	// is added/removed — splitting a segment duplicates its curve value
+	// (both halves start out the same), merging two segments back into one
+	// keeps the left one's. Returns undefined when curve isn't currently in
+	// per-point (comma) form, meaning nothing needs adjusting.
+	_curveArrayAfterInsert(node, insertAt) {
+		const arr = parseCsvStrings(node.attributes.curve);
+		if (!arr || arr.length <= 1) return undefined;
+		const splitIdx = Math.max(0, Math.min(arr.length - 1, insertAt - 1));
+		const next = [...arr];
+		next.splice(splitIdx, 0, arr[splitIdx]);
+		return next.join(",");
+	}
+
+	_curveArrayAfterDelete(node, deletedIdx) {
+		const arr = parseCsvStrings(node.attributes.curve);
+		if (!arr || arr.length <= 1) return undefined;
+		const next = [...arr];
+		next.splice(Math.min(deletedIdx, next.length - 1), 1);
+		return next.length ? next.join(",") : "linear";
 	}
 
 	_flashPatternWarning() {
 		this._patternWarning.hidden = false;
 	}
 
-	_editAxisValue(node, which, index) {
+	// `labelEl` is one of the DOM axis-label spans (see the template) —
+	// swapped for a real <input> in place, rather than an absolutely
+	// positioned overlay, per Hans (2026-09-25): easier to hit, and the
+	// browser's own text cursor makes it obvious it's editable.
+	_editAxisValue(node, which, index, labelEl) {
 		const current = which === "mapin" ? this._currentMapin[index] : this._currentMapout[index];
 		const input = document.createElement("input");
 		input.type = "number";
 		input.step = "any";
 		input.className = "axis-edit-input";
 		input.value = current;
-		const rect = this._mapCanvas.getBoundingClientRect();
-		input.style.left = "4px";
-		input.style.top = which === "mapin" ? `${rect.height - 20}px` : "4px";
-		this._mapWrap.appendChild(input);
+		labelEl.replaceWith(input);
 		input.focus();
 		input.select();
 		const commit = () => {
 			// Removing a focused element can itself trigger a second, genuine
 			// "blur" on it (a real browser quirk, not just this synthetic
 			// listener) — guard against running twice, which would otherwise
-			// throw trying to remove an already-detached node.
+			// throw trying to replace an already-detached node.
 			if (!input.isConnected) return;
 			input.removeEventListener("blur", commit);
 			const v = parseFloat(input.value);
-			input.remove();
+			input.replaceWith(labelEl);
 			if (!Number.isFinite(v)) return;
 			const arr = which === "mapin" ? [...this._currentMapin] : [...this._currentMapout];
 			arr[index] = v;
@@ -771,7 +1027,7 @@ export class WaVarView extends HTMLElement {
 			if (e.key === "Enter") input.blur();
 			if (e.key === "Escape") {
 				input.removeEventListener("blur", commit);
-				input.remove();
+				input.replaceWith(labelEl);
 			}
 		});
 	}
@@ -833,26 +1089,59 @@ export class WaVarView extends HTMLElement {
 		}
 	}
 
-	_onCurveSelectChange() {
+	// Switches between one curve value for every segment and one per segment
+	// (Per Hans, 2026-09-24) — the shape is purely derived from the comma
+	// count in the written attribute, so this just expands/collapses it.
+	_onCurveModeChange() {
 		const node = xmlStore.getSelectedNode();
 		if (!node || node.tagName !== "Var") return;
+		const mode = this._curveModeRadios.find((r) => r.checked)?.value;
+		const curveArr = parseCsvStrings(node.attributes.curve) || ["linear"];
+		const segmentCount = Math.max(1, this._currentMapin.length - 1);
+		if (mode === "per") {
+			if (curveArr.length > 1) return;
+			this._writeAttrs(node, { curve: Array(segmentCount).fill(curveArr[0]).join(",") });
+		} else {
+			if (curveArr.length <= 1) return;
+			const collapsed = this._selectedPointIndex !== null && this._selectedPointIndex < curveArr.length ? curveArr[this._selectedPointIndex] : curveArr[0];
+			this._writeAttrs(node, { curve: collapsed });
+		}
+	}
+
+	_onCurveSelectChange() {
 		const val = this._curveSelect.value;
 		if (val === CURVE_CUSTOM) {
 			this._curvePower.hidden = false;
 			const v = parseFloat(this._curvePower.value);
-			this._writeAttrs(node, { curve: Number.isFinite(v) ? String(v) : "2" });
+			this._writeCurveValue(Number.isFinite(v) ? String(v) : "2");
 		} else {
 			this._curvePower.hidden = true;
-			this._writeAttrs(node, { curve: val });
+			this._writeCurveValue(val);
 		}
 	}
 
 	_onCurvePowerCommit() {
-		const node = xmlStore.getSelectedNode();
-		if (!node || node.tagName !== "Var") return;
 		const v = parseFloat(this._curvePower.value);
 		if (!Number.isFinite(v)) return;
-		this._writeAttrs(node, { curve: String(v) });
+		this._writeCurveValue(String(v));
+	}
+
+	// Writes either the single global curve value, or (in "Per point" mode)
+	// just the selected segment's own entry, keeping every other segment's
+	// value untouched. Per Hans's spec: always written back comma-separated
+	// when there's more than one value.
+	_writeCurveValue(newValueStr) {
+		const node = xmlStore.getSelectedNode();
+		if (!node || node.tagName !== "Var") return;
+		const curveArr = parseCsvStrings(node.attributes.curve) || ["linear"];
+		if (curveArr.length > 1) {
+			if (this._selectedPointIndex === null || this._selectedPointIndex >= curveArr.length) return;
+			const next = [...curveArr];
+			next[this._selectedPointIndex] = newValueStr;
+			this._writeAttrs(node, { curve: next.join(",") });
+		} else {
+			this._writeAttrs(node, { curve: newValueStr });
+		}
 	}
 
 	// ── Convert node ─────────────────────────────────────────────────────
@@ -995,13 +1284,10 @@ export class WaVarView extends HTMLElement {
 		const cx = this._toCanvasX(x, domain, w);
 		const cy = this._toCanvasY(y, domain, h);
 		const ctx = this._mapCtx;
-		ctx.fillStyle = "#facc15";
-		ctx.strokeStyle = "#fff";
-		ctx.lineWidth = 1.5;
+		ctx.fillStyle = "#4fa3ff"; // same as the Map line — smaller than the static (4.5px) points so it reads as the live marker, not another set point
 		ctx.beginPath();
-		ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+		ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
 		ctx.fill();
-		ctx.stroke();
 	}
 
 	_drawConvertDot(x, y) {
@@ -1017,13 +1303,10 @@ export class WaVarView extends HTMLElement {
 		const ctx = this._convertCtx;
 		const cx = MAP_PADDING + ((x - min) / (max - min || 1)) * (w - 2 * MAP_PADDING);
 		const cy = h - MAP_PADDING - ((y - minY) / (maxY - minY || 1)) * (h - 2 * MAP_PADDING);
-		ctx.fillStyle = "#facc15";
-		ctx.strokeStyle = "#fff";
-		ctx.lineWidth = 1.5;
+		ctx.fillStyle = "#45b58c"; // same as the Convert line, small like the Map graph's own live marker
 		ctx.beginPath();
-		ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+		ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
 		ctx.fill();
-		ctx.stroke();
 	}
 }
 
