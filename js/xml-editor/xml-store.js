@@ -24,6 +24,7 @@ class XmlStore extends EventTarget {
 		this.codeValue = EMPTY_XML;
 		this.lineMap = new Map();
 		this._idCounters = new Map(); // tagName -> highest "TagName-N" used so far this project (see ops.backfillElementIds)
+		this._activeFadeTimeNoticeShown = false; // see _applyActiveFadeTimeWorkaround — once per whole app session, not per project
 	}
 
 	// Call when genuinely starting a different project (a new default
@@ -478,10 +479,38 @@ class XmlStore extends EventTarget {
 	updateAttributes(nodeId, attributes) {
 		if (!this.root) return;
 		const node = ops.findNodeById(this.root, nodeId);
+		attributes = this._applyActiveFadeTimeWorkaround(node, attributes);
 		const structural = this._attributeChangeNeedsRebuild(node, attributes);
 		const liveNudge = !structural ? this._buildLiveNudge(node, attributes) : null;
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
 		this._syncCode(structural, liveNudge ? { liveNudge } : {});
+	}
+
+	// waxml.js engine workaround (per Hans, 2026-09-22): a <Layer>'s `active`
+	// attribute only actually takes effect there when fadeTime is exactly
+	// "0" — a bug in the engine itself, too risky to fix there right now.
+	// So every *change* to `active` on a Layer forces fadeTime along with
+	// it, in the same update (one atomic undo step) — never triggered by a
+	// caller-supplied fadeTime alone, by `active` being removed, or by
+	// `active` being "set" to the value it already has. The first time this
+	// fires in a session, a one-time popup (see wa-notice-dialog.js, wired
+	// up from this store's own "notice" event in app.js) explains why
+	// fadeTime just changed too, so it isn't mistaken for a stray edit.
+	// _attributeChangeNeedsRebuild has the other half of this workaround —
+	// forcing a full reload (updateFromString) rather than a live nudge,
+	// since a live .set("active", ...) alone isn't reliable either.
+	_applyActiveFadeTimeWorkaround(node, attributes) {
+		if (!node || node.tagName !== "Layer") return attributes;
+		if (attributes.active === undefined || attributes.active === node.attributes.active) return attributes;
+		if (!this._activeFadeTimeNoticeShown) {
+			this._activeFadeTimeNoticeShown = true;
+			this.dispatchEvent(
+				new CustomEvent("notice", {
+					detail: { message: 'In order for the attribute "active" to work, fadeTime has been set to 0' }
+				})
+			);
+		}
+		return { ...attributes, fadeTime: "0" };
 	}
 
 	// Collects {elementId, changed} for updateAttributes' own live-nudge
@@ -525,6 +554,19 @@ class XmlStore extends EventTarget {
 			if (nextAttributes[name] !== node.attributes[name]) return true;
 		}
 		if (node.tagName === "OscillatorNode" && nextAttributes.type !== node.attributes.type) return true;
+		// Same waxml.js workaround as _applyActiveFadeTimeWorkaround (per
+		// Hans, 2026-09-22): a live .set("active", ...) nudge alone (the
+		// path every other Layer attribute in LIVE_NUDGE_ALLOWED_ATTRS takes
+		// — "active" is in that set too, for whichever other tag actually
+		// nudges it live without issue) isn't enough for `active` to
+		// actually take effect on a Track that's already playing — only a
+		// full reload (updateFromString, via bridge.loadFullDocument)
+		// reliably does. Scoped to Layer + active actually changing, same
+		// condition _applyActiveFadeTimeWorkaround itself uses, so every
+		// *other* live-nudgeable Layer attribute is unaffected.
+		if (node.tagName === "Layer" && nextAttributes.active !== undefined && nextAttributes.active !== node.attributes.active) {
+			return true;
+		}
 		// <Composition> itself (no live object of its own, see
 		// LIVE_NUDGEABLE_COMPOSITION_TAGS above) and anything else inside one
 		// that isn't a Section/Layer/Stinger still needs a full rebuild — the

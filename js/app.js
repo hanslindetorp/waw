@@ -9,6 +9,7 @@ import "./components/wa-xml-editor.js";
 import "./components/wa-xml-code.js";
 import "./components/wa-library-view.js";
 import "./components/wa-share-dialog.js";
+import { showNotice } from "./components/wa-notice-dialog.js";
 
 import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
@@ -33,6 +34,13 @@ registerLayoutExtras({
 });
 initEditHistory();
 loadDefaultSchema().then(createDefaultProject);
+
+// xmlStore stays UI-agnostic (every other view just listens for its own
+// "change") — a "notice" event is its one exception, for a message that
+// needs to reach the user directly rather than just drive a re-render. Per
+// Hans (2026-09-22): currently only the active/fadeTime workaround (see
+// xml-store.js's own _applyActiveFadeTimeWorkaround) fires this.
+xmlStore.addEventListener("notice", (e) => showNotice(e.detail.message));
 
 // View menu wiring (per Hans, 2026-09-10): swaps which top-level view is
 // visible without ever touching xmlStore/vfs/playerStore — the real project
