@@ -483,45 +483,6 @@ template.innerHTML = `
 		.sv-unmap:hover {
 			opacity: 1;
 		}
-		.sv-range {
-			display: flex;
-			align-items: center;
-			gap: 0.2rem;
-		}
-		.sv-range-mode {
-			background: none;
-			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 3px;
-			color: var(--waw-muted, #8a8a8a);
-			font-size: 0.6rem;
-			font-family: inherit;
-			padding: 0 0.25rem;
-			cursor: pointer;
-			line-height: 1.3;
-		}
-		.sv-range-mode.auto {
-			border-color: var(--waw-teal, #45b58c);
-			color: var(--waw-teal, #45b58c);
-		}
-		.sv-range-input {
-			width: 3rem;
-			background: #0c0c0c;
-			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 3px;
-			color: inherit;
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			font-size: 0.62rem;
-			padding: 0.05rem 0.15rem;
-		}
-		.sv-range-input:disabled {
-			color: var(--waw-muted, #8a8a8a);
-			border-color: transparent;
-			background: none;
-		}
-		.sv-range-sep {
-			color: var(--waw-muted, #8a8a8a);
-			font-size: 0.6rem;
-		}
 	</style>
 	<div class="row">
 		<button class="model-btn active" type="button" data-model="hands"><span class="dot"></span>Hands</button>
@@ -644,6 +605,7 @@ export class WaWebcamInput extends HTMLElement {
 				face: this._modelState.face.enabled
 			},
 			cameraDeviceId: this._cameraDeviceId,
+			running: this._running,
 			entries: this._savedEntries.map((e) => ({
 				id: e.id,
 				labels: e.labelMetas.map((m) => m.label),
@@ -669,6 +631,13 @@ export class WaWebcamInput extends HTMLElement {
 				this._restoreSavedEntry(e);
 			});
 		}
+		// Per Hans (2026-09-26): a project saved with the camera running
+		// should have it running again as soon as the project opens, rather
+		// than making the user click Start every time. Not a "resume audio
+		// without a gesture" violation the way autoplaying sound would be —
+		// opening a project (via a real file-picker interaction) is itself
+		// the user gesture, same as it already is for saved panel layout.
+		if (state.running) this._start();
 	}
 
 	_dispatchStateChange() {
@@ -1033,7 +1002,7 @@ export class WaWebcamInput extends HTMLElement {
 		const labelMetas = labels.map((l) => ({ label: l, model: this._landmarkMap.get(l)?.model ?? "unknown" }));
 		const type = typeForCount(labels.length);
 		const id = ++this._savedEntryCounter;
-		const entry = { id, type, labelMetas, lastValues: {}, mappings: {}, valueEls: {}, mapEls: {}, rangeRefreshers: {}, calibrating: false };
+		const entry = { id, type, labelMetas, lastValues: {}, mappings: {}, valueEls: {}, mapEls: {}, calibrating: false };
 		this._buildSavedRow(entry);
 		this._savedEntries.push(entry);
 		this._savedListEl.appendChild(entry.row);
@@ -1053,18 +1022,18 @@ export class WaWebcamInput extends HTMLElement {
 			type: saved.type,
 			labelMetas,
 			lastValues: {},
-			// Normalizes both the old plain-string mapping shape (before the
-			// auto/manual range feature) and the current object shape, so an
-			// already-saved project never breaks. Per Hans (2026-09-23).
+			// Normalizes every older mapping shape (a plain string, before
+			// the range feature; or {varName, auto, min, max}, before Hans
+			// removed the manual/auto choice — 2026-09-26) down to today's
+			// {varName, min, max}, so an already-saved project never breaks.
 			mappings: Object.fromEntries(
 				Object.entries(saved.mappings || {}).map(([key, m]) => [
 					key,
-					typeof m === "string" ? { varName: m, auto: false, min: 0, max: 1 } : { auto: false, min: 0, max: 1, ...m }
+					typeof m === "string" ? { varName: m, min: 0, max: 1 } : { varName: m.varName, min: m.min ?? 0, max: m.max ?? 1 }
 				])
 			),
 			valueEls: {},
 			mapEls: {},
-			rangeRefreshers: {},
 			calibrating: false
 		};
 		this._buildSavedRow(entry);
@@ -1153,7 +1122,6 @@ export class WaWebcamInput extends HTMLElement {
 
 	_refreshMapControl(wrap, entry, key) {
 		wrap.innerHTML = "";
-		delete entry.rangeRefreshers[key];
 		const mapping = entry.mappings[key];
 		if (mapping) {
 			const pill = document.createElement("span");
@@ -1175,7 +1143,6 @@ export class WaWebcamInput extends HTMLElement {
 			});
 			pill.append(nameSpan, xBtn);
 			wrap.appendChild(pill);
-			wrap.appendChild(this._buildRangeControl(entry, key, mapping));
 		} else {
 			const btn = document.createElement("button");
 			btn.type = "button";
@@ -1186,105 +1153,39 @@ export class WaWebcamInput extends HTMLElement {
 		}
 	}
 
-	// The raw metric's own input range — "auto" (calibrated live, see
-	// _toggleEntryCalibrate/expandRange) or a fixed pair the user types in
-	// directly. Either way, this is what turns a raw metric into the 0-1
-	// value actually sent to playerStore.setVariable() (see
-	// _sendMappedValues) — per Hans (2026-09-23): "Sedan får WAXML ta hand
-	// om att mappa värdet till något meningsfullt rent musikaliskt", i.e.
-	// this range only ever produces a plain 0-1, never a value already
-	// scaled into the target <Var>'s own musical range.
-	_buildRangeControl(entry, key, mapping) {
-		const row = document.createElement("span");
-		row.className = "sv-range";
-
-		const modeBtn = document.createElement("button");
-		modeBtn.type = "button";
-		modeBtn.className = "sv-range-mode";
-		modeBtn.title = "Toggle auto/manual input range";
-		const minInput = document.createElement("input");
-		minInput.type = "number";
-		minInput.step = "any";
-		minInput.className = "sv-range-input";
-		minInput.title = "Raw input value that maps to 0";
-		const sep = document.createElement("span");
-		sep.className = "sv-range-sep";
-		sep.textContent = "–";
-		const maxInput = document.createElement("input");
-		maxInput.type = "number";
-		maxInput.step = "any";
-		maxInput.className = "sv-range-input";
-		maxInput.title = "Raw input value that maps to 1";
-
-		const refresh = () => {
-			modeBtn.textContent = mapping.auto ? "A" : "M";
-			modeBtn.classList.toggle("auto", !!mapping.auto);
-			minInput.value = mapping.min ?? "";
-			maxInput.value = mapping.max ?? "";
-			minInput.disabled = !!mapping.auto;
-			maxInput.disabled = !!mapping.auto;
-		};
-		refresh();
-		entry.rangeRefreshers[key] = refresh; // re-run during calibration to show the expanding min/max live
-
-		modeBtn.addEventListener("click", () => {
-			mapping.auto = !mapping.auto;
-			if (mapping.auto) {
-				mapping.min = undefined;
-				mapping.max = undefined;
-			}
-			refresh();
-			this._dispatchStateChange();
-		});
-		minInput.addEventListener("change", () => {
-			const v = parseFloat(minInput.value);
-			mapping.min = Number.isFinite(v) ? v : undefined;
-			this._dispatchStateChange();
-		});
-		maxInput.addEventListener("change", () => {
-			const v = parseFloat(maxInput.value);
-			mapping.max = Number.isFinite(v) ? v : undefined;
-			this._dispatchStateChange();
-		});
-
-		row.append(modeBtn, minInput, sep, maxInput);
-		return row;
-	}
-
 	async _mapKey(entry, key, anchorEl) {
 		const name = await openVarPicker(anchorEl.getBoundingClientRect());
 		if (!name) return;
 		const existing = entry.mappings[key];
 		// Remapping which Var an already-mapped key points to keeps its
-		// existing range settings; a fresh mapping starts manual/0-1 (an
-		// immediately-usable passthrough) rather than defaulting to "auto"
-		// with nothing calibrated yet, which would silently send nothing at
-		// all until the user ran a calibration pass.
-		entry.mappings[key] = existing ? { ...existing, varName: name } : { varName: name, auto: false, min: 0, max: 1 };
+		// existing (calibrated) range; a fresh mapping starts at 0-1 (an
+		// immediately-usable passthrough) until Calibrate is run for real.
+		// Per Hans (2026-09-26): the input range is always calibrated, never
+		// manually typed — see _toggleEntryCalibrate/expandRange.
+		entry.mappings[key] = existing ? { ...existing, varName: name } : { varName: name, min: 0, max: 1 };
 		this._refreshMapControl(entry.mapEls[key], entry, key);
 		this._dispatchStateChange();
 	}
 
 	// Toggles a calibration pass for one saved entry (per Hans, 2026-09-23:
 	// calibration happens entry by entry, not globally) — while active,
-	// every "auto"-range mapping *within this entry* expands its own
-	// min/max to fit whatever raw values it sees (see expandRange, called
-	// from _sendMappedValues); turning it off just freezes wherever it
-	// ended up. Starting a *new* pass resets each of this entry's "auto"
-	// mappings' ranges first — recalibrating should never just widen an
-	// old, possibly stale range further. A manual-range mapping, or another
-	// entry's mappings, is never touched.
+	// every mapped key *within this entry* expands its own min/max to fit
+	// whatever raw values it sees (see expandRange, called from
+	// _sendMappedValues); turning it off just freezes wherever it ended up.
+	// Starting a *new* pass resets each mapping's range first —
+	// recalibrating should never just widen an old, possibly stale range
+	// further. Another entry's mappings are never touched. Per Hans
+	// (2026-09-26): calibration is now the only way a mapping's input range
+	// is ever set — there's no manual min/max entry to leave alone instead.
 	_toggleEntryCalibrate(entry) {
 		entry.calibrating = !entry.calibrating;
 		entry.calibrateBtn.classList.toggle("active", entry.calibrating);
 		entry.calibrateBtn.textContent = entry.calibrating ? "Calibrating…" : "Calibrate";
 		entry.calibrateHint.hidden = !entry.calibrating;
 		if (entry.calibrating) {
-			Object.entries(entry.mappings).forEach(([key, mapping]) => {
-				if (!mapping.auto) return;
+			Object.values(entry.mappings).forEach((mapping) => {
 				mapping.min = undefined;
 				mapping.max = undefined;
-				entry.rangeRefreshers[key]?.();
 			});
 		} else {
 			this._dispatchStateChange(); // persist the just-finished calibration
@@ -1303,21 +1204,21 @@ export class WaWebcamInput extends HTMLElement {
 
 	// Only a mapped key is ever actually sent — an unmapped one is
 	// display-only (per Hans, 2026-09-22). The raw metric is normalized to
-	// 0-1 via its own mapping's input range before being sent — never the
-	// raw value itself, and never scaled into the target <Var>'s own
-	// musical range, which is WAXML's own job (per Hans, 2026-09-23).
+	// 0-1 via its own mapping's calibrated input range before being sent —
+	// never the raw value itself, and never scaled into the target <Var>'s
+	// own musical range, which is WAXML's own job (per Hans, 2026-09-23).
+	// Values outside the calibrated range are clamped (truncated) to 0-1,
+	// never sent unclamped — per Hans (2026-09-26), confirming
+	// normalizeToUnit's own existing Math.max(0, Math.min(1, ...)).
 	_sendMappedValues(entry) {
 		const v = entry.lastValues;
 		if (!v) return;
 		for (const [key, mapping] of Object.entries(entry.mappings)) {
 			if (!mapping?.varName || v[key] === undefined) continue;
 			const raw = v[key];
-			if (entry.calibrating && mapping.auto) {
-				expandRange(mapping, raw);
-				entry.rangeRefreshers[key]?.();
-			}
+			if (entry.calibrating) expandRange(mapping, raw);
 			const normalized = normalizeToUnit(raw, mapping.min, mapping.max);
-			if (normalized === undefined) continue; // "auto" and never calibrated yet — nothing usable to send
+			if (normalized === undefined) continue; // never calibrated yet — nothing usable to send
 			playerStore.setVariable(mapping.varName, normalized);
 		}
 	}

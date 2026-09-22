@@ -19,17 +19,8 @@ template.innerHTML = `
 			padding: 0.6rem 0.75rem;
 			border-bottom: 1px solid var(--waw-border, #2f2f2f);
 		}
-		.node-label {
-			margin: 0;
-			font-weight: 600;
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			word-break: break-all;
-		}
-		.node-label .tag {
-			color: var(--waw-accent, #4fa3ff);
-		}
 		.src {
-			margin: 0.2rem 0 0;
+			margin: 0;
 			font-size: 0.72rem;
 			color: var(--waw-muted, #8a8a8a);
 			overflow: hidden;
@@ -52,7 +43,6 @@ template.innerHTML = `
 		}
 	</style>
 	<div class="header">
-		<p class="node-label"><span class="tag"></span></p>
 		<p class="src"></p>
 	</div>
 	<div class="gui-container"></div>
@@ -63,7 +53,6 @@ export class WaWamView extends HTMLElement {
 		super();
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
-		this._tagEl = this.shadowRoot.querySelector(".tag");
 		this._srcEl = this.shadowRoot.querySelector(".src");
 		this._container = this.shadowRoot.querySelector(".gui-container");
 		this._disposeGui = null;
@@ -84,7 +73,6 @@ export class WaWamView extends HTMLElement {
 		const node = xmlStore.getSelectedNode();
 		if (!node || node.tagName !== "Wam") return; // wa-preview.js only shows us for a <Wam> selection
 
-		this._tagEl.textContent = `<${node.tagName}>`;
 		this._srcEl.textContent = node.attributes.src || "(no plugin selected)";
 
 		if (node.id === this._activeNodeId) return; // same plugin instance still selected — don't remount

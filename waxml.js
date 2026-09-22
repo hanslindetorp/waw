@@ -7708,7 +7708,7 @@ class Mapper{
 		this.sourceValues = [];
 
 
-		let steps = params.steps || params.pattern;
+		let steps = params.pattern || params.steps;
 		// wrap single step array in container if needed
 		if(steps instanceof Array){
 			if(!steps.find(el => el instanceof Array)){

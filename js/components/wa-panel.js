@@ -316,6 +316,14 @@ export class WaPanel extends HTMLElement {
 		e.preventDefault();
 		this._resizeStartX = e.clientX;
 		this._resizeStartWidth = this.getBoundingClientRect().width;
+		// A panel currently absorbing a collapsed right neighbor's freed
+		// space (see setAbsorbing/_applyFlex) has its flex forced to
+		// "1 1 auto" regardless of _baseFlex — so without this, dragging its
+		// own handle would silently do nothing (_baseFlex changes underneath
+		// but _applyFlex keeps overriding it). A manual drag always wins.
+		// Per Hans (2026-09-26): automatic relative sizing must only ever
+		// happen on open/close, never fight an explicit drag.
+		this._absorbing = false;
 		window.addEventListener("pointermove", this._onResizeMove);
 		window.addEventListener("pointerup", this._onResizeEnd);
 	}

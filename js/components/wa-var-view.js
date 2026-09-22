@@ -1,6 +1,7 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { computeMapPoints, mapoutPointPositions, applyConvertFn, computeConvertPoints, validateConvertExpression, mapStage1 } from "../xml-editor/var-mapper-math.js";
+import { formatValue } from "../utils/number-format.js";
 
 // Preview-panel state (see wa-preview.js) for a selected <Var> — a vertical
 // chain of "node" boxes, node-based-programming style, each editing part of
@@ -95,36 +96,79 @@ template.innerHTML = `
 			box-sizing: border-box;
 			padding: 0.75rem;
 		}
-		.header {
-			margin-bottom: 0.5rem;
-		}
-		.node-label {
-			margin: 0;
-			font-weight: 600;
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			word-break: break-all;
-		}
-		.node-label .tag {
-			color: var(--waw-accent, #4fa3ff);
-		}
 		.chain {
+			position: relative;
 			display: flex;
 			flex-direction: column;
 			align-items: stretch;
 			max-width: 380px;
 		}
+		/* Live readouts bookending the chain — the knob's own raw input
+		   (white, matches wa-var-knobs.js's "unmapped" value color), same
+		   line as the "incoming data" label, and the final value after
+		   everything (green, matches the Convert graph's own line) beside
+		   its own small arrow to the right of the Convert block. Per Hans
+		   (2026-09-25/26). */
+		.incoming-row {
+			display: flex;
+			align-items: baseline;
+			justify-content: center;
+			gap: 0.5rem;
+		}
 		.incoming-arrow {
-			text-align: center;
 			color: var(--waw-muted, #8a8a8a);
 			font-size: 1.1rem;
 			line-height: 1;
 			padding: 0.2rem 0 0.1rem;
+		}
+		.incoming-value,
+		.outgoing-value {
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.85rem;
+			font-weight: 600;
+		}
+		.incoming-value {
+			color: var(--waw-fg, #e8e8e8);
+		}
+		.convert-node {
+			position: relative;
+			/* .node's own overflow:hidden (for its rounded corners) would
+			   clip .outgoing-row below, which deliberately sits outside
+			   this box's own right edge. */
+			overflow: visible;
+		}
+		.outgoing-row {
+			position: absolute;
+			left: 100%;
+			top: 50%;
+			transform: translateY(-50%);
+			margin-left: 0.6rem;
+			display: flex;
+			align-items: center;
+			gap: 0.35rem;
+			white-space: nowrap;
+		}
+		.outgoing-arrow {
+			color: #45b58c;
+			font-size: 1.1rem;
+			line-height: 1;
+		}
+		.outgoing-value {
+			color: #45b58c;
 		}
 		.connector {
 			width: 1px;
 			height: 0.6rem;
 			background: var(--waw-border, #2f2f2f);
 			margin: 0 auto;
+		}
+		.flow-arrow-svg {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			overflow: visible;
+			pointer-events: none;
 		}
 		.node {
 			border: 1px solid var(--waw-border, #2f2f2f);
@@ -148,7 +192,26 @@ template.innerHTML = `
 			letter-spacing: 0.04em;
 			color: var(--waw-muted, #8a8a8a);
 		}
-		.node.enabled .node-title {
+		/* Direct-child header only — Curve/Pattern are now sub-sections
+		   inside .map-node (see .sub-section below), and must not inherit
+		   its own always-on "enabled" look regardless of their own toggle. */
+		.node.enabled > .node-header .node-title {
+			color: var(--waw-fg, #e8e8e8);
+		}
+		/* Curve and Pattern are parameters OF the Mapping graph above them,
+		   not a further processing stage like Convert — folded into the same
+		   bordered box as its own sub-sections (with a divider each) rather
+		   than separate connected boxes, so that relationship reads visually
+		   instead of needing an explanatory line. Per Hans (2026-09-25). */
+		.sub-section {
+			border-top: 1px solid var(--waw-border, #2f2f2f);
+		}
+		.sub-section .sub-header {
+			border-bottom: none;
+			background: transparent;
+			padding: 0.35rem 0.6rem;
+		}
+		.sub-section.enabled .sub-header .node-title {
 			color: var(--waw-fg, #e8e8e8);
 		}
 		.node-body {
@@ -255,38 +318,66 @@ template.innerHTML = `
 			position: relative;
 		}
 		.map-grid {
+			display: grid;
+			grid-template-columns: auto auto 1fr;
+			grid-template-rows: auto auto auto;
+			column-gap: 0.4rem;
+			row-gap: 0.2rem;
+		}
+		.map-mapin-label {
+			grid-column: 3;
+			grid-row: 1;
+			text-align: center;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.68rem;
+			letter-spacing: 0.06em;
+			text-transform: uppercase;
+		}
+		.map-x-labels {
+			grid-column: 3;
+			grid-row: 2;
 			display: flex;
-			gap: 0.45rem;
-			align-items: stretch;
+			justify-content: space-between;
+		}
+		.map-mapout-label {
+			grid-column: 1;
+			grid-row: 3;
+			writing-mode: vertical-rl;
+			transform: rotate(180deg);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.68rem;
+			letter-spacing: 0.06em;
+			text-transform: uppercase;
 		}
 		.map-y-labels {
+			grid-column: 2;
+			grid-row: 3;
 			display: flex;
 			flex-direction: column;
 			justify-content: space-between;
 			align-items: flex-end;
 		}
-		.map-main {
-			flex: 1;
-			min-width: 0;
-		}
-		.map-x-labels {
-			display: flex;
-			justify-content: space-between;
-			margin-top: 0.25rem;
+		.map-wrap {
+			grid-column: 3;
+			grid-row: 3;
 		}
 		.axis-label {
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 			font-size: 0.75rem;
 			color: var(--waw-fg, #e8e8e8);
-			padding: 0.15rem 0.4rem;
+			padding: 0.2rem 0.5rem;
 			border-radius: 4px;
 			cursor: text;
-			border-bottom: 1px dotted var(--waw-muted, #8a8a8a);
+			background: rgba(255, 255, 255, 0.07);
+			border: 1px solid var(--waw-border, #2f2f2f);
 			white-space: nowrap;
 		}
 		.axis-label:hover {
-			background: rgba(255, 255, 255, 0.07);
-			border-bottom-color: var(--waw-accent, #4fa3ff);
+			background: rgba(255, 255, 255, 0.13);
+			border-color: var(--waw-accent, #4fa3ff);
 		}
 		.coord-tooltip {
 			position: absolute;
@@ -318,69 +409,67 @@ template.innerHTML = `
 		}
 	</style>
 
-	<div class="header">
-		<p class="node-label"><span class="tag"></span></p>
-	</div>
-
 	<div class="chain">
-		<div class="incoming-arrow">&#8595; incoming data</div>
+		<svg class="flow-arrow-svg"><path class="flow-arrow-path" fill="none" stroke="#4fa3ff" stroke-width="1.5" marker-end="url(#flow-arrowhead)" /><defs><marker id="flow-arrowhead" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#4fa3ff" /></marker></defs></svg>
+
+		<div class="incoming-row">
+			<span class="incoming-arrow">&#8595; incoming data</span>
+			<span class="incoming-value">—</span>
+		</div>
 		<div class="connector"></div>
 
 		<div class="node enabled map-node">
-			<div class="node-header"><span class="node-title">Map (mapin / mapout)</span></div>
+			<div class="node-header"><span class="node-title">Mapping</span></div>
 			<div class="node-body">
 				<div class="map-grid">
+					<div class="map-mapin-label">mapin</div>
+					<div class="map-x-labels">
+						<span class="axis-label axis-mapin-min" data-which="mapin" data-endpoint="0" title="Double-click to edit"></span>
+						<span class="axis-label axis-mapin-max" data-which="mapin" data-endpoint="last" title="Double-click to edit"></span>
+					</div>
+					<div class="map-mapout-label">mapout</div>
 					<div class="map-y-labels">
 						<span class="axis-label axis-mapout-max" data-which="mapout" data-endpoint="last" title="Double-click to edit"></span>
 						<span class="axis-label axis-mapout-min" data-which="mapout" data-endpoint="0" title="Double-click to edit"></span>
 					</div>
-					<div class="map-main">
-						<div class="map-wrap">
-							<canvas class="map-canvas" width="320" height="200"></canvas>
-							<div class="coord-tooltip" hidden></div>
-						</div>
-						<div class="map-x-labels">
-							<span class="axis-label axis-mapin-min" data-which="mapin" data-endpoint="0" title="Double-click to edit"></span>
-							<span class="axis-label axis-mapin-max" data-which="mapin" data-endpoint="last" title="Double-click to edit"></span>
-						</div>
+					<div class="map-wrap">
+						<canvas class="map-canvas" width="320" height="200"></canvas>
+						<div class="coord-tooltip" hidden></div>
 					</div>
 				</div>
-				<p class="warning pattern-warning" hidden>Pattern is active — this graph is read-only (its mapin/mapout points are kept, but only the axis min/max stay editable). Turn Pattern off to edit points again.</p>
 				<p class="hint">Click a point to select it, double-click the line to add a point, drag a point to move it (Shift locks to one axis), double-click a point to delete it. Double-click an axis value to edit it.</p>
 			</div>
-		</div>
 
-		<div class="connector"></div>
-		<div class="node pattern-node">
-			<div class="node-header">
-				<label class="toggle"><input type="checkbox" class="pattern-toggle" /><span class="toggle-track"></span></label>
-				<span class="node-title">Pattern</span>
-			</div>
-			<div class="node-body" hidden>
-				<input type="text" class="pattern-input" placeholder="0,2,4,5,7,9,11,12" />
-				<p class="hint">A number series (e.g. scale degrees) quantizing the mapped output between the current mapout range. While active, the Map graph above becomes read-only (only its axis min/max stay editable).</p>
-				<p class="warning pattern-degenerate-warning" hidden>This pattern can't be applied (its last value must be a positive number).</p>
-			</div>
-		</div>
-
-		<div class="connector"></div>
-		<div class="node curve-node">
-			<div class="node-header">
-				<label class="toggle"><input type="checkbox" class="curve-toggle" /><span class="toggle-track"></span></label>
-				<span class="node-title">Curve</span>
-			</div>
-			<div class="node-body" hidden>
-				<div class="row curve-mode-row">
-					<label><input type="radio" name="curve-mode" class="curve-mode-radio" value="all" checked /> All points</label>
-					<label><input type="radio" name="curve-mode" class="curve-mode-radio" value="per" /> Per point</label>
+			<div class="sub-section curve-node">
+				<div class="node-header sub-header">
+					<label class="toggle"><input type="checkbox" class="curve-toggle" /><span class="toggle-track"></span></label>
+					<span class="node-title">Curve</span>
 				</div>
-				<p class="hint curve-per-point-hint" hidden>Select a point (not the last one) in the Map graph above to edit its own curve.</p>
-				<select class="curve-select"></select>
-				<input type="number" class="curve-power" step="0.1" placeholder="power, e.g. 2" hidden />
+				<div class="node-body" hidden>
+					<div class="row curve-mode-row">
+						<label><input type="radio" name="curve-mode" class="curve-mode-radio" value="all" checked /> All points</label>
+						<label><input type="radio" name="curve-mode" class="curve-mode-radio" value="per" /> Per point</label>
+					</div>
+					<p class="hint curve-per-point-hint" hidden>Select a point (not the last one) in the Mapping graph above to edit its own curve.</p>
+					<select class="curve-select"></select>
+					<input type="number" class="curve-power" step="0.1" placeholder="power, e.g. 2" hidden />
+				</div>
+			</div>
+
+			<div class="sub-section pattern-node">
+				<div class="node-header sub-header">
+					<label class="toggle"><input type="checkbox" class="pattern-toggle" /><span class="toggle-track"></span></label>
+					<span class="node-title">Pattern</span>
+				</div>
+				<div class="node-body" hidden>
+					<input type="text" class="pattern-input" placeholder="0,2,4,5,7,9,11,12" />
+					<p class="hint">A number series (e.g. scale degrees) quantizing the mapped output between the current mapout range. While active, the Mapping graph above becomes read-only (only its axis min/max stay editable).</p>
+					<p class="warning pattern-degenerate-warning" hidden>This pattern can't be applied (its last value must be a positive number).</p>
+				</div>
 			</div>
 		</div>
 
-		<div class="connector"></div>
+		<div class="connector wide"></div>
 		<div class="node convert-node">
 			<div class="node-header">
 				<label class="toggle"><input type="checkbox" class="convert-toggle" /><span class="toggle-track"></span></label>
@@ -392,6 +481,10 @@ template.innerHTML = `
 				<p class="hint">A custom expression must use "x" as the incoming value.</p>
 				<p class="warning convert-error" hidden></p>
 				<canvas class="convert-canvas" width="320" height="140"></canvas>
+				<div class="outgoing-row">
+					<div class="outgoing-arrow">&#8594;</div>
+					<div class="outgoing-value">—</div>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -403,12 +496,17 @@ export class WaVarView extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 
-		this._tagEl = this.shadowRoot.querySelector(".tag");
 		this._mapCanvas = this.shadowRoot.querySelector(".map-canvas");
 		this._mapCtx = this._mapCanvas.getContext("2d");
 		this._mapWrap = this.shadowRoot.querySelector(".map-wrap");
 		this._coordTooltip = this.shadowRoot.querySelector(".coord-tooltip");
-		this._patternWarning = this.shadowRoot.querySelector(".pattern-warning");
+		this._chainEl = this.shadowRoot.querySelector(".chain");
+		this._mapNodeEl = this.shadowRoot.querySelector(".map-node");
+		this._convertNodeEl = this.shadowRoot.querySelector(".convert-node");
+		this._flowArrowPath = this.shadowRoot.querySelector(".flow-arrow-path");
+		this._incomingValueEl = this.shadowRoot.querySelector(".incoming-value");
+		this._outgoingValueEl = this.shadowRoot.querySelector(".outgoing-value");
+		this._wideConnectorEl = this.shadowRoot.querySelector(".connector.wide");
 		this._axisLabels = {
 			mapoutMax: this.shadowRoot.querySelector(".axis-mapout-max"),
 			mapoutMin: this.shadowRoot.querySelector(".axis-mapout-min"),
@@ -417,12 +515,12 @@ export class WaVarView extends HTMLElement {
 		};
 
 		this._patternToggle = this.shadowRoot.querySelector(".pattern-toggle");
-		this._patternBody = this._patternToggle.closest(".node").querySelector(".node-body");
+		this._patternBody = this._patternToggle.closest(".sub-section").querySelector(".node-body");
 		this._patternInput = this.shadowRoot.querySelector(".pattern-input");
 		this._patternDegenerateWarning = this.shadowRoot.querySelector(".pattern-degenerate-warning");
 
 		this._curveToggle = this.shadowRoot.querySelector(".curve-toggle");
-		this._curveBody = this._curveToggle.closest(".node").querySelector(".node-body");
+		this._curveBody = this._curveToggle.closest(".sub-section").querySelector(".node-body");
 		this._curveModeRadios = [...this.shadowRoot.querySelectorAll(".curve-mode-radio")];
 		this._curvePerPointHint = this.shadowRoot.querySelector(".curve-per-point-hint");
 		this._curveSelect = this.shadowRoot.querySelector(".curve-select");
@@ -547,8 +645,6 @@ export class WaVarView extends HTMLElement {
 
 	// ── Rendering ────────────────────────────────────────────────────────
 	_render(node) {
-		this._tagEl.textContent = `<${node.tagName}${node.attributes.name ? ` name="${node.attributes.name}"` : ""}>`;
-
 		const mapin = parseNumberList(node.attributes.mapin) || [0, 1];
 		const mapout = parseNumberList(node.attributes.mapout) || [0, 1];
 		const pattern = parseNumberList(node.attributes.pattern);
@@ -565,17 +661,52 @@ export class WaVarView extends HTMLElement {
 		this._renderCurveNode(node, curve);
 		this._renderConvertNode(node, convert, mapout);
 		this._renderMapCanvas(mapin, mapout, curve, pattern);
+		this._updateFlowArrow();
+	}
+
+	// A second arrow, same style as the top "incoming data" one, showing the
+	// value also flows from Mapping (graph + its Curve/Pattern sub-sections,
+	// now one box — see .sub-section above) straight into Convert. Routed as
+	// a right-angle bracket that stays clear of the box's own right edge —
+	// out, down, in — rather than a diagonal cutting across it. Per Hans
+	// (2026-09-25, correcting the first attempt's diagonal-through-the-boxes
+	// version). Recomputed on every render since toggling any section
+	// changes the Convert node's position.
+	_updateFlowArrow() {
+		// The gap before Convert should read as roomy as a collapsed
+		// section, not the thin 0.6rem default connector — measured off the
+		// Convert node's own header (constant height whether its body is
+		// open or not) rather than a guessed fixed value, so it stays
+		// correct if that styling ever changes. Per Hans (2026-09-25).
+		const headerEl = this._convertNodeEl.querySelector(".node-header");
+		const headerHeight = headerEl?.getBoundingClientRect().height;
+		if (headerHeight) this._wideConnectorEl.style.height = `${headerHeight}px`;
+
+		const chainRect = this._chainEl.getBoundingClientRect();
+		const mapRect = this._mapNodeEl.getBoundingClientRect();
+		const convertRect = this._convertNodeEl.getBoundingClientRect();
+		if (!chainRect.width || !mapRect.width || !convertRect.width) return;
+		const GAP = 18;
+		const startX = mapRect.right - chainRect.left;
+		const startY = mapRect.top + mapRect.height / 2 - chainRect.top;
+		const bracketX = startX + GAP;
+		const convertTopY = convertRect.top - chainRect.top;
+		const convertCenterX = convertRect.left + convertRect.width / 2 - chainRect.left;
+		const dropY = convertTopY - 6;
+		this._flowArrowPath.setAttribute(
+			"d",
+			`M${startX},${startY} L${bracketX},${startY} L${bracketX},${dropY} L${convertCenterX},${dropY} L${convertCenterX},${convertTopY}`
+		);
 	}
 
 	_renderPatternNode(node, pattern) {
 		const active = pattern !== null || !!this._patternForcedOpen;
 		this._patternToggle.checked = active;
 		this._patternBody.hidden = !active;
-		this._patternToggle.closest(".node").classList.toggle("enabled", active);
+		this._patternToggle.closest(".sub-section").classList.toggle("enabled", active);
 		if (document.activeElement !== this._patternInput) {
 			this._patternInput.value = node.attributes.pattern || "";
 		}
-		this._patternWarning.hidden = !active;
 	}
 
 	// Curve is "All points" mode when its value has no comma, "Per point"
@@ -585,7 +716,7 @@ export class WaVarView extends HTMLElement {
 		const active = curve !== undefined;
 		this._curveToggle.checked = active;
 		this._curveBody.hidden = !active;
-		this._curveToggle.closest(".node").classList.toggle("enabled", active);
+		this._curveToggle.closest(".sub-section").classList.toggle("enabled", active);
 		if (!active) return;
 
 		const curveArr = parseCsvStrings(curve) || ["linear"];
@@ -644,12 +775,16 @@ export class WaVarView extends HTMLElement {
 		this._drawConvertCurve(convert, this._convertDomain);
 	}
 
-	// ── Map node canvas ──────────────────────────────────────────────────
+	// The Y-axis frame comes from the two mapout ENDPOINTS only (not every
+	// point's value) — per Hans (2026-09-25): min/max form a fixed frame
+	// that dragging an interior point is clamped inside, rather than the
+	// view rescaling to chase whatever's being dragged. Only moving an
+	// endpoint itself (or double-clicking its axis label) changes the frame.
 	_mapDomain(mapin, mapout) {
 		const minIn = mapin[0];
 		const maxIn = mapin[mapin.length - 1];
-		let minOut = Math.min(...mapout);
-		let maxOut = Math.max(...mapout);
+		let minOut = Math.min(mapout[0], mapout[mapout.length - 1]);
+		let maxOut = Math.max(mapout[0], mapout[mapout.length - 1]);
 		if (minOut === maxOut) {
 			minOut -= 0.5;
 			maxOut += 0.5;
@@ -707,10 +842,12 @@ export class WaVarView extends HTMLElement {
 		// was a different, unrelated technique. While active, the graph is
 		// read-only (see the pattern guards in _onMapPointerDown/
 		// _onMapDblClick below) except for its axis min/max — so no
-		// draggable point dots are drawn, just the line.
+		// draggable point dots are drawn, just the line, muted to the same
+		// gray used elsewhere for "disabled" (per Hans, 2026-09-25 — this
+		// alone signals read-only, replacing the earlier red warning text).
 		const active = pattern !== null;
 		const curvePoints = computeMapPoints({ mapin, mapout, curve, pattern }, 200);
-		ctx.strokeStyle = "#4fa3ff";
+		ctx.strokeStyle = active ? "#8a8a8a" : "#4fa3ff";
 		ctx.lineWidth = 2;
 		ctx.beginPath();
 		curvePoints.forEach((p, i) => {
@@ -870,6 +1007,11 @@ export class WaVarView extends HTMLElement {
 
 		if (!this._drag.axisLock || this._drag.axisLock === "y") {
 			let y = this._fromCanvasY(py, domain, h);
+			// Interior points are clamped inside the current min/max frame —
+			// only dragging an endpoint itself may move the frame. Per Hans
+			// (2026-09-25): the view must never rescale just because a point
+			// was dragged past its edge.
+			if (!this._drag.isEndpoint) y = clampNum(y, domain.minOut, domain.maxOut);
 			mapout[idx] = y;
 		}
 		if ((!this._drag.axisLock || this._drag.axisLock === "x") && !this._drag.isEndpoint) {
@@ -939,10 +1081,7 @@ export class WaVarView extends HTMLElement {
 			return;
 		}
 
-		if (this._currentPattern !== null) {
-			this._flashPatternWarning();
-			return;
-		}
+		if (this._currentPattern !== null) return; // read-only while a Pattern is active
 		// add a new point on the line at this x, then immediately continue
 		// as if the user had grabbed it — see the "coordinate readout on
 		// create" comment above _showCoordTooltip.
@@ -986,10 +1125,6 @@ export class WaVarView extends HTMLElement {
 		return next.length ? next.join(",") : "linear";
 	}
 
-	_flashPatternWarning() {
-		this._patternWarning.hidden = false;
-	}
-
 	// `labelEl` is one of the DOM axis-label spans (see the template) —
 	// swapped for a real <input> in place, rather than an absolutely
 	// positioned overlay, per Hans (2026-09-25): easier to hit, and the
@@ -1015,7 +1150,7 @@ export class WaVarView extends HTMLElement {
 			input.replaceWith(labelEl);
 			if (!Number.isFinite(v)) return;
 			const arr = which === "mapin" ? [...this._currentMapin] : [...this._currentMapout];
-			arr[index] = v;
+			this._rescaleInteriorPoints(arr, index, v);
 			if (which === "mapin") {
 				this._writeAttrs(node, { mapin: arr.join(",") });
 			} else {
@@ -1030,6 +1165,28 @@ export class WaVarView extends HTMLElement {
 				input.replaceWith(labelEl);
 			}
 		});
+	}
+
+	// Mutates `arr` in place: sets the edited endpoint to `newValue`, then
+	// rescales every interior point to keep its *relative* position between
+	// the two endpoints — the curve's shape stays intact, only the numbers
+	// move to fit the new range. Per Hans (2026-09-25). The other endpoint
+	// never moves. A degenerate old range (both endpoints were equal) has
+	// no meaningful "relative position" to preserve, so interior points are
+	// left untouched in that case.
+	_rescaleInteriorPoints(arr, editedIndex, newValue) {
+		const otherIndex = editedIndex === 0 ? arr.length - 1 : 0;
+		const oldEdited = arr[editedIndex];
+		const otherValue = arr[otherIndex];
+		const oldRange = otherValue - oldEdited;
+		arr[editedIndex] = newValue;
+		if (oldRange === 0) return;
+		const newRange = otherValue - newValue;
+		for (let k = 0; k < arr.length; k++) {
+			if (k === editedIndex || k === otherIndex) continue;
+			const t = (arr[k] - oldEdited) / oldRange;
+			arr[k] = newValue + t * newRange;
+		}
 	}
 
 	// ── Pattern node ─────────────────────────────────────────────────────
@@ -1243,7 +1400,16 @@ export class WaVarView extends HTMLElement {
 		if (this._disposed) return;
 		this._rafId = requestAnimationFrame(() => this._pollLiveValue());
 		const node = xmlStore.getSelectedNode();
-		if (!node || node.tagName !== "Var" || !playerStore.isDocumentLoaded) return;
+		if (!node || node.tagName !== "Var") return;
+		// Self-healing: _render()'s own _updateFlowArrow() call can land
+		// while this view is still hidden (0×0 — wa-preview.js hasn't
+		// swapped its active state yet, e.g. right when a Var is first
+		// selected), which leaves the arrow unpositioned. Redoing it every
+		// frame here (cheap: a few getBoundingClientRect calls) means it's
+		// always correct within one frame of actually becoming visible,
+		// without needing to win a listener-order race with wa-preview.js.
+		this._updateFlowArrow();
+		if (!playerStore.isDocumentLoaded) return;
 		const realId = node.attributes.id;
 		if (!realId) return;
 		let liveObj;
@@ -1253,18 +1419,38 @@ export class WaVarView extends HTMLElement {
 		} catch {
 			liveObj = null;
 		}
-		if (!liveObj || typeof liveObj.lastInputValue !== "number") return;
+		if (!liveObj || typeof liveObj.lastInputValue !== "number") {
+			this._incomingValueEl.textContent = "—";
+			this._outgoingValueEl.textContent = "—";
+			return;
+		}
 		const stage1 = mapStage1(liveObj.lastInputValue, {
 			mapin: this._currentMapin,
 			mapout: this._currentMapout,
 			curve: this._currentCurve,
 			pattern: this._currentPattern
 		});
+		const finalValue = applyConvertFn(this._currentConvert, stage1); // == stage1 when Convert is off, per applyConvertFn's own passthrough
+		this._incomingValueEl.textContent = formatValue(liveObj.lastInputValue, this._incomingValueMax());
+		this._outgoingValueEl.textContent = formatValue(finalValue, this._outgoingValueMax());
 		if (!this._drag) this._drawMapDot(liveObj.lastInputValue, stage1);
-		if (this._convertDomain) {
-			const y = applyConvertFn(this._currentConvert, stage1);
-			this._drawConvertDot(stage1, y);
+		if (this._convertDomain) this._drawConvertDot(stage1, finalValue);
+	}
+
+	// Reference magnitude for formatValue's own "decimals scale to the
+	// value's own range" rule (js/utils/number-format.js) — per Hans
+	// (2026-09-25), the same rule wa-var-knobs.js's knobs already use.
+	_incomingValueMax() {
+		const d = this._mapDomainCache;
+		return d ? Math.max(Math.abs(d.minIn), Math.abs(d.maxIn)) : 1;
+	}
+
+	_outgoingValueMax() {
+		if (this._convertDomain && this._convertYDomain) {
+			return Math.max(Math.abs(this._convertYDomain.minY), Math.abs(this._convertYDomain.maxY));
 		}
+		const d = this._mapDomainCache;
+		return d ? Math.max(Math.abs(d.minOut), Math.abs(d.maxOut)) : 1;
 	}
 
 	// Same idea as _drawConvertDot below — redraws the graph then overlays a
@@ -1284,10 +1470,13 @@ export class WaVarView extends HTMLElement {
 		const cx = this._toCanvasX(x, domain, w);
 		const cy = this._toCanvasY(y, domain, h);
 		const ctx = this._mapCtx;
-		ctx.fillStyle = "#4fa3ff"; // same as the Map line — smaller than the static (4.5px) points so it reads as the live marker, not another set point
+		ctx.fillStyle = "#4fa3ff"; // same as the Map line — still smaller than the static (4.5px) points so it reads as the live marker, not another set point
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+		ctx.lineWidth = 1;
 		ctx.beginPath();
-		ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+		ctx.arc(cx, cy, 4, 0, Math.PI * 2);
 		ctx.fill();
+		ctx.stroke();
 	}
 
 	_drawConvertDot(x, y) {
@@ -1303,10 +1492,13 @@ export class WaVarView extends HTMLElement {
 		const ctx = this._convertCtx;
 		const cx = MAP_PADDING + ((x - min) / (max - min || 1)) * (w - 2 * MAP_PADDING);
 		const cy = h - MAP_PADDING - ((y - minY) / (maxY - minY || 1)) * (h - 2 * MAP_PADDING);
-		ctx.fillStyle = "#45b58c"; // same as the Convert line, small like the Map graph's own live marker
+		ctx.fillStyle = "#45b58c"; // same as the Convert line, still smaller than the Map graph's static points
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+		ctx.lineWidth = 1;
 		ctx.beginPath();
-		ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+		ctx.arc(cx, cy, 4, 0, Math.PI * 2);
 		ctx.fill();
+		ctx.stroke();
 	}
 }
 

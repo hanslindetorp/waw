@@ -247,7 +247,13 @@ export function mapStage1(x, { mapin, mapout, curve, pattern }) {
 	const i1 = inToMapInIndex(clamped, mapin);
 	const rel = in2Rel(clamped, i1, mapin);
 	const { i, x: relOut } = inToMapOutIndex(rel, i1, mapin, mapout);
-	const curved = applyCurveFn(curve, relOut);
+	// `curve` may be a single value or a comma-separated one-per-segment
+	// list (wa-var-view.js's "Per point" mode) — same `arr[i % arr.length]`
+	// indexing waxml.js's own Mapper uses, so a plain single value (no
+	// comma) still always resolves to itself regardless of segment `i`.
+	const curveArr = typeof curve === "string" ? curve.split(",").map((s) => s.trim()).filter(Boolean) : null;
+	const curveForSegment = curveArr && curveArr.length ? curveArr[i % curveArr.length] : curve;
+	const curved = applyCurveFn(curveForSegment, relOut);
 	const out = rel2Out(curved, i, mapout, pattern);
 	return offset(out, i, mapout);
 }

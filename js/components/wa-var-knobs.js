@@ -2,6 +2,8 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { isEditableContext } from "../project/edit-history.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
+import { mapStage1, applyConvertFn } from "../xml-editor/var-mapper-math.js";
+import { formatValue } from "../utils/number-format.js";
 
 // One knob per <Var> child of a "scope" node — lets you nudge a variable
 // live while playing, right from the player/bottom bar. Turning a knob never
@@ -31,19 +33,39 @@ function parseNumberList(str) {
 		.filter((n) => Number.isFinite(n));
 }
 
-// Two significant digits' worth of resolution scaled to the knob's own max
-// (not a flat 2 decimals regardless of range) — per Hans (2026-09-10): a
-// 0-1 range shows 2 decimals ("0.42"), 0-10 shows 1 ("4.2"), 0-100 shows 0
-// ("42"). digitsBeforeDecimal is how many integer digits `max` itself has
-// (e.g. "10" -> 2); 3 minus that is exactly the three example cases above.
-function decimalsForMax(max) {
-	const digitsBeforeDecimal = String(Math.floor(Math.abs(max))).length;
-	return Math.max(0, 3 - digitsBeforeDecimal);
+// formatValue/decimalsForMax now live in js/utils/number-format.js — per
+// Hans (2026-09-25), the same "scale decimals to the value's own
+// magnitude" rule applies to every live/mapped numeric readout in WAW, not
+// just knobs (see wa-var-view.js's own live input/output value fields).
+
+// True when this Var actually transforms its value in some way (see
+// wa-var-view.js's Mapping/Pattern/Curve/Convert nodes) — a knob for a
+// plain, unmapped Var (mapin === mapout, nothing else set) only ever needs
+// its one existing value display. Per Hans (2026-09-25). An absent mapout
+// defaults to mapin (same as waxml.js's own Mapper), so that alone doesn't
+// count as "mapped".
+function hasMapping(node) {
+	if (node.attributes.pattern !== undefined || node.attributes.curve !== undefined || node.attributes.convert !== undefined) return true;
+	const mapinStr = node.attributes.mapin;
+	const mapoutStr = node.attributes.mapout !== undefined ? node.attributes.mapout : mapinStr;
+	if (mapinStr === undefined && mapoutStr === undefined) return false;
+	const a = parseNumberList(mapinStr);
+	const b = parseNumberList(mapoutStr);
+	if (a.length !== b.length) return true;
+	return a.some((v, i) => v !== b[i]);
 }
 
-function formatValue(v, max) {
-	if (!Number.isFinite(v)) return "—";
-	return v.toFixed(decimalsForMax(max));
+// The value this Var's own mapping pipeline would produce for a given raw
+// input — same math wa-var-view.js's live dots use, so the knob's own
+// output readout always matches what that editor shows. Per Hans
+// (2026-09-25).
+function computeMappedValue(node, rawValue) {
+	const mapin = parseNumberList(node.attributes.mapin);
+	const mapoutStr = node.attributes.mapout !== undefined ? node.attributes.mapout : node.attributes.mapin;
+	const mapout = parseNumberList(mapoutStr);
+	const pattern = node.attributes.pattern !== undefined ? parseNumberList(node.attributes.pattern) : null;
+	const stage1 = mapin.length >= 2 && mapout.length >= 2 ? mapStage1(rawValue, { mapin, mapout, curve: node.attributes.curve, pattern }) : rawValue;
+	return applyConvertFn(node.attributes.convert, stage1);
 }
 
 const template = document.createElement("template");
@@ -149,12 +171,33 @@ template.innerHTML = `
 		   underneath it. A fixed min-width + right-align (also per Hans,
 		   2026-09-10) so the digits land on a consistent right edge instead
 		   of each width jittering the row as the value changes. */
+		.var-values {
+			display: flex;
+			flex-direction: column;
+			align-items: flex-end;
+			gap: 0.1rem;
+		}
 		.var-value {
 			font-size: 0.8rem;
 			color: var(--waw-accent, #4fa3ff);
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 			min-width: 2.6rem;
 			text-align: right;
+		}
+		/* A Var with an actual mapping pipeline (see wa-var-view.js) shows
+		   both values — the knob's own raw input (white, unmapped) and the
+		   value after mapin/mapout/curve/pattern/convert (blue) — so it's
+		   clear the knob itself never moved into the mapped range. A Var
+		   with no mapping keeps the single accent-colored value exactly as
+		   before. Per Hans (2026-09-25). */
+		.var-value-input.mapped {
+			color: var(--waw-fg, #e8e8e8);
+		}
+		.var-value-output {
+			font-size: 0.68rem;
+		}
+		.var-value-output[hidden] {
+			display: none;
 		}
 	</style>
 	<div class="var-knobs"></div>
@@ -320,9 +363,18 @@ export class WaVarKnobs extends HTMLElement {
 		knob.appendChild(dial);
 		knobAnchor.appendChild(knob);
 
+		const valuesWrap = document.createElement("div");
+		valuesWrap.className = "var-values";
+		row.appendChild(valuesWrap);
+
 		const valueLabel = document.createElement("div");
-		valueLabel.className = "var-value";
-		row.appendChild(valueLabel);
+		valueLabel.className = "var-value var-value-input";
+		valuesWrap.appendChild(valueLabel);
+
+		const outputLabel = document.createElement("div");
+		outputLabel.className = "var-value var-value-output";
+		outputLabel.hidden = true;
+		valuesWrap.appendChild(outputLabel);
 
 		const nameLabel = document.createElement("div");
 		nameLabel.className = "var-name";
@@ -348,11 +400,21 @@ export class WaVarKnobs extends HTMLElement {
 		const current = Math.max(min, Math.min(max, this._values.get(node.id)));
 		this._values.set(node.id, current);
 
+		const mapped = hasMapping(node);
+		valueLabel.classList.toggle("mapped", mapped);
+		outputLabel.hidden = !mapped;
+
 		const applyVisual = (v) => {
 			const t = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0;
 			dial.style.transform = `rotate(${-135 + t * 270}deg)`;
 			valueLabel.textContent = formatValue(v, max);
-			knob.title = `${varName}: ${formatValue(v, max)}`;
+			let title = `${varName}: ${formatValue(v, max)}`;
+			if (mapped) {
+				const outValue = computeMappedValue(node, v);
+				outputLabel.textContent = formatValue(outValue, Math.abs(outValue) || 1);
+				title += ` -> ${formatValue(outValue, Math.abs(outValue) || 1)}`;
+			}
+			knob.title = title;
 		};
 		applyVisual(current);
 		this._knobRuntime.set(node.id, { applyVisual, min, max });
@@ -413,12 +475,20 @@ export class WaVarKnobs extends HTMLElement {
 	// per Hans (2026-09-13), turning the knob must never also select it.
 	// DRAG_THRESHOLD_PX is a small deadzone so a plain click's inevitable
 	// sub-pixel jitter is never mistaken for an intentional drag.
+	// Combines vertical and horizontal movement into one delta (up or right
+	// = increase; down or left = decrease) — per Hans (2026-09-25): dragging
+	// only vertically meant hitting the window's top/bottom edge ended the
+	// gesture early (e.g. turning a knob already near max further up ran
+	// out of screen almost immediately). With both axes contributing, the
+	// user can keep going by moving diagonally or switching to horizontal
+	// once they run out of vertical room, instead of being stuck.
 	_wireDrag(el, nodeId, getValue, min, max, onChange, defaultValue) {
 		const DRAG_THRESHOLD_PX = 2;
 		el.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
 			e.preventDefault();
 			e.stopPropagation();
+			const startX = e.clientX;
 			const startY = e.clientY;
 			const startValue = getValue();
 			let dragging = false;
@@ -427,7 +497,7 @@ export class WaVarKnobs extends HTMLElement {
 			} catch {}
 
 			const onMove = (moveEvt) => {
-				const deltaPx = startY - moveEvt.clientY; // up = increase
+				const deltaPx = startY - moveEvt.clientY + (moveEvt.clientX - startX);
 				if (!dragging && Math.abs(deltaPx) < DRAG_THRESHOLD_PX) return;
 				dragging = true;
 				const raw = startValue + (deltaPx / KNOB_PX_PER_RANGE) * (max - min);

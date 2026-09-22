@@ -90,15 +90,6 @@ template.innerHTML = `
 			margin-top: 2rem;
 			padding: 0 0.5rem;
 		}
-		.node-label {
-			margin: 0 0 0.6rem;
-			font-weight: 600;
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			word-break: break-all;
-		}
-		.node-label .tag {
-			color: var(--waw-accent, #4fa3ff);
-		}
 		canvas.waveform {
 			width: 100%;
 			height: 100px;
@@ -172,7 +163,6 @@ template.innerHTML = `
 	</div>
 
 	<div class="state padded" data-state="audio">
-		<p class="node-label"><span class="tag"></span></p>
 		<canvas class="waveform" width="600" height="100"></canvas>
 		<div class="waxml-controls">
 			<button class="btn-play" type="button">▶ Play via WAXML</button>
@@ -182,13 +172,11 @@ template.innerHTML = `
 	</div>
 
 	<div class="state padded" data-state="missing">
-		<p class="node-label"><span class="tag"></span></p>
 		<p class="centered">No file at <span class="missing-value"></span></p>
 		<p class="hint">Drag a file from the file manager onto this element to set it.</p>
 	</div>
 
 	<div class="state padded" data-state="fallback">
-		<p class="node-label"><span class="tag"></span></p>
 		<p class="centered">No preview view yet for this element type.</p>
 		<div class="attr-list"></div>
 	</div>
@@ -339,7 +327,6 @@ export class WaPreview extends HTMLElement {
 		const resolvedUrl = resolvePlayableUrl(srcAttr.value);
 		if (!resolvedUrl) {
 			this._showState("missing");
-			this._setTag(this._states.get("missing"), node.tagName);
 			this._states.get("missing").querySelector(".missing-value").textContent = srcAttr.value || "(empty)";
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
@@ -347,7 +334,6 @@ export class WaPreview extends HTMLElement {
 		}
 
 		this._showState("audio");
-		this._setTag(this._states.get("audio"), node.tagName);
 
 		// The (expensive) bridge reload + waveform decode only needs to run
 		// again when the node or its resolved audio source actually changed —
@@ -390,7 +376,6 @@ export class WaPreview extends HTMLElement {
 	_showFallback(node) {
 		this._showState("fallback");
 		const el = this._states.get("fallback");
-		this._setTag(el, node.tagName);
 		const list = el.querySelector(".attr-list");
 		list.innerHTML = "";
 		Object.entries(node.attributes).forEach(([k, v]) => {
@@ -398,10 +383,6 @@ export class WaPreview extends HTMLElement {
 			row.textContent = `${k}="${v}"`;
 			list.appendChild(row);
 		});
-	}
-
-	_setTag(stateEl, tagName) {
-		stateEl.querySelector(".tag").textContent = `<${tagName}>`;
 	}
 
 	_showState(name) {
