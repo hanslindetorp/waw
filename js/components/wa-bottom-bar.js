@@ -315,6 +315,7 @@ export class WaBottomBar extends HTMLElement {
 		this._globalTrigLead = this.shadowRoot.querySelector(".global-row .trig-lead");
 		this._globalVarsLead = this.shadowRoot.querySelector(".global-row .vars-lead");
 		this._hasLocal = false;
+		this._lastLayoutSignature = null;
 		this._onPlayerChange = this._onPlayerChange.bind(this);
 		this._onXmlStoreChange = this._onXmlStoreChange.bind(this);
 		this._onKeyDown = this._onKeyDown.bind(this);
@@ -493,7 +494,24 @@ export class WaBottomBar extends HTMLElement {
 			this._localShortcuts.innerHTML = "";
 		}
 
-		requestAnimationFrame(() => this._recalcLayout());
+		// _render() runs on *every* xmlStore change (a Var's label, a
+		// Command's selector, a value tweak somewhere else entirely in the
+		// document, ...) — but _recalcLayout() re-measures natural content
+		// widths and can shift the divider by a stray pixel or two even when
+		// nothing about the button/knob *set* actually changed (e.g. a knob's
+		// own live value text just got a digit longer). Re-running it on
+		// every one of those made the divider visibly creep/slide while
+		// editing an unrelated parameter. Per Hans (2026-09-26): the divider
+		// should only move when a button or knob is actually added or
+		// removed — so only rebalance when this signature (button/knob
+		// counts on both rows) actually changes.
+		const globalCommandCount = this._qualifyingCommands(xmlStore.root).length;
+		const globalVarCount = xmlStore.root.children.filter((c) => c.tagName === "Var").length;
+		const signature = `${globalCommandCount}|${globalVarCount}|${this._hasLocal}|${localCommands.length}|${localVarCount}`;
+		if (signature !== this._lastLayoutSignature) {
+			this._lastLayoutSignature = signature;
+			requestAnimationFrame(() => this._recalcLayout());
+		}
 	}
 
 	// Builds one grouped row of shortcut buttons (trig + set) for
