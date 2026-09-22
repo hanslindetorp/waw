@@ -162,6 +162,15 @@ template.innerHTML = `
 			background: var(--waw-border, #2f2f2f);
 			margin: 0 auto;
 		}
+		/* No background line here — the flow-arrow-svg's own bracket is
+		   already the visual connector to Convert (see _updateFlowArrow); a
+		   second straight line running behind/through it just reads as
+		   clutter. This is a plain spacer, sized to match a collapsed
+		   section's height (see _updateFlowArrow's own JS measurement). */
+		.connector.wide {
+			background: none;
+			width: auto;
+		}
 		.flow-arrow-svg {
 			position: absolute;
 			inset: 0;
@@ -410,7 +419,7 @@ template.innerHTML = `
 	</style>
 
 	<div class="chain">
-		<svg class="flow-arrow-svg"><path class="flow-arrow-path" fill="none" stroke="#4fa3ff" stroke-width="1.5" marker-end="url(#flow-arrowhead)" /><defs><marker id="flow-arrowhead" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#4fa3ff" /></marker></defs></svg>
+		<svg class="flow-arrow-svg"><path class="flow-arrow-path" fill="none" stroke="#4fa3ff" stroke-width="2" marker-end="url(#flow-arrowhead)" /><defs><marker id="flow-arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="4" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#4fa3ff" /></marker></defs></svg>
 
 		<div class="incoming-row">
 			<span class="incoming-arrow">&#8595; incoming data</span>

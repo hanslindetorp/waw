@@ -7708,7 +7708,7 @@ class Mapper{
 		this.sourceValues = [];
 
 
-		let steps = params.pattern || params.steps;
+		let steps = params.steps || params.pattern;
 		// wrap single step array in container if needed
 		if(steps instanceof Array){
 			if(!steps.find(el => el instanceof Array)){
@@ -13859,6 +13859,7 @@ WebAudioUtils.typeFixParam = (param, value) => {
 
 
 		case "steps":
+		case "pattern":
 		try {
 			// multi dimensional array
 			value = JSON.parse(value);

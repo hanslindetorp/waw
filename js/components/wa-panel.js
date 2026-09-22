@@ -329,9 +329,67 @@ export class WaPanel extends HTMLElement {
 	}
 
 	_onResizeMove(e) {
-		const newWidth = Math.max(MIN_EXPANDED_WIDTH_PX, this._resizeStartWidth + (e.clientX - this._resizeStartX));
+		const rawWidth = this._resizeStartWidth + (e.clientX - this._resizeStartX);
+		// _shrinkOthersToFit below can only ever shrink *other* panels down
+		// to their own minimum — it can't manufacture room that isn't there.
+		// Without also capping this panel's own growth, dragging far enough
+		// still overflows once every other panel already bottomed out. Per
+		// Hans (2026-09-26).
+		const newWidth = Math.max(MIN_EXPANDED_WIDTH_PX, Math.min(rawWidth, this._maxWidthForOthersToFit()));
 		this._baseFlex = `0 0 ${newWidth}px`;
 		this._applyFlex();
+		this._shrinkOthersToFit();
+	}
+
+	// How wide this panel can get while every *other* visible panel still
+	// fits at its own minimum (a collapsed one can't shrink further than its
+	// fixed icon-rail width; an expanded one can always reach
+	// MIN_EXPANDED_WIDTH_PX via _shrinkOthersToFit).
+	_maxWidthForOthersToFit() {
+		const container = this.parentElement;
+		if (!container) return Infinity;
+		const others = [...container.children].filter((el) => el instanceof WaPanel && !el.hidden && el !== this);
+		const containerWidth = container.getBoundingClientRect().width;
+		const othersMin = others.reduce((sum, p) => sum + (p.collapsed ? p.getBoundingClientRect().width : MIN_EXPANDED_WIDTH_PX), 0);
+		return Math.max(MIN_EXPANDED_WIDTH_PX, containerWidth - othersMin);
+	}
+
+	// Growing this panel must never push a later one past the container's
+	// own right edge — per Hans (2026-09-26): "det sista panelens högerkant
+	// ska alltid ligga mot fönstrets högerkant." Every non-fill panel keeps
+	// flex-shrink:0 (see the top-of-file comment on why), so the browser
+	// never shrinks anything on its own; if growing this panel pushed the
+	// row's total width past the container, this explicitly shrinks every
+	// *other* expanded, non-fill panel (proportionally to its own current
+	// width, never below MIN_EXPANDED_WIDTH_PX) to absorb the difference —
+	// this panel's own width stays exactly what the drag says (unaffected,
+	// same "always tracks the cursor 1:1" reasoning as flex-shrink:0 itself),
+	// only its neighbors compress. The fill panel (Code) is left alone: it
+	// already absorbs width on its own via flex:1 1 auto whenever it's
+	// expanded, and forcing a fixed _baseFlex onto it here would detach it
+	// from the container's trailing edge (the exact bug _applyFairShareOnOpen's
+	// own comment already warns about) — so this only matters while Code is
+	// collapsed, which is exactly when nothing else is absorbing the overflow.
+	_shrinkOthersToFit() {
+		const container = this.parentElement;
+		if (!container) return;
+		const panels = [...container.children].filter((el) => el instanceof WaPanel && !el.hidden);
+		const containerWidth = container.getBoundingClientRect().width;
+		const overflow = panels.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0) - containerWidth;
+		if (overflow <= 0) return;
+
+		const shrinkable = panels.filter((p) => p !== this && !p.collapsed && !p._isFill);
+		if (!shrinkable.length) return;
+		const widths = shrinkable.map((p) => p.getBoundingClientRect().width);
+		const shrinkableTotal = widths.reduce((a, b) => a + b, 0);
+		if (shrinkableTotal <= 0) return;
+
+		shrinkable.forEach((p, i) => {
+			const share = overflow * (widths[i] / shrinkableTotal);
+			const newWidth = Math.max(MIN_EXPANDED_WIDTH_PX, widths[i] - share);
+			p._baseFlex = `0 0 ${newWidth}px`;
+			p._applyFlex();
+		});
 	}
 
 	_onResizeEnd() {

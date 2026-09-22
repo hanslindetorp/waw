@@ -138,10 +138,10 @@ function buildNodePreviewXml(node, srcAttrName, resolvedSrc) {
 	return `<WAXML version="1.0">\n\t<${node.tagName}${attrString} />\n</WAXML>`;
 }
 
+// `>` deliberately not escaped — see xml-tree-ops.js's own escapeXml for why.
 function escapeXmlAttr(value) {
 	return String(value)
 		.replace(/&/g, "&amp;")
 		.replace(/"/g, "&quot;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;");
+		.replace(/</g, "&lt;");
 }

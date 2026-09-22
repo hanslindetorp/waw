@@ -135,11 +135,15 @@ function serializeWithLineMap(node, indent, state, lineMap) {
 	return result;
 }
 
+// `>` is deliberately never escaped here — per the XML spec it only ever
+// needs escaping as part of a literal "]]>" sequence (irrelevant to any
+// value this app writes), so leaving it as-is keeps e.g. a Var's own
+// convert="MIDI->frequency" readable in the generated source instead of
+// showing up as "MIDI-&gt;frequency". Per Hans (2026-09-26).
 function escapeXml(str) {
 	return str
 		.replace(/&/g, "&amp;")
 		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
 		.replace(/"/g, "&quot;")
 		.replace(/'/g, "&apos;");
 }

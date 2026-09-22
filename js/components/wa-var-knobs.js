@@ -4,6 +4,7 @@ import { isEditableContext } from "../project/edit-history.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { mapStage1, applyConvertFn } from "../xml-editor/var-mapper-math.js";
 import { formatValue } from "../utils/number-format.js";
+import { varMapMode } from "../state/var-map-mode.js";
 
 // One knob per <Var> child of a "scope" node — lets you nudge a variable
 // live while playing, right from the player/bottom bar. Turning a knob never
@@ -94,6 +95,45 @@ template.innerHTML = `
 			flex-direction: column;
 			align-items: center;
 			gap: 0.15rem;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 6px;
+			padding: 0.4rem 0.55rem;
+		}
+		.var-name-row {
+			display: flex;
+			align-items: center;
+			gap: 0.3rem;
+		}
+		.map-btn {
+			flex: 0 0 auto;
+			background: none;
+			border: 1px dashed var(--waw-border, #2f2f2f);
+			border-radius: 4px;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.6rem;
+			font-family: inherit;
+			padding: 0.05rem 0.3rem;
+			cursor: pointer;
+			white-space: nowrap;
+		}
+		.map-btn:hover {
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
+		}
+		@keyframes var-map-armed-blink {
+			0%,
+			100% {
+				opacity: 1;
+			}
+			50% {
+				opacity: 0.35;
+			}
+		}
+		.map-btn.armed {
+			border-style: solid;
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
+			animation: var-map-armed-blink 0.9s ease-in-out infinite;
 		}
 		/* Knob + its value sit in a row now (value used to be stacked below
 		   the knob along with the name) — per Hans (2026-09-10). Gap widened
@@ -217,6 +257,12 @@ export class WaVarKnobs extends HTMLElement {
 		this._onPlayerStoreChange = () => this._onPlayerChange();
 		this._onVariableChange = this._onVariableChange.bind(this);
 		this._onKeyDown = this._onKeyDown.bind(this);
+		// Re-render on every arm/disarm so each knob's own Map button picks up
+		// (or drops) its blinking ".armed" state — see _buildKnob. A full
+		// _render() is already how this component reacts to any other change
+		// (_onXmlStoreChange), so this stays consistent rather than trying to
+		// patch just the one button in place. Per Hans (2026-09-27).
+		this._onVarMapModeChange = () => this._render();
 	}
 
 	// Points this instance at a specific node's own <Var> children instead of
@@ -251,6 +297,7 @@ export class WaVarKnobs extends HTMLElement {
 		playerStore.addEventListener("change", this._onPlayerStoreChange);
 		playerStore.addEventListener("variable-change", this._onVariableChange);
 		document.addEventListener("keydown", this._onKeyDown);
+		varMapMode.addEventListener("change", this._onVarMapModeChange);
 		this._render();
 	}
 
@@ -259,6 +306,7 @@ export class WaVarKnobs extends HTMLElement {
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
 		playerStore.removeEventListener("variable-change", this._onVariableChange);
 		document.removeEventListener("keydown", this._onKeyDown);
+		varMapMode.removeEventListener("change", this._onVarMapModeChange);
 	}
 
 	// Follows a variable set by *anything* (a Command type="set" shortcut,
@@ -376,10 +424,36 @@ export class WaVarKnobs extends HTMLElement {
 		outputLabel.hidden = true;
 		valuesWrap.appendChild(outputLabel);
 
+		const nameRow = document.createElement("div");
+		nameRow.className = "var-name-row";
+		wrap.appendChild(nameRow);
+
 		const nameLabel = document.createElement("div");
 		nameLabel.className = "var-name";
 		nameLabel.textContent = varName || "(no name)";
-		wrap.appendChild(nameLabel);
+		nameRow.appendChild(nameLabel);
+
+		// Arms/disarms the shared var-map-mode singleton (see
+		// js/state/var-map-mode.js) so wa-node-inspector.js's attribute rows
+		// know a click on them right now means "wire to $varName". Clicking
+		// Map again while already armed for *this* var disarms it — the
+		// module itself treats re-arming the same var as a no-op, so the
+		// toggle direction has to be decided here. Per Hans (2026-09-27).
+		const mapBtn = document.createElement("button");
+		mapBtn.type = "button";
+		mapBtn.className = "map-btn";
+		mapBtn.textContent = "Map...";
+		mapBtn.hidden = !varName;
+		mapBtn.classList.toggle("armed", varMapMode.armed && varMapMode.varName === varName);
+		mapBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			if (varMapMode.armed && varMapMode.varName === varName) {
+				varMapMode.disarm();
+			} else {
+				varMapMode.arm(varName);
+			}
+		});
+		nameRow.appendChild(mapBtn);
 
 		if (!varName) {
 			// No "name" (nor a fallback "id") to call setVariable() with —

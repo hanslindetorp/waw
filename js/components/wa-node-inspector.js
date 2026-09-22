@@ -7,6 +7,7 @@ import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
 import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribute-inheritance.js";
 import { openIoPicker } from "./wa-io-picker.js";
 import { openVoicePicker } from "./wa-voice-picker.js";
+import { varMapMode } from "../state/var-map-mode.js";
 
 // Showing/editing an element's own tag name here is turned off per Hans
 // (2026-09-03) — _renderTagNameField (and xmlStore.updateTagName) are left
@@ -575,6 +576,26 @@ export class WaNodeInspector extends HTMLElement {
 	_renderAttributeRow(node, attrName, value, attrSchema) {
 		const row = document.createElement("div");
 		row.className = "attr-row";
+
+		// While a <Var> knob's "Map..." is armed (see wa-var-knobs.js /
+		// var-map-mode.js), a click anywhere on this row wires this
+		// attribute to that Var ($name syntax) instead of doing whatever the
+		// row's own control would normally do — claims the click
+		// (stopPropagation) so var-map-mode's own document-level listener
+		// sees this as "handled" and stays armed, letting one Var get wired
+		// to many attributes without re-clicking Map each time. Per Hans
+		// (2026-09-27). Bubble phase is enough: preventDefault() here still
+		// blocks whatever default action the actual clicked control (an
+		// <input>, <select>, ...) would otherwise have taken, since default
+		// actions run after the whole dispatch, not interleaved with it.
+		row.addEventListener("click", (e) => {
+			if (!varMapMode.armed) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const current = xmlStore.getSelectedNode();
+			if (!current || current.id !== node.id) return;
+			xmlStore.updateAttributes(node.id, { ...current.attributes, [attrName]: `$${varMapMode.varName}` });
+		});
 
 		const nameSpan = document.createElement("span");
 		nameSpan.className = "attr-name mono";

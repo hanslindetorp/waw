@@ -207,6 +207,51 @@ template.innerHTML = `
 		.calibrate-hint[hidden] {
 			display: none;
 		}
+		/* Per-entry mute — per Hans (2026-09-27): a manual knob drag should
+		   always be possible even while INPUT drives it, but if the webcam
+		   keeps sending values every frame that fights any manual attempt,
+		   so this lets one entry stop feeding its mapped Var(s) without
+		   losing its mappings (unlike deleting it outright). */
+		.bypass-toggle {
+			position: relative;
+			display: inline-block;
+			width: 26px;
+			height: 15px;
+			flex-shrink: 0;
+		}
+		.bypass-toggle input {
+			opacity: 0;
+			width: 0;
+			height: 0;
+		}
+		.bypass-toggle .toggle-track {
+			position: absolute;
+			inset: 0;
+			background: #2a2a2a;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 15px;
+			cursor: pointer;
+			transition: background 0.12s ease;
+		}
+		.bypass-toggle .toggle-track::before {
+			content: "";
+			position: absolute;
+			width: 9px;
+			height: 9px;
+			left: 2px;
+			top: 2px;
+			background: var(--waw-muted, #8a8a8a);
+			border-radius: 50%;
+			transition: transform 0.12s ease, background 0.12s ease;
+		}
+		.bypass-toggle input:checked + .toggle-track {
+			background: rgba(69, 181, 140, 0.18);
+			border-color: var(--waw-teal, #45b58c);
+		}
+		.bypass-toggle input:checked + .toggle-track::before {
+			transform: translateX(11px);
+			background: var(--waw-teal, #45b58c);
+		}
 		.video-wrapper {
 			position: relative;
 			background: #000;
@@ -260,14 +305,6 @@ template.innerHTML = `
 			align-items: flex-start;
 			gap: 0.5rem;
 		}
-		.info-header {
-			flex: 0 0 auto;
-			font-size: 0.65rem;
-			text-transform: uppercase;
-			letter-spacing: 0.05em;
-			color: var(--waw-muted, #8a8a8a);
-			padding-top: 0.2rem;
-		}
 		.chip-container {
 			flex: 1 1 auto;
 			display: flex;
@@ -277,7 +314,7 @@ template.innerHTML = `
 			min-height: 1.5rem;
 		}
 		.hint-text {
-			font-size: 0.78rem;
+			font-size: 0.68rem;
 			color: var(--waw-muted, #8a8a8a);
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 		}
@@ -500,8 +537,7 @@ template.innerHTML = `
 	</div>
 	<div class="sel-panel">
 		<div class="sel-top">
-			<div class="info-header">Selection</div>
-			<div class="chip-container"><span class="hint-text">Click a point on the video to select</span></div>
+			<div class="chip-container"><span class="hint-text">Select one or more points in the video</span></div>
 			<div class="sel-actions">
 				<button class="clear-btn hidden" type="button">Clear</button>
 				<button class="add-btn hidden" type="button">+ Add</button>
@@ -610,7 +646,8 @@ export class WaWebcamInput extends HTMLElement {
 				id: e.id,
 				labels: e.labelMetas.map((m) => m.label),
 				type: e.type,
-				mappings: Object.fromEntries(Object.entries(e.mappings).map(([key, m]) => [key, { ...m }]))
+				mappings: Object.fromEntries(Object.entries(e.mappings).map(([key, m]) => [key, { ...m }])),
+				bypassed: e.bypassed
 			}))
 		};
 	}
@@ -931,7 +968,7 @@ export class WaWebcamInput extends HTMLElement {
 		const n = labels.length;
 		this._chipContainer.innerHTML = "";
 		if (n === 0) {
-			this._chipContainer.innerHTML = '<span class="hint-text">Click a point on the video to select</span>';
+			this._chipContainer.innerHTML = '<span class="hint-text">Select one or more points in the video</span>';
 			this._clearBtn.classList.add("hidden");
 			this._addBtn.classList.add("hidden");
 			this._liveValuesDiv.innerHTML = "";
@@ -1002,7 +1039,7 @@ export class WaWebcamInput extends HTMLElement {
 		const labelMetas = labels.map((l) => ({ label: l, model: this._landmarkMap.get(l)?.model ?? "unknown" }));
 		const type = typeForCount(labels.length);
 		const id = ++this._savedEntryCounter;
-		const entry = { id, type, labelMetas, lastValues: {}, mappings: {}, valueEls: {}, mapEls: {}, calibrating: false };
+		const entry = { id, type, labelMetas, lastValues: {}, mappings: {}, valueEls: {}, mapEls: {}, calibrating: false, bypassed: false };
 		this._buildSavedRow(entry);
 		this._savedEntries.push(entry);
 		this._savedListEl.appendChild(entry.row);
@@ -1034,7 +1071,8 @@ export class WaWebcamInput extends HTMLElement {
 			),
 			valueEls: {},
 			mapEls: {},
-			calibrating: false
+			calibrating: false,
+			bypassed: !!saved.bypassed
 		};
 		this._buildSavedRow(entry);
 		this._savedEntries.push(entry);
@@ -1082,7 +1120,23 @@ export class WaWebcamInput extends HTMLElement {
 		calibrateBtn.title = "While active, every 'auto' range below expands to fit whatever raw values this entry sees";
 		calibrateBtn.addEventListener("click", () => this._toggleEntryCalibrate(entry));
 		entry.calibrateBtn = calibrateBtn;
-		rowTop.append(lbl, calibrateBtn, del);
+
+		const bypassLabel = document.createElement("label");
+		bypassLabel.className = "bypass-toggle";
+		bypassLabel.title = "Bypass — stop this entry from setting its mapped Var(s), without losing its mappings";
+		const bypassInput = document.createElement("input");
+		bypassInput.type = "checkbox";
+		bypassInput.checked = !entry.bypassed;
+		const bypassTrack = document.createElement("span");
+		bypassTrack.className = "toggle-track";
+		bypassLabel.append(bypassInput, bypassTrack);
+		bypassInput.addEventListener("change", () => {
+			entry.bypassed = !bypassInput.checked;
+			this._dispatchStateChange();
+		});
+		entry.bypassInput = bypassInput;
+
+		rowTop.append(lbl, calibrateBtn, bypassLabel, del);
 
 		const calibrateHint = document.createElement("div");
 		calibrateHint.className = "calibrate-hint";
@@ -1217,6 +1271,12 @@ export class WaWebcamInput extends HTMLElement {
 			if (!mapping?.varName || v[key] === undefined) continue;
 			const raw = v[key];
 			if (entry.calibrating) expandRange(mapping, raw);
+			// Bypass stops this entry from driving its mapped Var(s) — e.g.
+			// so a manual knob drag isn't immediately fought by the next
+			// incoming frame — but keeps calibrating/tracking (and the
+			// mapping itself) intact for whenever it's switched back on.
+			// Per Hans (2026-09-27).
+			if (entry.bypassed) continue;
 			const normalized = normalizeToUnit(raw, mapping.min, mapping.max);
 			if (normalized === undefined) continue; // never calibrated yet — nothing usable to send
 			playerStore.setVariable(mapping.varName, normalized);
