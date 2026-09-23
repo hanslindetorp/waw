@@ -5,6 +5,7 @@ import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { mapStage1, applyConvertFn } from "../xml-editor/var-mapper-math.js";
 import { formatValue } from "../utils/number-format.js";
 import { varMapMode } from "../state/var-map-mode.js";
+import { wireKnobDrag } from "../utils/knob-drag.js";
 
 // One knob per <Var> child of a "scope" node — lets you nudge a variable
 // live while playing, right from the player/bottom bar. Turning a knob never
@@ -22,7 +23,7 @@ import { varMapMode } from "../state/var-map-mode.js";
 // whatever element is currently selected, showing only *its* own <Var>
 // children, side by side with the always-root-scoped "global" instance.
 
-const KNOB_PX_PER_RANGE = 130; // dragging this many px sweeps a knob's full range
+const KNOB_PX_PER_RANGE = 130; // dragging this many px sweeps a knob's full range — smaller than the shared default since this knob itself is smaller (see KNOB_SIZE)
 const KNOB_SIZE = 24;
 
 function parseNumberList(str) {
@@ -400,8 +401,8 @@ export class WaVarKnobs extends HTMLElement {
 		knob.className = "var-knob";
 		knob.classList.toggle("selected", xmlStore.selectedNodeId === node.id);
 		// Selecting this <Var> (so the XML tree/Code panel highlight it too —
-		// see xmlStore.selectNode's existing sync) is handled inside
-		// _wireDrag's own pointerup below, only when the gesture *didn't*
+		// see xmlStore.selectNode's existing sync) is handled by
+		// wireKnobDrag's own onClick below, only when the gesture *didn't*
 		// actually drag the knob — per Hans (2026-09-09) it's
 		// selectable/deletable like everything else in the XML editor, but
 		// per Hans (2026-09-13), turning the knob to change its value must
@@ -499,15 +500,15 @@ export class WaVarKnobs extends HTMLElement {
 			playerStore.setVariable(varName, v);
 		};
 
-		this._wireDrag(
-			knob,
-			node.id,
-			() => this._values.get(node.id),
+		wireKnobDrag(knob, {
+			getStartValue: () => this._values.get(node.id),
 			min,
 			max,
-			commit,
-			defaultValue
-		);
+			onChange: commit,
+			onClick: () => xmlStore.selectNode(node.id),
+			defaultValue,
+			pxPerRange: KNOB_PX_PER_RANGE
+		});
 
 		return wrap;
 	}
@@ -537,62 +538,6 @@ export class WaVarKnobs extends HTMLElement {
 		return wrap;
 	}
 
-	// getValue() is read fresh at the start of every drag gesture (rather
-	// than a value baked in at build time) — this component's DOM never
-	// rebuilds mid-gesture (no xmlStore write happens at all, see the class
-	// comment), but it also never rebuilds *between* separate gestures
-	// either, so a stale snapshot would make the second drag on the same
-	// knob jump from wherever the first one actually ended.
-	//
-	// Selection lives here (not a separate "click" listener) so it can tell
-	// a genuine click apart from a drag that happened to change the value —
-	// per Hans (2026-09-13), turning the knob must never also select it.
-	// DRAG_THRESHOLD_PX is a small deadzone so a plain click's inevitable
-	// sub-pixel jitter is never mistaken for an intentional drag.
-	// Combines vertical and horizontal movement into one delta (up or right
-	// = increase; down or left = decrease) — per Hans (2026-09-25): dragging
-	// only vertically meant hitting the window's top/bottom edge ended the
-	// gesture early (e.g. turning a knob already near max further up ran
-	// out of screen almost immediately). With both axes contributing, the
-	// user can keep going by moving diagonally or switching to horizontal
-	// once they run out of vertical room, instead of being stuck.
-	_wireDrag(el, nodeId, getValue, min, max, onChange, defaultValue) {
-		const DRAG_THRESHOLD_PX = 2;
-		el.addEventListener("pointerdown", (e) => {
-			if (e.button !== 0) return;
-			e.preventDefault();
-			e.stopPropagation();
-			const startX = e.clientX;
-			const startY = e.clientY;
-			const startValue = getValue();
-			let dragging = false;
-			try {
-				el.setPointerCapture(e.pointerId);
-			} catch {}
-
-			const onMove = (moveEvt) => {
-				const deltaPx = startY - moveEvt.clientY + (moveEvt.clientX - startX);
-				if (!dragging && Math.abs(deltaPx) < DRAG_THRESHOLD_PX) return;
-				dragging = true;
-				const raw = startValue + (deltaPx / KNOB_PX_PER_RANGE) * (max - min);
-				onChange(Math.max(min, Math.min(max, raw)));
-			};
-			const onUp = () => {
-				el.removeEventListener("pointermove", onMove);
-				el.removeEventListener("pointerup", onUp);
-				if (!dragging) xmlStore.selectNode(nodeId);
-			};
-			el.addEventListener("pointermove", onMove);
-			el.addEventListener("pointerup", onUp);
-		});
-
-		if (Number.isFinite(defaultValue)) {
-			el.addEventListener("dblclick", (e) => {
-				e.stopPropagation();
-				onChange(Math.max(min, Math.min(max, defaultValue)));
-			});
-		}
-	}
 }
 
 function findChild(scopeNode, id) {

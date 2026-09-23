@@ -12,6 +12,7 @@ import {
 import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
+import { wireKnobDrag } from "../utils/knob-drag.js";
 
 // Preview-panel state (see wa-preview.js) for a selected <Chain> — a
 // vertical stack of small per-node-type "cards" (one per native Web Audio
@@ -89,6 +90,76 @@ function biquadDbToYPixel(h, db) {
 function biquadYPixelToDb(h, py) {
 	const t = 1 - py / h;
 	return t * 2 * BIQUAD_DB_RANGE - BIQUAD_DB_RANGE;
+}
+// Vertical drag also covers Q for filter types that have Q but no
+// meaningful gain (lowpass/highpass/bandpass/notch/allpass) — same graph
+// axis the gain-capable types (peaking/lowshelf/highshelf) use for gain,
+// since a type is never both draggable-Q *and* draggable-gain except
+// "peaking", which keeps gain on the drag (Q stays scroll-only there — see
+// _buildBiquadCard). Per Hans (2026-09-28).
+const BIQUAD_Q_DRAG_MIN = 0.1,
+	BIQUAD_Q_DRAG_MAX = 20;
+function biquadQToYPixel(h, q) {
+	const t = (q - BIQUAD_Q_DRAG_MIN) / (BIQUAD_Q_DRAG_MAX - BIQUAD_Q_DRAG_MIN);
+	return h - Math.max(0, Math.min(1, t)) * h;
+}
+function biquadYPixelToQ(h, py) {
+	const t = 1 - py / h;
+	return BIQUAD_Q_DRAG_MIN + Math.max(0, Math.min(1, t)) * (BIQUAD_Q_DRAG_MAX - BIQUAD_Q_DRAG_MIN);
+}
+
+// For 5 of the 8 filter types, the curve's own dB height at the cutoff
+// frequency turns out to have an exact closed form in terms of the Y-drag
+// parameter (verified numerically against computeBiquadCoeffs/
+// biquadMagnitudeDb): lowpass/highpass's resonant peak at w0 is exactly
+// 20*log10(Q); peaking's is exactly gainDb (by definition); lowshelf/
+// highshelf's is exactly gainDb/2 (the shelf's own halfway point, per the
+// RBJ cookbook's S=1 slope). That means the draggable dot can sit exactly
+// ON the curve — and stay exactly under the cursor while dragging — for
+// these types, by using this formula both to place the dot and to invert a
+// dragged pixel position straight back into Q/gain. Per Hans (2026-09-28):
+// "Sätt den lilla cirkeln man ska dra Q-värdet med på linjen så blir det
+// perfekt."
+//
+// bandpass/notch/allpass are deliberately excluded — their response at
+// *exactly* the cutoff frequency doesn't depend on Q at all (bandpass is
+// always ~0dB there by Web Audio's own "constant 0dB peak gain" definition,
+// notch is always a deep null, allpass preserves magnitude everywhere) — so
+// there's no line for a Q-encoding dot to sit on at that point; those 3
+// keep the independent, non-graph-anchored biquadQToYPixel/biquadYPixelToQ
+// mapping above instead.
+const BIQUAD_EXACT_CENTER_TYPES = new Set(["lowpass", "highpass", "peaking", "lowshelf", "highshelf"]);
+
+function biquadCenterResponseDb(type, Q, gainDb) {
+	switch (type) {
+		case "lowpass":
+		case "highpass":
+			return 20 * Math.log10(Math.max(0.0001, Q));
+		case "peaking":
+			return gainDb;
+		case "lowshelf":
+		case "highshelf":
+			return gainDb / 2;
+		default:
+			return 0;
+	}
+}
+
+// Inverse of biquadCenterResponseDb, solved for whichever parameter is on
+// the Y-drag axis for `type` (Q for lowpass/highpass, gain for the other 3).
+function biquadCenterResponseInverse(type, targetDb) {
+	switch (type) {
+		case "lowpass":
+		case "highpass":
+			return Math.pow(10, targetDb / 20);
+		case "peaking":
+			return targetDb;
+		case "lowshelf":
+		case "highshelf":
+			return targetDb * 2;
+		default:
+			return 0;
+	}
 }
 
 // --- DynamicsCompressorNode graph pixel<->value mapping ---
@@ -574,42 +645,19 @@ export class WaChainView extends HTMLElement {
 		dial.style.transform = `rotate(${-135 + t * 270}deg)`;
 	}
 
+	// Delegates to the shared wireKnobDrag (js/utils/knob-drag.js) — same
+	// two-directional (up/right = increase, down/left = decrease) drag every
+	// knob in the app now uses. Per Hans (2026-09-28).
 	_wireVerticalDrag(el, startValue, min, max, onLiveChange, onCommit, defaultValue) {
-		el.addEventListener("pointerdown", (e) => {
-			if (e.button !== 0) return;
-			e.preventDefault();
-			e.stopPropagation();
-			const startY = e.clientY;
-			let dragging = false;
-			let committed = startValue;
-			try {
-				el.setPointerCapture(e.pointerId);
-			} catch {}
-
-			const onMove = (moveEvt) => {
-				dragging = true;
-				const deltaPx = startY - moveEvt.clientY; // up = increase
-				const rawValue = startValue + (deltaPx / KNOB_PX_PER_RANGE) * (max - min);
-				committed = Math.max(min, Math.min(max, rawValue));
-				onLiveChange(committed);
-			};
-			const onUp = () => {
-				el.removeEventListener("pointermove", onMove);
-				el.removeEventListener("pointerup", onUp);
-				if (dragging && onCommit) onCommit(committed);
-			};
-			el.addEventListener("pointermove", onMove);
-			el.addEventListener("pointerup", onUp);
+		wireKnobDrag(el, {
+			getStartValue: () => startValue,
+			min,
+			max,
+			onChange: onLiveChange,
+			onCommit,
+			defaultValue,
+			pxPerRange: KNOB_PX_PER_RANGE
 		});
-
-		if (defaultValue !== undefined) {
-			el.addEventListener("dblclick", (e) => {
-				e.stopPropagation();
-				const clamped = Math.max(min, Math.min(max, defaultValue));
-				onLiveChange(clamped);
-				if (onCommit) onCommit(clamped);
-			});
-		}
 	}
 
 	// Generic knob bound straight to one numeric attribute — used for every
@@ -780,7 +828,7 @@ export class WaChainView extends HTMLElement {
 		);
 
 		wrap.appendChild(valueLabel);
-		card.appendChild(wrap);
+		card.appendChild(this._singleKnobRow(wrap));
 		return card;
 	}
 
@@ -802,13 +850,26 @@ export class WaChainView extends HTMLElement {
 			gainDb: readNum(node, "gain", 0) // BiquadFilterNode.gain is native dB
 		};
 
+		// The curve's draggable point covers frequency (X, always) plus one
+		// more parameter on Y: gain for the 3 types where gain shapes the
+		// curve (peaking/lowshelf/highshelf), otherwise Q for the types that
+		// have one (lowpass/highpass/bandpass/notch/allpass) — "peaking" has
+		// both, so it keeps gain on the drag (the more directly visual of
+		// the two: dragging up *is* raising the curve) and Q stays
+		// scroll-only there. Per Hans (2026-09-28).
+		const yDragMode = (type) => (BIQUAD_GAIN_TYPES.has(type) ? "gain" : BIQUAD_Q_TYPES.has(type) ? "q" : null);
+
 		const infoLabel = document.createElement("div");
 		infoLabel.className = "hint-text";
 		const updateInfoLabel = (type) => {
 			const bits = [`${formatValue(state.freq, 10000)} Hz`];
 			if (BIQUAD_Q_TYPES.has(type)) bits.push(`Q ${formatValue(state.Q, 100)}`);
 			if (BIQUAD_GAIN_TYPES.has(type)) bits.push(`${formatValue(state.gainDb, 100)} dB`);
-			bits.push("(scroll = Q)");
+			// Only "peaking" has both a draggable gain *and* a Q — Q has no
+			// drag axis left there, so it stays scroll-only (see yDragMode).
+			// Every other type's whole curve is already fully described by
+			// the drag itself, so no extra hint is needed.
+			if (BIQUAD_GAIN_TYPES.has(type) && BIQUAD_Q_TYPES.has(type)) bits.push("(scroll = Q)");
 			infoLabel.textContent = bits.join(" · ");
 		};
 
@@ -824,9 +885,9 @@ export class WaChainView extends HTMLElement {
 
 		canvas.addEventListener("pointerdown", (e) => {
 			const { px, py } = canvasPointFromEvent(canvas, e);
-			const gainCapable = BIQUAD_GAIN_TYPES.has(select.value);
+			const mode = yDragMode(select.value);
 			const hx = biquadFreqToXPixel(canvas.width, state.freq);
-			const hy = gainCapable ? biquadDbToYPixel(canvas.height, state.gainDb) : biquadDbToYPixel(canvas.height, 0);
+			const hy = this._biquadHandleY(select.value, state, canvas.height);
 			if (Math.hypot(px - hx, py - hy) > 16) return;
 			e.preventDefault();
 			try {
@@ -836,18 +897,31 @@ export class WaChainView extends HTMLElement {
 			const onMove = (moveEvt) => {
 				const { px: mx, py: my } = canvasPointFromEvent(canvas, moveEvt);
 				state.freq = Math.max(GRAPH_FREQ_MIN, Math.min(GRAPH_FREQ_MAX, biquadXPixelToFreq(canvas.width, mx)));
-				if (gainCapable) state.gainDb = Math.max(-40, Math.min(40, biquadYPixelToDb(canvas.height, my)));
+				if (BIQUAD_EXACT_CENTER_TYPES.has(select.value)) {
+					// The dot sits exactly on the curve for these 5 types (see
+					// BIQUAD_EXACT_CENTER_TYPES) — solve the exact inverse so it
+					// also stays exactly under the cursor while dragging.
+					const solved = biquadCenterResponseInverse(select.value, biquadYPixelToDb(canvas.height, my));
+					if (mode === "gain") state.gainDb = Math.max(-40, Math.min(40, solved));
+					else if (mode === "q") state.Q = Math.max(BIQUAD_Q_DRAG_MIN, Math.min(BIQUAD_Q_DRAG_MAX, solved));
+				} else if (mode === "gain") {
+					state.gainDb = Math.max(-40, Math.min(40, biquadYPixelToDb(canvas.height, my)));
+				} else if (mode === "q") {
+					state.Q = Math.max(BIQUAD_Q_DRAG_MIN, Math.min(BIQUAD_Q_DRAG_MAX, biquadYPixelToQ(canvas.height, my)));
+				}
 				this._redrawBiquadCanvas(canvas, state, select.value);
 				updateInfoLabel(select.value);
 
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (!nodeNow) return;
 				const patch = { ...nodeNow.attributes, frequency: String(Math.round(state.freq)) };
-				if (gainCapable) patch.gain = formatGainAttribute(node.tagName, state.gainDb);
+				if (mode === "gain") patch.gain = formatGainAttribute(node.tagName, state.gainDb);
+				else if (mode === "q") patch.Q = String(Math.round(state.Q * 10) / 10);
 				this._commitAttributes(node.id, patch);
 				if (nodeNow.attributes.id) {
 					applyLiveProperty(nodeNow.attributes.id, "frequency", state.freq);
-					if (gainCapable) applyLiveProperty(nodeNow.attributes.id, "gain", state.gainDb);
+					if (mode === "gain") applyLiveProperty(nodeNow.attributes.id, "gain", state.gainDb);
+					else if (mode === "q") applyLiveProperty(nodeNow.attributes.id, "Q", state.Q);
 				}
 			};
 			const onUp = () => {
@@ -874,6 +948,21 @@ export class WaChainView extends HTMLElement {
 		);
 
 		return card;
+	}
+
+	// The draggable dot's Y position, shared between the pointerdown hit-test
+	// and _redrawBiquadCanvas so they can never drift apart. Sits exactly on
+	// the curve for BIQUAD_EXACT_CENTER_TYPES (see biquadCenterResponseDb);
+	// falls back to an independent Q<->pixel mapping for bandpass/notch/
+	// allpass, whose response at the exact cutoff frequency doesn't depend
+	// on Q at all (see BIQUAD_EXACT_CENTER_TYPES's own comment).
+	_biquadHandleY(type, state, h) {
+		if (BIQUAD_EXACT_CENTER_TYPES.has(type)) {
+			const db = Math.max(-BIQUAD_DB_RANGE, Math.min(BIQUAD_DB_RANGE, biquadCenterResponseDb(type, state.Q, state.gainDb)));
+			return biquadDbToYPixel(h, db);
+		}
+		if (BIQUAD_Q_TYPES.has(type)) return biquadQToYPixel(h, state.Q);
+		return biquadDbToYPixel(h, 0);
 	}
 
 	_redrawBiquadCanvas(canvas, state, type) {
@@ -906,9 +995,8 @@ export class WaChainView extends HTMLElement {
 		});
 		ctx.stroke();
 
-		const gainCapable = BIQUAD_GAIN_TYPES.has(type);
 		const hx = biquadFreqToXPixel(w, state.freq);
-		const hy = gainCapable ? biquadDbToYPixel(h, state.gainDb) : zeroY;
+		const hy = this._biquadHandleY(type, state, h);
 		ctx.fillStyle = "#4fa3ff";
 		ctx.beginPath();
 		ctx.arc(hx, hy, 4, 0, Math.PI * 2);
@@ -1169,11 +1257,24 @@ export class WaChainView extends HTMLElement {
 
 	// --- bonus: simple single-knob cards for two more native node types ---
 
+	// Wraps a single knob in the same .knob-row flex container the
+	// multi-knob cards (Compressor) use — a .knob-wrap left as a plain block
+	// child stretches to the card's full width, which drags its absolutely-
+	// positioned ticks away from the (centered) knob itself instead of
+	// surrounding it. Bug per Hans (2026-09-28); see .knob-row/.knob-wrap
+	// CSS above.
+	_singleKnobRow(knobWrap) {
+		const row = document.createElement("div");
+		row.className = "knob-row";
+		row.appendChild(knobWrap);
+		return row;
+	}
+
 	_buildStereoPannerCard(node) {
 		const card = document.createElement("div");
 		card.className = "node-card panner-card";
 		card.appendChild(this._buildCardHeader(node));
-		card.appendChild(this._buildSimpleKnob(node, "pan", -1, 1, "pan", (v) => v.toFixed(2), 0));
+		card.appendChild(this._singleKnobRow(this._buildSimpleKnob(node, "pan", -1, 1, "pan", (v) => v.toFixed(2), 0)));
 		return card;
 	}
 
@@ -1181,7 +1282,7 @@ export class WaChainView extends HTMLElement {
 		const card = document.createElement("div");
 		card.className = "node-card delay-card";
 		card.appendChild(this._buildCardHeader(node));
-		card.appendChild(this._buildSimpleKnob(node, "delayTime", 0, 10, "time", (v) => `${Math.round(v * 1000)} ms`, 0.3));
+		card.appendChild(this._singleKnobRow(this._buildSimpleKnob(node, "delayTime", 0, 10, "time", (v) => `${Math.round(v * 1000)} ms`, 0.3)));
 		return card;
 	}
 }

@@ -16,6 +16,7 @@ import {
 	FADER_GAIN_MIN_DB as FADER_MIN_DB,
 	FADER_GAIN_MAX_DB as FADER_MAX_DB
 } from "../waxml-integration/gain-units.js";
+import { wireKnobDrag } from "../utils/knob-drag.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
@@ -2748,51 +2749,34 @@ export class WaMixerView extends HTMLElement {
 		return true;
 	}
 
-	// Shared vertical-drag-to-adjust-a-value interaction for knobs (rotary,
-	// linear value<->angle mapping) — the fader has its own wiring instead,
-	// since it's a linear track position the pointer follows directly
-	// rather than a relative drag delta, and needs the nonlinear dB<->
-	// position taper (see dbToFaderPosition/faderPositionToDb).
+	// Shared drag-to-adjust-a-value interaction for knobs (rotary, linear
+	// value<->angle mapping) — the fader has its own wiring instead, since
+	// it's a linear track position the pointer follows directly rather than
+	// a relative drag delta, and needs the nonlinear dB<->position taper
+	// (see dbToFaderPosition/faderPositionToDb).
+	//
+	// Delegates to the shared wireKnobDrag (js/utils/knob-drag.js) — same
+	// two-directional (up/right = increase, down/left = decrease) drag
+	// every knob in the app now uses (wa-var-knobs.js, wa-chain-view.js, ...)
+	// per Hans (2026-09-28): "Alla knobs (även de som finns i <Mixer>) ska
+	// funka att interagera med i två riktningar... se till att knobs i
+	// framtiden beter sig lika." A thin wrapper (rather than rewriting every
+	// call site below) so nothing here needed to change but the actual drag
+	// math.
 	//
 	// defaultValue (optional): if given, double-clicking the control resets
 	// it straight to that value — per Hans, the same quick "back to
 	// default" gesture for every drag-based control.
 	_wireVerticalDrag(el, startValue, min, max, onLiveChange, onCommit, defaultValue) {
-		el.addEventListener("pointerdown", (e) => {
-			if (e.button !== 0) return;
-			e.preventDefault();
-			e.stopPropagation();
-			const startY = e.clientY;
-			let dragging = false;
-			let committed = startValue;
-			try {
-				el.setPointerCapture(e.pointerId);
-			} catch {}
-
-			const onMove = (moveEvt) => {
-				dragging = true;
-				const deltaPx = startY - moveEvt.clientY; // up = increase
-				const rawValue = startValue + (deltaPx / KNOB_PX_PER_RANGE) * (max - min);
-				committed = Math.max(min, Math.min(max, rawValue));
-				onLiveChange(committed);
-			};
-			const onUp = () => {
-				el.removeEventListener("pointermove", onMove);
-				el.removeEventListener("pointerup", onUp);
-				if (dragging) onCommit(committed);
-			};
-			el.addEventListener("pointermove", onMove);
-			el.addEventListener("pointerup", onUp);
+		wireKnobDrag(el, {
+			getStartValue: () => startValue,
+			min,
+			max,
+			onChange: onLiveChange,
+			onCommit,
+			defaultValue,
+			pxPerRange: KNOB_PX_PER_RANGE
 		});
-
-		if (defaultValue !== undefined) {
-			el.addEventListener("dblclick", (e) => {
-				e.stopPropagation();
-				const clamped = Math.max(min, Math.min(max, defaultValue));
-				onLiveChange(clamped);
-				onCommit(clamped);
-			});
-		}
 	}
 
 	// --- fader (gain, dB, nonlinear taper) + VU meter ---
