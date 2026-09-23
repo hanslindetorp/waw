@@ -32,12 +32,23 @@ class VarMapMode extends EventTarget {
 	arm(varName) {
 		if (!varName || this._varName === varName) return;
 		this._varName = varName;
+		// A global cursor hint while armed — per Hans (2026-09-30): "ska
+		// markören visa något som passar mappning/länkning... tills man
+		// fullbordat eller avbrutit mappningen." `cursor` inherits down
+		// through shadow DOM boundaries (it's an inherited CSS property),
+		// so this reaches every component's own markup too, though a
+		// component with its own explicit `cursor` rule on a specific
+		// element (e.g. a knob's ns-resize) still wins there — acceptable,
+		// since that element still works correctly as a map target either
+		// way, this is just the visual hint for everything else.
+		document.documentElement.style.cursor = "crosshair";
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 
 	disarm() {
 		if (this._varName === null) return;
 		this._varName = null;
+		document.documentElement.style.cursor = "";
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 }

@@ -130,11 +130,14 @@ template.innerHTML = `
 		.incoming-value {
 			color: var(--waw-fg, #e8e8e8);
 		}
-		.convert-node {
+		/* .node's own overflow:hidden (for its rounded corners) would clip
+		   .outgoing-row below, which deliberately sits outside this box's
+		   own right edge — ".node.convert-node" (2 classes) rather than
+		   ".convert-node" alone, since a plain equal-specificity override
+		   loses to ".node"'s own rule by source order alone (bug found
+		   2026-09-30: the row was actually there, just invisibly clipped). */
+		.node.convert-node {
 			position: relative;
-			/* .node's own overflow:hidden (for its rounded corners) would
-			   clip .outgoing-row below, which deliberately sits outside
-			   this box's own right edge. */
 			overflow: visible;
 		}
 		.outgoing-row {
@@ -144,8 +147,9 @@ template.innerHTML = `
 			transform: translateY(-50%);
 			margin-left: 0.6rem;
 			display: flex;
+			flex-direction: column;
 			align-items: center;
-			gap: 0.35rem;
+			gap: 0.1rem;
 			white-space: nowrap;
 		}
 		.outgoing-arrow {
@@ -697,7 +701,15 @@ export class WaVarView extends HTMLElement {
 		if (!chainRect.width || !mapRect.width || !convertRect.width) return;
 		const GAP = 18;
 		const startX = mapRect.right - chainRect.left;
-		const startY = mapRect.top + mapRect.height / 2 - chainRect.top;
+		// The merged Mapping/Curve/Pattern box can be tall — starting the
+		// bracket from its vertical CENTER (the old behavior) put the start
+		// point arbitrarily high above Convert, forcing a long, disconnected-
+		// looking vertical run down the outside edge past the whole Pattern
+		// section. Starting from the box's own BOTTOM instead reads as "flow
+		// exits the bottom of this block" and keeps the bracket short and
+		// close to Convert, where it visually belongs. Per Hans (2026-09-30):
+		// "Pilen in i nedre blocket ser fortfarande inte bra ut."
+		const startY = mapRect.bottom - chainRect.top;
 		const bracketX = startX + GAP;
 		const convertTopY = convertRect.top - chainRect.top;
 		const convertCenterX = convertRect.left + convertRect.width / 2 - chainRect.left;
@@ -1391,12 +1403,25 @@ export class WaVarView extends HTMLElement {
 		});
 		ctx.stroke();
 
+		// Plain in-canvas corner labels, same "read-only, not editable" look
+		// the X-axis min/max always had — per Hans (2026-09-30): a DOM chip
+		// styled like the Mapping graph's own editable axis labels read as
+		// interactive when these are strictly derived/read-only (input from
+		// the previous block's mapout, output from the selected function).
+		// formatValue (not the always-3-decimals fmtNum) so a value >= 100
+		// shows no decimals at all — same shared "significant digits" rule
+		// as every other live readout in the app (js/utils/number-format.js).
+		// Per Hans (2026-09-30): "1046.502... är för många värdesiffror."
+		const xMax = Math.max(Math.abs(domain.min), Math.abs(domain.max));
+		const yMax = Math.max(Math.abs(minY), Math.abs(maxY));
 		ctx.fillStyle = "#8a8a8a";
 		ctx.font = "10px monospace";
 		ctx.textAlign = "left";
-		ctx.fillText(fmtNum(domain.min), MAP_PADDING, h - 4);
+		ctx.fillText(formatValue(maxY, yMax), MAP_PADDING, 12); // Y max, top-left
+		ctx.fillText(formatValue(minY, yMax), MAP_PADDING, h - MAP_PADDING - 4); // Y min, just above the axis line
+		ctx.fillText(formatValue(domain.min, xMax), MAP_PADDING, h - 4); // X min, bottom-left
 		ctx.textAlign = "right";
-		ctx.fillText(fmtNum(domain.max), w - MAP_PADDING, h - 4);
+		ctx.fillText(formatValue(domain.max, xMax), w - MAP_PADDING, h - 4); // X max, bottom-right
 	}
 
 	// ── Shared attribute write helper ───────────────────────────────────

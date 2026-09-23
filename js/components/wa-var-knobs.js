@@ -99,6 +99,7 @@ template.innerHTML = `
 			border: 1px solid var(--waw-border, #2f2f2f);
 			border-radius: 6px;
 			padding: 0.4rem 0.55rem;
+			cursor: pointer;
 		}
 		.var-name-row {
 			display: flex;
@@ -172,8 +173,12 @@ template.innerHTML = `
 			cursor: default;
 			opacity: 0.4;
 		}
-		.var-knob.selected {
-			box-shadow: 0 0 0 2px var(--waw-accent, #4fa3ff), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
+		/* Selection highlight moved to the whole box (per Hans, 2026-09-30) —
+		   not just the knob, which is drag-only territory (see the wrap-level
+		   click-to-select listener in _buildKnob). */
+		.var-knob-wrap.selected {
+			border-color: var(--waw-accent, #4fa3ff);
+			box-shadow: 0 0 0 1px var(--waw-accent, #4fa3ff);
 		}
 		.var-knob-dial {
 			position: absolute;
@@ -399,14 +404,16 @@ export class WaVarKnobs extends HTMLElement {
 
 		const knob = document.createElement("div");
 		knob.className = "var-knob";
-		knob.classList.toggle("selected", xmlStore.selectedNodeId === node.id);
+		wrap.classList.toggle("selected", xmlStore.selectedNodeId === node.id);
 		// Selecting this <Var> (so the XML tree/Code panel highlight it too —
-		// see xmlStore.selectNode's existing sync) is handled by
-		// wireKnobDrag's own onClick below, only when the gesture *didn't*
-		// actually drag the knob — per Hans (2026-09-09) it's
-		// selectable/deletable like everything else in the XML editor, but
-		// per Hans (2026-09-13), turning the knob to change its value must
-		// never also select it (a plain click still does).
+		// see xmlStore.selectNode's existing sync) happens via a click
+		// anywhere else in .var-knob-wrap (see the wrap-level listener at the
+		// end of this method) — never on the knob itself, which is drag-only
+		// territory. Per Hans (2026-09-30): selecting used to also fire on a
+		// plain click-without-drag on the knob (2026-09-09/13 history), but
+		// that made the knob's own click behavior ambiguous with its drag
+		// gesture; stopping propagation here keeps the two fully separate.
+		knob.addEventListener("click", (e) => e.stopPropagation());
 		const dial = document.createElement("div");
 		dial.className = "var-knob-dial";
 		knob.appendChild(dial);
@@ -505,10 +512,15 @@ export class WaVarKnobs extends HTMLElement {
 			min,
 			max,
 			onChange: commit,
-			onClick: () => xmlStore.selectNode(node.id),
 			defaultValue,
 			pxPerRange: KNOB_PX_PER_RANGE
 		});
+
+		// Click anywhere in the box selects the node — except on the knob
+		// itself (drag-only, see above) or on an element that already
+		// handles its own click (the Map button stops propagation itself).
+		// Per Hans (2026-09-30).
+		wrap.addEventListener("click", () => xmlStore.selectNode(node.id));
 
 		return wrap;
 	}

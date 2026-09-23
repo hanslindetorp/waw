@@ -520,6 +520,15 @@ template.innerHTML = `
 		.sv-unmap:hover {
 			opacity: 1;
 		}
+		/* Stacked, not inline — an entry can map the same metric to several
+		   <Var>s now (per Hans, 2026-09-30), so this needs room for more than
+		   one pill plus the trailing "Map..." button. */
+		.sv-map-wrap {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 0.2rem;
+		}
 	</style>
 	<div class="row">
 		<button class="model-btn active" type="button" data-model="hands"><span class="dot"></span>Hands</button>
@@ -646,7 +655,7 @@ export class WaWebcamInput extends HTMLElement {
 				id: e.id,
 				labels: e.labelMetas.map((m) => m.label),
 				type: e.type,
-				mappings: Object.fromEntries(Object.entries(e.mappings).map(([key, m]) => [key, { ...m }])),
+				mappings: Object.fromEntries(Object.entries(e.mappings).map(([key, list]) => [key, list.map((m) => ({ ...m }))])),
 				bypassed: e.bypassed
 			}))
 		};
@@ -1074,15 +1083,22 @@ export class WaWebcamInput extends HTMLElement {
 			type: saved.type,
 			labelMetas,
 			lastValues: {},
-			// Normalizes every older mapping shape (a plain string, before
-			// the range feature; or {varName, auto, min, max}, before Hans
-			// removed the manual/auto choice — 2026-09-26) down to today's
-			// {varName, min, max}, so an already-saved project never breaks.
+			// Normalizes every older mapping shape down to today's list-of-
+			// {varName, min, max} per key: a plain string (before the range
+			// feature), {varName, auto, min, max} (before Hans removed the
+			// manual/auto choice — 2026-09-26), or a single {varName, min,
+			// max} object (before multiple mappings per key — 2026-09-30) —
+			// so an already-saved project never breaks.
 			mappings: Object.fromEntries(
-				Object.entries(saved.mappings || {}).map(([key, m]) => [
-					key,
-					typeof m === "string" ? { varName: m, min: 0, max: 1 } : { varName: m.varName, min: m.min ?? 0, max: m.max ?? 1 }
-				])
+				Object.entries(saved.mappings || {}).map(([key, m]) => {
+					const list = Array.isArray(m) ? m : [m];
+					return [
+						key,
+						list.map((one) =>
+							typeof one === "string" ? { varName: one, min: 0, max: 1 } : { varName: one.varName, min: one.min ?? 0, max: one.max ?? 1 }
+						)
+					];
+				})
 			),
 			valueEls: {},
 			mapEls: {},
@@ -1189,49 +1205,57 @@ export class WaWebcamInput extends HTMLElement {
 		return wrap;
 	}
 
+	// entry.mappings[key] is a list now, not a single mapping (per Hans,
+	// 2026-09-30: one metric can drive several <Var>s at once) — one pill
+	// per mapping, plus a trailing "Map..." button that always adds another
+	// rather than replacing anything.
 	_refreshMapControl(wrap, entry, key) {
 		wrap.innerHTML = "";
-		const mapping = entry.mappings[key];
-		if (mapping) {
+		const mappings = entry.mappings[key] || [];
+		mappings.forEach((mapping, index) => {
 			const pill = document.createElement("span");
 			pill.className = "sv-mapped";
 			pill.title = "Click to remap";
 			const nameSpan = document.createElement("span");
 			nameSpan.textContent = mapping.varName;
 			nameSpan.style.cursor = "pointer";
-			nameSpan.addEventListener("click", (e) => this._mapKey(entry, key, e.currentTarget));
+			nameSpan.addEventListener("click", (e) => this._mapKey(entry, key, e.currentTarget, index));
 			const xBtn = document.createElement("button");
 			xBtn.type = "button";
 			xBtn.className = "sv-unmap";
 			xBtn.textContent = "×";
 			xBtn.title = "Unmap";
 			xBtn.addEventListener("click", () => {
-				delete entry.mappings[key];
+				mappings.splice(index, 1);
+				if (mappings.length === 0) delete entry.mappings[key];
 				this._refreshMapControl(wrap, entry, key);
 				this._dispatchStateChange();
 			});
 			pill.append(nameSpan, xBtn);
 			wrap.appendChild(pill);
-		} else {
-			const btn = document.createElement("button");
-			btn.type = "button";
-			btn.className = "sv-map-btn";
-			btn.textContent = "Map...";
-			btn.addEventListener("click", (e) => this._mapKey(entry, key, e.currentTarget));
-			wrap.appendChild(btn);
-		}
+		});
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "sv-map-btn";
+		btn.textContent = "Map...";
+		btn.addEventListener("click", (e) => this._mapKey(entry, key, e.currentTarget, null));
+		wrap.appendChild(btn);
 	}
 
-	async _mapKey(entry, key, anchorEl) {
+	// index === null adds a new mapping; a number remaps the pill already at
+	// that index (keeping its existing calibrated range) — same "remapping
+	// keeps the range, a fresh mapping starts at 0-1" reasoning as before,
+	// just per-pill instead of per-key now.
+	async _mapKey(entry, key, anchorEl, index) {
 		const name = await openVarPicker(anchorEl.getBoundingClientRect());
 		if (!name) return;
-		const existing = entry.mappings[key];
-		// Remapping which Var an already-mapped key points to keeps its
-		// existing (calibrated) range; a fresh mapping starts at 0-1 (an
-		// immediately-usable passthrough) until Calibrate is run for real.
-		// Per Hans (2026-09-26): the input range is always calibrated, never
-		// manually typed — see _toggleEntryCalibrate/expandRange.
-		entry.mappings[key] = existing ? { ...existing, varName: name } : { varName: name, min: 0, max: 1 };
+		if (!entry.mappings[key]) entry.mappings[key] = [];
+		const list = entry.mappings[key];
+		if (index === null || index === undefined) {
+			list.push({ varName: name, min: 0, max: 1 });
+		} else {
+			list[index] = { ...list[index], varName: name };
+		}
 		this._refreshMapControl(entry.mapEls[key], entry, key);
 		this._dispatchStateChange();
 	}
@@ -1252,10 +1276,12 @@ export class WaWebcamInput extends HTMLElement {
 		entry.calibrateBtn.textContent = entry.calibrating ? "Calibrating…" : "Calibrate";
 		entry.calibrateHint.hidden = !entry.calibrating;
 		if (entry.calibrating) {
-			Object.values(entry.mappings).forEach((mapping) => {
-				mapping.min = undefined;
-				mapping.max = undefined;
-			});
+			Object.values(entry.mappings)
+				.flat()
+				.forEach((mapping) => {
+					mapping.min = undefined;
+					mapping.max = undefined;
+				});
 		} else {
 			this._dispatchStateChange(); // persist the just-finished calibration
 		}
@@ -1282,19 +1308,26 @@ export class WaWebcamInput extends HTMLElement {
 	_sendMappedValues(entry) {
 		const v = entry.lastValues;
 		if (!v) return;
-		for (const [key, mapping] of Object.entries(entry.mappings)) {
-			if (!mapping?.varName || v[key] === undefined) continue;
+		for (const [key, mappings] of Object.entries(entry.mappings)) {
+			if (v[key] === undefined) continue;
 			const raw = v[key];
-			if (entry.calibrating) expandRange(mapping, raw);
-			// Bypass stops this entry from driving its mapped Var(s) — e.g.
-			// so a manual knob drag isn't immediately fought by the next
-			// incoming frame — but keeps calibrating/tracking (and the
-			// mapping itself) intact for whenever it's switched back on.
-			// Per Hans (2026-09-27).
-			if (entry.bypassed) continue;
-			const normalized = normalizeToUnit(raw, mapping.min, mapping.max);
-			if (normalized === undefined) continue; // never calibrated yet — nothing usable to send
-			playerStore.setVariable(mapping.varName, normalized);
+			// Each mapping keeps its own independently calibrated range (per
+			// Hans, 2026-09-30: several <Var>s can share one metric now) —
+			// they usually converge to the same range when calibrated
+			// together, but nothing forces that if one was added later.
+			for (const mapping of mappings) {
+				if (!mapping?.varName) continue;
+				if (entry.calibrating) expandRange(mapping, raw);
+				// Bypass stops this entry from driving its mapped Var(s) — e.g.
+				// so a manual knob drag isn't immediately fought by the next
+				// incoming frame — but keeps calibrating/tracking (and the
+				// mapping itself) intact for whenever it's switched back on.
+				// Per Hans (2026-09-27).
+				if (entry.bypassed) continue;
+				const normalized = normalizeToUnit(raw, mapping.min, mapping.max);
+				if (normalized === undefined) continue; // never calibrated yet — nothing usable to send
+				playerStore.setVariable(mapping.varName, normalized);
+			}
 		}
 	}
 }

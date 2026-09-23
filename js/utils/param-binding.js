@@ -1,6 +1,13 @@
 import { varMapMode } from "../state/var-map-mode.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { isVariableControlled, variableNameFromValue } from "../xml-editor/variable-references.js";
+import { applyLiveProperty } from "../waxml-integration/live-property.js";
+
+// A bare plain number (no "$name" reference, no unit suffix like "XdB", no
+// math expression) — the shape where the committed string IS the node's own
+// native unit value, safe to push straight through to the live graph as-is
+// (see commitRaw's own comment).
+const BARE_NUMBER_RE = /^-?\d+(\.\d+)?$/;
 
 // Shared building blocks for how every specialized view (wa-chain-view.js,
 // wa-mixer-view.js, ...) shows AND edits a single node attribute's raw
@@ -21,6 +28,24 @@ import { isVariableControlled, variableNameFromValue } from "../xml-editor/varia
 //
 // getNode() is called fresh on every commit (never a captured `node`
 // reference) since xmlStore.updateAttributes rebuilds the tree immutably.
+//
+// Also nudges the live audio graph directly (applyLiveProperty) for a bare
+// numeric value — same "commit AND push live" pattern wa-mixer-view.js's
+// own knobs already use for a drag. Bug found per Hans (2026-09-30): typing
+// a value into one of these chips (as opposed to dragging a knob/canvas
+// handle, which already called applyLiveProperty inline) only ever reached
+// the XML attribute, never the live node — e.g. typing a new frequency on
+// an OscillatorNode didn't change its pitch until the next full reload,
+// which a plain numeric change on these node types never actually triggers
+// (see xml-store.js's _attributeChangeNeedsRebuild — structural is only
+// forced by a routing change, an OscillatorNode.type change, or a value
+// newly becoming/stopping being a $var reference). A bare number (this
+// regex) is always a node's native unit value already, never dB-suffixed
+// or a math expression, so pushing it straight through is safe (see
+// gain-units.js's own "a bare number means the node's own native unit"
+// convention) — a $var reference or an expression is deliberately left
+// alone here; the $var case already gets a full reload for free (same
+// xml-store.js rule), and an expression has no single number to push.
 function commitRaw(getNode, attrName, raw) {
 	const nodeNow = getNode();
 	if (!nodeNow) return;
@@ -28,6 +53,9 @@ function commitRaw(getNode, attrName, raw) {
 	if (raw === "") delete next[attrName];
 	else next[attrName] = raw;
 	xmlStore.updateAttributes(nodeNow.id, next);
+	if (nodeNow.attributes.id && BARE_NUMBER_RE.test(raw.trim())) {
+		applyLiveProperty(nodeNow.attributes.id, attrName, parseFloat(raw));
+	}
 }
 
 // Claims a pointerdown on `el` while a Var's "Map..." is armed, wiring
