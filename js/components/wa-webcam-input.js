@@ -682,13 +682,28 @@ export class WaWebcamInput extends HTMLElement {
 	}
 
 	// ── Start / Stop ─────────────────────────────────────────────────────
+	// getUserMedia() is called as the very first async step, in parallel
+	// with (not after) loading MediaPipe's model files — those are fetched
+	// over the network and can easily take several seconds, and some
+	// browsers stop treating a getUserMedia call as driven by the
+	// triggering user gesture once that much time has passed since it. The
+	// old serial order (models, then camera) was silently breaking the
+	// project-open autostart (applyState's own _start() call, itself
+	// already downstream of the file-open gesture by the time the project
+	// file and workstation-state.json have been read/parsed): by the time
+	// it reached getUserMedia, the gesture had already gone stale, so it
+	// silently sat there needing an actual click. Per Hans's bug report
+	// (2026-09-29). Requesting the camera first (alongside, not blocked by,
+	// the model load) keeps it as close to the gesture as possible — and is
+	// strictly faster besides, since the two loads now run concurrently.
 	async _start() {
 		this._startBtn.disabled = true;
-		this._setStatus("Loading MediaPipe…", false);
+		this._setStatus("Requesting camera…", false);
 		try {
-			await this._ensureModelsLoaded();
-			this._setStatus("Requesting camera…", false);
+			const modelsPromise = this._ensureModelsLoaded();
 			const activeId = await this._startCamera(this._cameraDeviceId);
+			this._setStatus("Loading MediaPipe…", false);
+			await modelsPromise;
 			await this._enumerateCameras(activeId);
 			this._running = true;
 			this._startBtn.textContent = "Stop";

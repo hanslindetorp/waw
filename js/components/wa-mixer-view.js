@@ -17,6 +17,7 @@ import {
 	FADER_GAIN_MAX_DB as FADER_MAX_DB
 } from "../waxml-integration/gain-units.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
+import { wireMapClaim, wireInlineTextEdit } from "../utils/param-binding.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
@@ -579,6 +580,20 @@ template.innerHTML = `
 			font-size: 0.55rem;
 			color: #aab2ba;
 			letter-spacing: 0.03em;
+		}
+		/* Briefly replaces a knob/fader-handle in place while typing a raw
+		   value into it (js/utils/param-binding.js's wireInlineTextEdit) —
+		   double-click a knob to type a number, expression, or "$name" <Var>
+		   reference. Per Hans (2026-09-29). */
+		.knob-inline-input {
+			width: 3.2rem;
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.6rem;
+			background: #1a1c1f;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: #cdd3d8;
+			border-radius: 3px;
+			padding: 0.1rem 0.2rem;
 		}
 		.insert-section,
 		.sends-section {
@@ -2494,6 +2509,23 @@ export class WaMixerView extends HTMLElement {
 		return select;
 	}
 
+	// Wires a knob (or any other compact control with no room for its own
+	// visible value label) for both: typing a raw value (a number, math
+	// expression, or "$name" <Var> reference — right-click, since these
+	// knobs already double-click to reset to their default value, see
+	// wireKnobDrag) and claiming a click while a Var's "Map..." is armed
+	// (js/state/var-map-mode.js) to wire $varName into `attrName` directly.
+	// Register this BEFORE the control's own drag-start wiring
+	// (_wireVerticalDrag) so the map-claim listener runs first and can
+	// stopImmediatePropagation it away. Applies even to an already
+	// remote-controlled (locked) knob, so it can still be retyped/remapped
+	// from here instead of only from the Inspector. Per Hans (2026-09-29).
+	_wireParamEntry(el, node, attrName) {
+		const getNode = () => ops.findNodeById(xmlStore.root, node.id);
+		wireMapClaim(el, { getNode, attrName });
+		wireInlineTextEdit(el, { getNode, attrName, inputClassName: "knob-inline-input", eventName: "contextmenu" });
+	}
+
 	_buildFilterGainKnob(node) {
 		const { wrap, knob, dial } = this._buildKnobSkeleton("", 32);
 		knob.classList.add("knob-large", "knob-gain");
@@ -2501,6 +2533,7 @@ export class WaMixerView extends HTMLElement {
 		const startDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
 		applyVisual(startDb);
 		knob.title = "Gain";
+		this._wireParamEntry(knob, node, "gain");
 
 		const locked = this._lockRemoteControlled(knob, node.attributes.gain, () => {
 			const db = getLiveProperty(node.attributes.id, "gain"); // BiquadFilterNode.gain is native dB
@@ -2545,6 +2578,7 @@ export class WaMixerView extends HTMLElement {
 		const startT = freqToKnobT(readFrequency(node));
 		applyVisual(startT);
 		knob.title = "Frequency";
+		this._wireParamEntry(knob, node, "frequency");
 
 		const locked = this._lockRemoteControlled(knob, node.attributes.frequency, () => {
 			const freq = getLiveProperty(node.attributes.id, "frequency");
@@ -2586,6 +2620,7 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (q) => this._applyKnobRotation(dial, q, Q_MIN, Q_MAX);
 		applyVisual(readQ(node));
 		knob.title = "Q";
+		this._wireParamEntry(knob, node, "Q");
 
 		const locked = this._lockRemoteControlled(knob, node.attributes.Q, () => {
 			const q = getLiveProperty(node.attributes.id, "Q");
@@ -2623,6 +2658,7 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (pan) => this._applyKnobRotation(dial, pan, -1, 1);
 		applyVisual(readPan(node));
 		knob.title = "Pan";
+		this._wireParamEntry(knob, node, "pan");
 
 		const locked = this._lockRemoteControlled(knob, node.attributes.pan, () => {
 			const pan = getLiveProperty(node.attributes.id, "pan");
@@ -2839,6 +2875,7 @@ export class WaMixerView extends HTMLElement {
 		const startDb = parseGainAttributeToDb(gainNode.tagName, gainNode.attributes.gain);
 		applyVisual(startDb);
 		handle.title = "Volume";
+		this._wireParamEntry(handle, gainNode, "gain");
 
 		const locked = this._lockRemoteControlled(handle, gainNode.attributes.gain, () => {
 			const linear = getLiveProperty(gainNode.attributes.id, "gain"); // GainNode.gain is linear
@@ -2984,6 +3021,7 @@ export class WaMixerView extends HTMLElement {
 		const startDb = parseGainAttributeToDb(send.tagName, send.attributes.gain);
 		applyVisual(startDb);
 		knob.title = "Send Level";
+		this._wireParamEntry(knob, send, "gain");
 
 		const locked = this._lockRemoteControlled(knob, send.attributes.gain, () => {
 			const linear = getLiveProperty(send.attributes.id, "gain"); // Send routes through a GainNode-based bus, linear like GainNode

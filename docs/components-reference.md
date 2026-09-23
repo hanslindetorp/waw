@@ -9,7 +9,8 @@ inom några rader.
 - [Paneler](#paneler): wa-input-panel (+ wa-webcam-input, wa-var-picker),
   wa-file-manager (+ wa-file-preview), wa-xml-editor (+ wa-xml-tree,
   wa-node-inspector, wa-schema-input), wa-preview (+ wa-section-view,
-  wa-composition-view, wa-mixer-view), wa-xml-code
+  wa-mixer-view, wa-composition-view, wa-var-view, wa-chain-view),
+  wa-xml-code
 - [Header](#header): wa-file-menu, wa-edit-menu, wa-view-menu,
   wa-player-bar
 - [Bottom bar](#bottom-bar): wa-bottom-bar, wa-var-knobs
@@ -19,7 +20,10 @@ inom några rader.
   wa-notice-dialog, wa-voice-picker, toast
 - [Kärn-datamoduler](#kärn-datamoduler): xml-store, xml-tree-ops,
   schema-parser, attribute-controls, src-attribute, variable-references,
-  xml-tokenizer, section-model, waveform
+  xml-tokenizer, section-model, waveform, var-mapper-math, biquad-math,
+  compressor-math, waveshaper-math
+- [Delade utils och state](#delade-utils-och-state): number-format,
+  knob-drag, param-binding, var-map-mode
 - [Persistence](#persistence): VFS, zip-import, drag-types, selection,
   view, document-sync, project-manager, workstation-state
 - [Ljud/uppspelning](#ljuduppspelning): player-store, waxml-bridge,
@@ -74,7 +78,24 @@ visningsläge.
 kamera, sparade rader + deras mappningar) — kopplas in av
 `workstation-state.js`s `registerLayoutExtras({ webcamInput })` via ett
 `"state-change"`-event (`composed: true`). Aldrig `wa.xml`-innehåll, se
-architecture-overview.
+architecture-overview. `getState()`/`applyState()` persisterar sen
+2026-09-27 även ett `running`-booleskt, och `applyState()` ropar `_start()`
+om det var sant — se nedan.
+
+**Bypass per rad** (nytt, 2026-09-27): varje sparad rad har en egen
+`bypassed`-boolean med en liten pill-switch mellan Calibrate-knappen och
+raderaknappen (✕) — `_sendMappedValues` hoppar över
+`playerStore.setVariable()` (men kör kalibrering ändå) när satt, så en
+mappning kan stängas av tillfälligt utan att raderas.
+
+**Autostart-bugg fixad (2026-09-29)**: `_start()` laddade tidigare
+MediaPipes tre modellfiler (nätverksfetchar, flera sekunder) FÖRE
+`getUserMedia()` — vid ett projekt öppnat med kameran sparad som igång hann
+webbläsaren sluta räkna anropet som utlöst av det ursprungliga
+fil-öppnings-klicket, så autostarten satt tyst och väntade på ett riktigt
+klick. Fixat genom att begära kameran och ladda modellerna parallellt i
+stället för seriellt — kameran begärs nu så nära den utlösande gesten som
+möjligt (och det hela blir strikt snabbare också).
 
 ### wa-var-picker.js (~225 rader)
 
@@ -277,6 +298,16 @@ Ett `voice`-attributs kontroll (`_renderVoiceControl`, nytt 2026-09-15)
 fritt textfält — samma `<Layer>`/`<Stinger>`-delade "voice"-grupperings-
 koncept som schemat definierar.
 
+**Map-läge, klick-claiming** (nytt, 2026-09-27): varje `_renderAttributeRow`
+har en `click`-lyssnare som, medan `js/state/var-map-mode.js`s `varMapMode`
+är väpnad, tar över klicket (`preventDefault`/`stopPropagation`) och sätter
+attributets värde till `"$namn"` i stället för radens vanliga
+redigeringskontroll — väpnat läge stannar väpnat efter en lyckad koppling
+(bara `stopPropagation`, aldrig `disarm()`), så en variabel kan kopplas
+till flera attribut i rad. Se architecture-overview.md#map-läget-koppla-en-var-direkt-till-valfri-parameter-nytt-2026-09-2729 för hela
+mönstret, delat med `wa-var-knobs.js`s "Map..."-knapp och Chain-vyns/
+Mixerns egna rattar.
+
 #### wa-schema-input.js (~209 rader)
 
 Låter användaren byta aktivt XSD-schema: filuppladdning
@@ -444,7 +475,21 @@ committar nu kontinuerligt (varje pointermove) till `xmlStore` via en
 `_commitAttributes()`-helper som sätter `_isLocalEdit` runt anropet — se
 architecture-overview.md för själva mönstret. Alla utom fadern (egen
 pointer-wiring) delar `_wireVerticalDrag(el, startValue, min, max,
-onLiveChange, onCommit)`.
+onLiveChange, onCommit)` — som numer själv bara är en tunn wrapper runt
+`js/utils/knob-drag.js`s delade `wireKnobDrag` (nytt, 2026-09-28: den
+tvåriktade upp/höger-ökar-drag-logiken som `wa-var-knobs.js` redan hade,
+nu enda implementationen, delad med Chain-vyn också).
+
+**Typad inmatning + Map-läge** (nytt, 2026-09-29): varje ratt (`_buildFreqKnob`/
+`_buildQKnob`/`_buildFilterGainKnob`/`_buildPanKnob`, fadern, send-rattarna)
+ropar `_wireParamEntry(el, node, attrName)` — högerklick öppnar ett litet
+textfält för att skriva valfri rå sträng (tal/uttryck/`"$namn"`), samma
+`js/utils/param-binding.js` Chain-vyn använder. Högerklick i stället för
+dubbelklick eftersom dubbelklick redan betyder "återställ till default"
+(`wireKnobDrag`s eget). Ett klick claimas dessutom av ett väpnat Var-Map-
+läge (`var-map-mode.js`) precis som `wa-node-inspector.js`s attributrader
+— fungerar även på en redan `.remote-controlled` (låst) ratt, så den går
+att mappa om utan att gå via Inspector.
 
 **Filter-sektionens "+"** öppnar en meny med `BiquadFilterNode`s hela
 `type`-enum (läst live från schemat, `getBiquadTypeOptions()`) — samma
@@ -483,6 +528,96 @@ mellan dem förutom `section-model.js`s DOM-fria matte). Sammanfattat här:
   sidig gissning.
 - Multi-select + kopiera/klipp ut/klistra in via samma delade
   `xmlStore`-mekanik som resten av editorn — ingen egen implementation.
+
+#### wa-var-view.js (~1520 rader, ny)
+
+Preview-panelens vy för ett markerat `<Var>` (nytt, 2026-09-24/28) — samma
+"alltid monterad, lyssnar själv på `xmlStore`"-mönster som
+`wa-mixer-view.js`/`wa-section-view.js`. En vertikal nodkedja: ett
+**Mapping**-kort (canvas-XY-graf för `mapin`/`mapout` med **Curve**- och
+**Pattern**-underkort inbäddade, i den ordningen — dra en punkt för att
+flytta den, dubbelklicka linjen för att lägga till en, dubbelklicka en
+punkt för att ta bort den), en pil ner till ett separat **Convert**-kort
+(dropdown + egen graf), plus levande in-/utvärdesfält (vitt respektive
+grönt, `js/utils/number-format.js`s delade decimal-regel). Matten
+(`mapStage1`, `applyCurveFn`, `applyConvertFn`, `computeMapPoints`,
+punkt-hit-testning) bor helt i `js/xml-editor/var-mapper-math.js` — se
+den filens egen post nedan. Varje Curve/Pattern/Convert-kort går att
+toggla av/på (attributet tas bort/återställs, senaste värdet cachas i en
+`Map` i komponentens eget minne, inte persisterat).
+
+**Flödespilen** mellan Mapping- och Convert-korten är en SVG-`<path>`
+(`_updateFlowArrow`) som mäts om vid varje render OCH varje
+`_pollLiveValue()`-tick (självläkande mot att mätas medan dold/0×0). Ett
+`.node-label`/`.tag`-element som visade den råa `<Var name="..." />`-
+taggen längst upp i den här och systervyerna (`wa-wam-view.js`,
+`wa-preview.js`s fallback-lägen) togs bort helt (2026-09-27, per Hans) —
+gäller för samtliga element med en Preview.
+
+#### wa-chain-view.js (~1440 rader, ny)
+
+Preview-panelens vy för en markerad `<Chain>` (nytt, 2026-09-27/29) — eller
+för ett av dess barn markerat direkt (visar då hela förälder-Chain:ens kort
+med det markerade highlightat, eller bara det enda kortet om ingen
+Chain-förälder finns). Samma "alltid monterad"-mönster som ovan. En
+vertikal, pilkopplad kort-stapel i XML-barn-ordning (samma ordning
+`waxml.js`s `Chain.connect()` faktiskt kopplar signalen i). Registret
+`NODE_BUILDERS`/`SUPPORTED_CHAIN_NODE_TAGS` (exporterad, läst av
+`wa-preview.js`s dispatch) mappar sju taggar mot egna, interaktiva kort:
+`OscillatorNode` (fast vågforms-graf, `type`-meny + frequency/detune-fält),
+`BiquadFilterNode` (riktig frekvensrespons — se nedan),
+`GainNode` (en `.knob`, samma utseende som Mixerns filter-rattar),
+`DynamicsCompressorNode` (soft-knee transfer-kurva + knee/attack/release-
+rattar), `WaveShaperNode` (4-punkts bezierkurve-editor — se nedan), plus
+`StereoPannerNode`/`DelayNode` (bonus, en enda ratt var). Allt annat får ett
+neutralt `_buildGenericCard` (taggnamn + attributlista) — medvetet inga
+WAXML-specifika element (`<Var>`, `<Send>`, `<Mixer>`, ...) här. En
+`.node-card.selected`-klass highlightar det kort som matchar den faktiska
+`xmlStore`-markeringen.
+
+**Matten** bor i tre egna, DOM-fria moduler (samma "aldrig `waxml.js`"-
+princip som `var-mapper-math.js`):
+- `js/xml-editor/biquad-math.js`: `computeBiquadCoeffs`/`biquadMagnitudeDb`
+  (de exakta per-typ-koefficientformlerna ur Web Audio-spekens/RBJ Audio EQ
+  Cookbooks normativa avsnitt, `node`-verifierade mot kända referensvärden
+  — t.ex. lowpass Q=0.707 ger exakt -3.01dB vid brytfrekvensen). Handtaget
+  som drar frekvens+Q/gain **sitter exakt på kurvan** (nytt, 2026-09-29):
+  kurvans dB-höjd vid brytfrekvensen har en sluten form för 5 av 8 typer
+  (`20*log10(Q)` lowpass/highpass, `gain/2` lowshelf/highshelf, `gain` rakt
+  av peaking — `BIQUAD_EXACT_CENTER_TYPES`/`biquadCenterResponseDb`/
+  `biquadCenterResponseInverse`), löst baklänges så handtaget följer
+  muspekaren 1:1. Bandpass/notch/allpass (Q-oberoende respons exakt vid
+  brytfrekvensen, per definition) behåller en enkel oberoende
+  Q-pixelskala.
+- `js/xml-editor/compressor-math.js`: `compressorOutputDb` — klassisk
+  soft-knee-transferfunktion (kvadratisk knä-övergång), två dragbara
+  handtag (threshold-hörnet, ratio-ändpunkten vid 0dBFS).
+- `js/xml-editor/waveshaper-math.js`: `sampleBezierToCurve` — samplar en
+  enda kubisk bezierkurva (parametrisk `(x(t),y(t))`, tätt samplad och
+  sen närmast-x-uppslagen, robust även om kurvan inte är strikt
+  x-monoton) till 256 jämnt x-fördelade värden, den formen
+  `WaveShaperNode.curve` faktiskt behöver. Skrivs till ett NYTT
+  `curveBezier`-attribut (schemat, fritt sträng-format `"p0x,p0y,c1x,c1y,
+  c2x,c2y,p3x,p3y"`) — editorns egen källa för de exakta handtags-
+  positionerna, så en återöppning inte behöver gissa en kurva från
+  sampeldata; `curve` är det DERIVERADE, motor-lästa attributet. **Obs**:
+  `waxml.js`s nuvarande `WaveShaperNode`-implementation läser bara ett
+  algoritmiskt `amount`-attribut, inget bokstavligt `curve` alls — flaggat
+  för Hans, inte fixat här (rör aldrig `waxml.js`).
+
+**Typad inmatning + Map-läge på varje parameter** (nytt, 2026-09-29): varje
+kort använder `js/utils/param-binding.js`s `buildParamChip` för sina
+värden — en liten klickbar "chip" (dubbelklick för fri text: tal,
+matteuttryck, eller `"$namn"`), som också claimar ett klick medan
+`var-map-mode.js` är väpnat. En parameter som redan är en `$namn`-referens
+låser sitt handtag/sin ratt mot drag (chippen fungerar ändå).
+
+**Delade ratt-hjälpare** (`_buildKnobSkeleton`/`_applyKnobRotation`/
+`_wireVerticalDrag`/`_buildSimpleKnob`) är kopierade från/matchar
+`wa-mixer-view.js`s CSS-utseende rakt av (grå `radial-gradient`, samma
+tick-marks) men egna instansmetoder — `_wireVerticalDrag` delegerar dock
+till den delade `js/utils/knob-drag.js` (se dess egen post), inte en egen
+drag-implementation.
 
 ### wa-xml-code.js (~265 rader)
 
@@ -640,6 +775,14 @@ komponentens egen `_values`-`Map`, inte i dokumentet.
   här instansens egna scope-barn (samma `defaultPrevented`-vakt som
   `wa-bottom-bar.js`/`wa-player-bar.js`, eftersom flera instanser kan
   vara monterade samtidigt).
+- **Svag ram + "Map..."-knapp** (nytt, 2026-09-27): varje `.var-knob-wrap`
+  har numer en subtil ram; en liten `.map-btn` bredvid namn-etiketten
+  väpnar/avväpnar `js/state/var-map-mode.js`s delade `varMapMode` för just
+  den variabeln (blinkande CSS medan väpnad). Klick claimas sen av
+  attributrader i `wa-node-inspector.js`, av varje ratt/kort i Chain-vyn,
+  och av Mixerns egna rattar — se architecture-overview.md#map-läget-koppla-en-var-direkt-till-valfri-parameter-nytt-2026-09-2729.
+  Dra-logiken (`_wireDrag`, tidigare lokal) flyttade i samma veva till den
+  delade `js/utils/knob-drag.js`.
 
 ---
 
@@ -698,6 +841,15 @@ nödvändigtvis den enda panelen märkt `fill`. Publik `collapsed`-getter;
 även `"width-change"` (nytt, 2026-09-03/04) — samma
 `workstation-state.js`-lyssnare, så en manuellt satt panelbredd
 persisteras precis som kollaps-state.
+
+**Overflow-tak vid resize** (bugg fixad, 2026-09-27): att öka en panels
+bredd kunde tidigare knuffa panelerna till höger utanför fönsterkanten.
+`_maxWidthForOthersToFit()` beräknar taket för en dragen panels bredd
+(containerbredd minus varje annan synlig panels minimum), och
+`_shrinkOthersToFit()` krymper andra expanderade panelers `_baseFlex`
+proportionellt (aldrig under `MIN_EXPANDED_WIDTH_PX`) för att absorbera
+det som annars skulle svämma över — så den sista panelens högerkant ligger
+kvar mot fönsterkanten oavsett hur mycket man drar.
 
 ### wa-file-conflict-dialog.js (~155 rader, ny)
 
@@ -763,7 +915,12 @@ motsvarande hjälpfunktioner: `cloneNode` (id-ombytt kloning, för paste/
 duplicera), `reparentNode`/`isDescendantOf` (för cut-paste respektive
 paste-in-i-sig-själv-skyddet), `generateVarName`/`generateCommandId`/
 `generateSectionClass` (auto-namngivning för nya `<Var>`/`<Command>`/
-`<Section>`).
+`<Section>`). Dessutom en bugg fixad (2026-09-27): `xml-tree-ops.js`s
+`escapeXml` (och `waxml-bridge.js`s egen `escapeXmlAttr`) skrev tidigare
+onödigt om `>` till `&gt;` i attributvärden — XML-spekens krav gäller bara
+inuti en bokstavlig `]]>`-sekvens — vilket gjorde t.ex.
+`convert="MIDI->frequency"` synligt som `MIDI-&gt;frequency`. Båda skriver
+nu `>` rakt av.
 
 ### variable-references.js (~25 rader, ny)
 
@@ -819,6 +976,85 @@ längd för nydroppat ljud), plus Stinger-specifik ankar-matte
 Beroendefri waveform-rendering (min/max-peakar per pixelkolumn på en
 `<canvas>`, ingen extern lib) — `decodeAudioBuffer(url, audioContext)` +
 `drawWaveform(canvas, audioBuffer, color)`.
+
+### var-mapper-math.js (~320 rader, ny)
+
+Ren, DOM-fri reimplementation av `waxml.js`s `Mapper`-klass (rad-för-rad
+verifierad mot källan) — driver `wa-var-view.js`s hela editor utan att
+någonsin röra `waxml.js` självt. `mapStage1(x, {mapin, mapout, curve,
+pattern})` (mapin→mapout-interpolation, med korrekt per-segment-`curve`-
+hantering — en bugg där ett kommaseparerat per-punkt-`curve` ignorerades
+helt hittades och fixades här), `applyCurveFn`, `applyConvertFn`,
+`computeMapPoints`/`computeConvertPoints` (samplingspunkter för att rita
+graferna), `mapoutPointPositions`, `validateConvertExpression`.
+
+### biquad-math.js, compressor-math.js, waveshaper-math.js (nya)
+
+De tre DOM-fria mattemodulerna åt Chain-vyns `BiquadFilterNode`/
+`DynamicsCompressorNode`/`WaveShaperNode`-kort — se
+`wa-chain-view.js` ovan för detaljer (exakta koefficientformler,
+handtaget-på-kurvan-lösningen, soft-knee-kompressorformeln, bezier-till-
+sample-resampling). Samma "egen ren reimplementation, aldrig `waxml.js`"-
+princip som `var-mapper-math.js`.
+
+---
+
+## Delade utils och state
+
+### number-format.js (~20 rader, ny)
+
+`decimalsForMax(max)`/`formatValue(v, max)` — den delade "hur många
+decimaler ska ett levande värde visa"-regeln (0–1 → 2 decimaler, 0–10 → 1,
+100+ → 0), skalad efter värdets egen storleksordning snarare än ett fast
+antal. Tänkt att gälla genom hela WAW, inte bara där den råkar användas
+idag (`wa-var-knobs.js`, `wa-var-view.js`s in-/utvärdesfält,
+`wa-chain-view.js`s Gain-/Biquad-kort).
+
+### knob-drag.js (~65 rader, ny)
+
+`wireKnobDrag(el, {getStartValue, min, max, onChange, onCommit, onClick,
+defaultValue, pxPerRange})` — den delade, tvåriktade drag-interaktionen
+(upp ELLER höger ökar, ner ELLER vänster minskar, båda axlarna bidrar till
+samma delta) alla rattar i appen nu använder: `wa-var-knobs.js` (första
+implementationen, sen utflyttad hit), `wa-mixer-view.js`s
+`_wireVerticalDrag` (tunn wrapper) och `wa-chain-view.js`s motsvarighet.
+Ett dubbelklick återställer till `defaultValue` om satt. `onClick` (bara
+`wa-var-knobs.js` använder den) skiljer ett rent klick (markera noden) från
+ett drag som råkade ändra värdet.
+
+### param-binding.js (~110 rader, ny)
+
+Delade byggstenar för hur varje specialiserad vy visar OCH redigerar ett
+enskilt nod-attributs råa värde:
+- `wireMapClaim(el, {getNode, attrName})` — claimar ett `pointerdown` medan
+  `var-map-mode.js`s `varMapMode` är väpnad, skriver `"$namn"` till
+  attributet. Registreras alltid FÖRE kontrollens egen drag-start-lyssnare
+  (`stopImmediatePropagation` stoppar den från att också trigga).
+- `wireInlineTextEdit(el, {getNode, attrName, eventName})` — ersätter `el`
+  med ett textfält (Enter/blur committar, Escape avbryter) förifyllt med
+  attributets RÅA värde (kan redan vara `"$namn"` eller ett matteuttryck).
+  `eventName` default `"dblclick"`; `wa-mixer-view.js`s rattar skickar in
+  `"contextmenu"` (högerklick) eftersom dubbelklick där redan betyder
+  "återställ till default" (`knob-drag.js`).
+- `buildParamChip({getNode, attrName})` — slår ihop båda ovan till en liten
+  fristående, synlig `<span>` ("chip") — det Chain-vyns kort använder för
+  varje parameter, med gott om utrymme för en egen etikett (till skillnad
+  från Mixerns trånga rattar, som wire:ar direkt på ratt-elementet i
+  stället).
+- `isParamVarControlled(node, attrName)`/`varNameForParam` — tunna wrappers
+  runt `variable-references.js`s `isVariableControlled`/
+  `variableNameFromValue`, för att avgöra om en kontroll ska låsas mot drag.
+
+Se architecture-overview.md#map-läget-koppla-en-var-direkt-till-valfri-parameter-nytt-2026-09-2729 för hela funktionen i sammanhang.
+
+### var-map-mode.js (~60 rader, ny)
+
+Minimalt, delat `EventTarget`-singleton (`varMapMode`, `armed`/`varName`-
+getters, `arm(varName)`/`disarm()`) — låter `wa-var-knobs.js`s "Map..."-
+knapp och varje "mappningsbar" kontroll i appen (Inspector-attributrader,
+Chain-vyns kort, Mixerns rattar) samverka utan att importera varandra.
+Escape, och `document`s egen bubble-fas-klicklyssnare (sist registrerad,
+ser bara ett klick ingen kontroll claimade), avväpnar.
 
 ---
 

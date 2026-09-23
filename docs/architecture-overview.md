@@ -427,6 +427,15 @@ redan hade (faktoriserad dit den nu bor). Bara mappade metriker skickas
 någonsin vidare till `playerStore.setVariable()` — allt annat är rent
 visningsläge.
 
+**Autostart vid projektöppning, gest-timing-bugg fixad (2026-09-29)**: ett
+projekt sparat med kameran igång startade den inte om automatiskt vid
+återöppning — `applyState()` ropade visserligen `_start()`, men den laddade
+MediaPipes tre modellfiler (nätverksfetchar, kan ta flera sekunder) FÖRE
+`getUserMedia()`, så webbläsaren hann sluta räkna anropet som utlöst av den
+ursprungliga fil-öppnings-klicket. Fixat genom att begära kameran och ladda
+modellerna parallellt i stället för seriellt (`_start()`) — kameran begärs
+nu så nära klicket som möjligt, och det är dessutom strikt snabbare.
+
 ## View-meny, Library (DEMO) och Share-dialogen (nytt, 2026-09-10/13)
 
 `js/state/view.js` exporterar `viewState`, ett minimalt singleton-state
@@ -782,6 +791,119 @@ något (Templates-menyn igen, eller en ny ingång) faktiskt kallar dem.
   når).
 - Horisontell svep-navigering som råkade trigga webbläsarens bakåt/framåt
   är blockerad globalt (`overscroll-behavior-x: none`).
+
+## Var-mappningseditorn och nodbaserade parameter-förhandsvisningar (nytt, 2026-09-24/28)
+
+Markerar man ett `<Var>` visar Preview-panelen numer en egen, nodbaserad
+editor för hela dess mappnings-pipeline (`js/components/wa-var-view.js`,
+alltid monterad och `xmlStore`-lyssnande, samma "sticky"-mönster som
+`wa-mixer-view.js`/`wa-section-view.js`) — en vertikal kedja av kort:
+**Mapping** (en interaktiv X/Y-graf för `mapin`/`mapout`, med **Curve**- och
+**Pattern**-underkort i samma box, i den ordningen), en pil ner till ett
+separat **Convert**-kort (dropdown/graf), plus vita/blå live-värdefält för
+in-/utvärde direkt ovanpå/under respektive graf. All mappnings-matte
+(`mapStage1`, `applyCurveFn`, `applyConvertFn`, punkt-hit-testning) är
+porterad rent till `js/xml-editor/var-mapper-math.js` — en egen, DOM-fri
+reimplementation av `waxml.js`s `Mapper`-klass (verifierad rad-för-rad mot
+källan), aldrig `waxml.js` självt. En reell bugg hittades och fixades här:
+`mapStage1` ignorerade tidigare ett kommaseparerat per-segment-`curve`-värde
+helt (skrev alltid samma kurva oavsett segment). `js/utils/number-format.js`
+(`decimalsForMax`/`formatValue`) är den delade "hur många decimaler ska ett
+levande värde visa"-regeln (0–1 → 2 decimaler, 0–10 → 1, 100+ → 0) — tänkt
+att gälla för alla liknande värdefält i hela appen, inte bara den här vyn
+(se Chain-vyn nedan för nästa användning).
+
+`xml-store.js`s `VAR_MAPPING_ATTRS`-regel (`mapin`/`mapout`/`curve`/
+`pattern`/`convert`) tvingar fram en full ombyggnad vid varje ändring här —
+ingen av dessa var tidigare kopplad till `waxml.js`s live-nudge-maskineri,
+så en redigering skulle annars tyst ha gjort ingenting.
+
+### Map-läget: koppla en `<Var>` direkt till valfri parameter (nytt, 2026-09-27/29)
+
+`js/state/var-map-mode.js` exporterar ett minimalt, delat `EventTarget`-
+singleton (`varMapMode`) med `arm(varName)`/`disarm()`/`armed`/`varName` —
+ingen av modulerna som faktiskt använder det behöver importera varandra.
+Varje `<Var>`-ratt (`wa-var-knobs.js`) har en liten **Map...**-knapp bredvid
+namnet; att klicka den väpnar/avväpnar läget för just den variabeln (en
+blinkande CSS-animation på knappen visar att det är aktivt). Medan väpnat
+**claimar** varje "mappningsbar" kontroll i appen ett klick innan dess egen
+vanliga interaktion hinner starta (`stopImmediatePropagation`, registrerat
+före kontrollens egen drag-/klick-lyssnare) och skriver `"$namn"` till sitt
+attribut i stället — samma mönster överallt:
+`wa-node-inspector.js`s attributrader, varje ratt/kort i Chain-vyn (se
+nedan), och `wa-mixer-view.js`s knobbar/fader. Läget **stannar väpnat**
+efter en lyckad koppling (bara `stopPropagation`, inte `disarm()`) — så en
+enda variabel kan kopplas till många parametrar i rad utan att klicka
+Map... om och om igen. Ett klick som INTE claimas av något (`document`s
+egen bubble-fas-lyssnare i `var-map-mode.js`, sist registrerad) eller
+Escape avväpnar.
+
+## Chain-vyn: nodbaserade förhandsvisningar för Web Audio-noder (nytt, 2026-09-27/29)
+
+Markerar man en `<Chain>` (eller ett av dess barn direkt) visar Preview-
+panelen `js/components/wa-chain-view.js` — samma "alltid monterad, lyssnar
+själv på `xmlStore`"-vy-mönster som Mixer/Var-editorn ovan. En vertikal,
+pilkopplad stapel av små kort, ett per element i kedjan i XML-ordning
+(samma ordning `waxml.js`s egen `Chain.connect()` kopplar signalen i) — med
+riktiga, interaktiva editorer för `OscillatorNode` (fast vågforms-graf),
+`BiquadFilterNode` (riktig frekvensrespons-kurva, se nedan),
+`GainNode` (en enda grå ratt, samma `.knob`-utseende som Mixerns
+filter-rattar), `DynamicsCompressorNode` (klassisk soft-knee transfer-kurva
++ rattar för knee/attack/release), `WaveShaperNode` (en 4-punkts
+bezierkurve-editor), plus två enkla bonus-typer (`StereoPannerNode`,
+`DelayNode`). Allt annat (`<Var>`, `<Send>`, `<Mixer>`, ...) får ett
+neutralt fallback-kort — medvetet inga WAXML-specifika element här.
+Matten bor i tre egna, DOM-fria moduler: `js/xml-editor/biquad-math.js`,
+`compressor-math.js`, `waveshaper-math.js` — samma "aldrig `waxml.js`, bara
+en egen ren reimplementation" princip som `var-mapper-math.js`.
+
+**Biquad-kurvans handtag sitter exakt på kurvan** (nytt, 2026-09-29, per
+Hans-önskemål): den dragbara punkten för Q/gain placerades först på en
+egen, oberoende linjär skala — visuellt fel, satt vid sidan av den
+faktiskt ritade kurvan. Numeriskt verifierat (`node`-testat mot
+`biquadMagnitudeDb`) att kurvans dB-höjd vid brytfrekvensen har en exakt
+sluten form för 5 av 8 filtertyper: `20*log10(Q)` för lowpass/highpass,
+`gain/2` för lowshelf/highshelf, `gain` rakt av för peaking — handtaget
+använder nu den formeln både för att rita sig själv och för att lösa ut
+Q/gain baklänges från en dragen pixelposition, så det ligger exakt på
+kurvan och följer muspekaren 1:1. Bandpass/notch/allpass har medvetet INGEN
+sådan koppling (deras respons vid exakt brytfrekvensen är Q-oberoende per
+definition — bandpass är alltid ~0dB där, notch alltid en djup nolla,
+allpass har ingen amplitud-kurva alls) och behåller en enkel oberoende
+Q-skala istället.
+
+### Delade rattmoduler: samma drag-beteende och typad inmatning överallt (nytt, 2026-09-28/29)
+
+Två nya, delade `js/utils/`-moduler, framtvingade av upprepade buggrapporter
+om att rattar i olika vyer betedde sig olika:
+
+- **`knob-drag.js`** (`wireKnobDrag`): den tvåriktade drag-logiken (upp
+  ELLER höger ökar, ner ELLER vänster minskar, båda axlarna bidrar till
+  samma delta) som ursprungligen bara fanns i `wa-var-knobs.js`, nu den
+  **enda** implementationen — `wa-mixer-view.js`s `_wireVerticalDrag` och
+  Chain-vyns egen motsvarighet är numer tunna wrappers runt den. En riktig
+  visuell bugg hittades och fixades i samma veva: en enskild rattas
+  `.knob-wrap` som satt direkt i ett vanligt block (inte en flex-rad)
+  sträckte ut sig till hela kortets bredd, vilket drog dess absolut-
+  positionerade tick-markeringar bort från själva ratten (som centrerades
+  för sig via `align-items:center`) — fixat genom att alltid placera en
+  enskild ratt i samma `.knob-row`-flexcontainer flerknopps-korten redan
+  använde.
+- **`param-binding.js`** (`buildParamChip`/`wireMapClaim`/
+  `wireInlineTextEdit`/`isParamVarControlled`): svaret på att man inte
+  kunde skriva ett variabelnamn eller matteuttryck som värde på t.ex.
+  `frequency` i någon av de nya specialiserade vyerna, bara i XML-editorns
+  Inspector (samma frihet schemats union-typer redan tillåter där). Chain-
+  vyns kort visar nu en liten klickbar "chip" per parameter (dubbelklick
+  för att skriva valfri rå text); Mixerns rattar är för trånga för en egen
+  synlig etikett så där sitter samma förmåga direkt på ratten,
+  **högerklick** i stället för dubbelklick (som redan var upptaget av
+  "återställ till default", se `wireKnobDrag` ovan). Samma modul driver
+  också Map-lägets klick-claiming (se ovan) på alla dessa kontroller. En
+  parameter som just nu är en `"$namn"`-referens låser sin ratt/handtag mot
+  drag (samma `.remote-controlled`-resonemang `wa-mixer-view.js`s
+  `_lockRemoteControlled` redan hade) men lämnar chippen/högerklicket kvar,
+  så den går att skriva om eller mappa om ändå.
 
 ## `waxml.js`-buggar hittade under Section-preview/Mixer-arbetet (2026-09)
 

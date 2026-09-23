@@ -13,6 +13,8 @@ import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, 
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
+import { buildParamChip, isParamVarControlled } from "../utils/param-binding.js";
+import { getLiveProperty } from "../waxml-integration/live-property.js";
 
 // Preview-panel state (see wa-preview.js) for a selected <Chain> — a
 // vertical stack of small per-node-type "cards" (one per native Web Audio
@@ -383,6 +385,17 @@ template.innerHTML = `
 		.knob:hover {
 			filter: brightness(1.2);
 		}
+		/* A knob whose attribute is currently a "$name" <Var> reference —
+		   dragging it would just fight waxml.js's own Watcher, so it's
+		   locked instead (same reasoning/visual language as
+		   wa-mixer-view.js's own .remote-controlled). */
+		.knob.remote-controlled {
+			cursor: default;
+			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
+		}
+		.knob.remote-controlled:hover {
+			filter: none;
+		}
 		.knob-dial {
 			position: absolute;
 			left: 50%;
@@ -415,6 +428,49 @@ template.innerHTML = `
 			font-size: 0.6rem;
 			color: #cdd3d8;
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+		}
+
+		/* Editable/mappable value chip (see js/utils/param-binding.js) — the
+		   shared way every parameter shows its raw value, accepts typed
+		   text (a number, math expression, or "$name" <Var> reference), and
+		   claims a click while a Var's "Map..." is armed. Per Hans
+		   (2026-09-29). */
+		.param-chip {
+			display: inline-block;
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.62rem;
+			color: #cdd3d8;
+			padding: 0.05rem 0.3rem;
+			border-radius: 3px;
+			border: 1px solid transparent;
+			cursor: text;
+		}
+		.param-chip:hover {
+			background: rgba(255, 255, 255, 0.08);
+			border-color: var(--waw-border, #2f2f2f);
+		}
+		.param-chip.var-controlled {
+			color: var(--waw-accent, #4fa3ff);
+			border: 1px dashed var(--waw-accent, #4fa3ff);
+			cursor: default;
+		}
+		.chip-row {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			justify-content: center;
+			gap: 0.3rem;
+			margin-top: 0.4rem;
+		}
+		.param-chip-input {
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.62rem;
+			background: #1a1c1f;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			color: #cdd3d8;
+			border-radius: 3px;
+			padding: 0.05rem 0.3rem;
+			width: 5.5rem;
 		}
 	</style>
 
@@ -561,33 +617,33 @@ export class WaChainView extends HTMLElement {
 		return select;
 	}
 
-	_buildNumberField(node, attrName, unit, min, max) {
+	// A free-text value chip (see js/utils/param-binding.js) rather than a
+	// native <input type=number> — a number input outright rejects
+	// anything that isn't a plain number, which made it impossible to type
+	// a "$name" <Var> reference or a math expression here even though the
+	// schema itself allows either (same union shape the XML Editor's own
+	// Inspector already accepts for these attributes). Per Hans (2026-09-29).
+	_buildNumberField(node, attrName, unit) {
 		const row = document.createElement("div");
 		row.className = "field-row";
 		const label = document.createElement("span");
 		label.className = "field-label";
 		label.textContent = attrName;
-		const input = document.createElement("input");
-		input.type = "number";
-		input.className = "field-input";
-		input.value = node.attributes[attrName] ?? "";
-		if (min !== undefined) input.min = String(min);
-		if (max !== undefined) input.max = String(max);
-		input.addEventListener("pointerdown", (e) => e.stopPropagation());
-		input.addEventListener("change", () => {
-			const nodeNow = findNodeById(xmlStore.root, node.id);
-			if (!nodeNow) return;
-			const val = input.value.trim();
-			const nextAttrs = { ...nodeNow.attributes };
-			if (val === "") delete nextAttrs[attrName];
-			else nextAttrs[attrName] = val;
-			this._commitAttributes(node.id, nextAttrs);
-			if (val !== "" && nodeNow.attributes.id) applyLiveProperty(nodeNow.attributes.id, attrName, parseFloat(val));
-		});
+
+		const { el: chip, render } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName });
+		const refresh = () => {
+			const nodeNow = findNodeById(xmlStore.root, node.id) || node;
+			const raw = nodeNow.attributes[attrName];
+			const varControlled = isParamVarControlled(nodeNow, attrName);
+			chip.classList.toggle("var-controlled", varControlled);
+			render(raw ?? "—");
+		};
+		refresh();
+
 		const unitLabel = document.createElement("span");
 		unitLabel.className = "field-unit";
 		unitLabel.textContent = unit;
-		row.append(label, input, unitLabel);
+		row.append(label, chip, unitLabel);
 		return row;
 	}
 
@@ -663,13 +719,34 @@ export class WaChainView extends HTMLElement {
 	// Generic knob bound straight to one numeric attribute — used for every
 	// simple rotary control (Compressor's knee/attack/release, the bonus
 	// StereoPannerNode/DelayNode cards, ...). Commits on every drag tick,
-	// same as the gain knob.
+	// same as the gain knob. Shows a value chip (js/utils/param-binding.js)
+	// below the dial instead of only a hover tooltip, so every knob can
+	// also be typed into (a number, expression, or "$name" <Var>
+	// reference) and claimed by an armed Var's "Map..." — per Hans
+	// (2026-09-29). When the attribute is already a $var reference, the
+	// knob itself is locked (dragging it would just fight waxml.js's own
+	// Watcher, same reasoning as wa-mixer-view.js's own
+	// _lockRemoteControlled) — the chip stays live for re-typing/re-mapping.
 	_buildSimpleKnob(node, attrName, min, max, labelText, formatFn, defaultValue, onChange) {
 		const { wrap, knob, dial } = this._buildKnobSkeleton(labelText, 24);
 		const applyVisual = (v) => this._applyKnobRotation(dial, v, min, max);
+
+		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName });
+		chip.classList.add("knob-value-label");
+		wrap.appendChild(chip);
+
+		if (isParamVarControlled(node, attrName)) {
+			knob.classList.add("remote-controlled");
+			chip.classList.add("var-controlled");
+			const live = getLiveProperty(node.attributes.id, attrName);
+			applyVisual(Number.isFinite(live) ? live : defaultValue);
+			renderChip(node.attributes[attrName]);
+			return wrap;
+		}
+
 		const current = readNum(node, attrName, defaultValue);
 		applyVisual(current);
-		knob.title = formatFn(current);
+		renderChip(formatFn(current));
 
 		this._wireVerticalDrag(
 			knob,
@@ -678,7 +755,7 @@ export class WaChainView extends HTMLElement {
 			max,
 			(v) => {
 				applyVisual(v);
-				knob.title = formatFn(v);
+				renderChip(formatFn(v));
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (!nodeNow) return;
 				this._commitAttributes(node.id, { ...nodeNow.attributes, [attrName]: String(Math.round(v * 1000) / 1000) });
@@ -735,8 +812,8 @@ export class WaChainView extends HTMLElement {
 
 		const fields = document.createElement("div");
 		fields.className = "field-row-group";
-		fields.appendChild(this._buildNumberField(node, "frequency", "Hz", 0, 22050));
-		fields.appendChild(this._buildNumberField(node, "detune", "cents", -9600, 9600));
+		fields.appendChild(this._buildNumberField(node, "frequency", "Hz"));
+		fields.appendChild(this._buildNumberField(node, "detune", "cents"));
 		card.appendChild(fields);
 
 		return card;
@@ -802,13 +879,26 @@ export class WaChainView extends HTMLElement {
 		const { wrap, knob, dial } = this._buildKnobSkeleton("gain", 40);
 		const range = gainDbRangeForTag(node.tagName);
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, range.min, range.max);
+
+		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName: "gain" });
+		chip.classList.add("knob-value-label");
+
+		if (isParamVarControlled(node, "gain")) {
+			knob.classList.add("remote-controlled");
+			chip.classList.add("var-controlled");
+			const isLinear = !isDbNativeGain(node.tagName);
+			const live = getLiveProperty(node.attributes.id, "gain");
+			const liveDb = Number.isFinite(live) ? (isLinear ? 20 * Math.log10(Math.max(1e-6, live)) : live) : 0;
+			applyVisual(liveDb);
+			renderChip(node.attributes.gain);
+			wrap.appendChild(chip);
+			card.appendChild(this._singleKnobRow(wrap));
+			return card;
+		}
+
 		const startDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
 		applyVisual(startDb);
-		knob.title = "Gain";
-
-		const valueLabel = document.createElement("div");
-		valueLabel.className = "knob-value-label";
-		valueLabel.textContent = `${formatValue(startDb, 100)} dB`;
+		renderChip(`${formatValue(startDb, 100)} dB`);
 
 		this._wireVerticalDrag(
 			knob,
@@ -817,7 +907,7 @@ export class WaChainView extends HTMLElement {
 			range.max,
 			(db) => {
 				applyVisual(db);
-				valueLabel.textContent = `${formatValue(db, 100)} dB`;
+				renderChip(`${formatValue(db, 100)} dB`);
 				const isLinear = !isDbNativeGain(node.tagName);
 				if (node.attributes.id) applyLiveProperty(node.attributes.id, "gain", isLinear ? dbToLinearRatio(db) : db);
 				const nodeNow = findNodeById(xmlStore.root, node.id);
@@ -827,7 +917,7 @@ export class WaChainView extends HTMLElement {
 			0
 		);
 
-		wrap.appendChild(valueLabel);
+		wrap.appendChild(chip);
 		card.appendChild(this._singleKnobRow(wrap));
 		return card;
 	}
@@ -844,10 +934,20 @@ export class WaChainView extends HTMLElement {
 		canvas.width = 240;
 		canvas.height = 120;
 
+		// Falls back to a live-resolved value (rather than the plain default)
+		// when an attribute is currently a "$name" <Var> reference — a raw
+		// parseFloat("$foo") is NaN, so readNum's own fallback alone would
+		// otherwise draw the curve at an arbitrary default instead of
+		// whatever the variable is actually currently driving it to.
+		const liveOrDefault = (attrName, fallback) => {
+			if (!isParamVarControlled(node, attrName)) return readNum(node, attrName, fallback);
+			const live = getLiveProperty(node.attributes.id, attrName);
+			return Number.isFinite(live) ? live : fallback;
+		};
 		const state = {
-			freq: readNum(node, "frequency", 1000),
-			Q: readNum(node, "Q", 1),
-			gainDb: readNum(node, "gain", 0) // BiquadFilterNode.gain is native dB
+			freq: liveOrDefault("frequency", 1000),
+			Q: liveOrDefault("Q", 1),
+			gainDb: liveOrDefault("gain", 0) // BiquadFilterNode.gain is native dB
 		};
 
 		// The curve's draggable point covers frequency (X, always) plus one
@@ -859,33 +959,69 @@ export class WaChainView extends HTMLElement {
 		// scroll-only there. Per Hans (2026-09-28).
 		const yDragMode = (type) => (BIQUAD_GAIN_TYPES.has(type) ? "gain" : BIQUAD_Q_TYPES.has(type) ? "q" : null);
 
-		const infoLabel = document.createElement("div");
-		infoLabel.className = "hint-text";
-		const updateInfoLabel = (type) => {
-			const bits = [`${formatValue(state.freq, 10000)} Hz`];
-			if (BIQUAD_Q_TYPES.has(type)) bits.push(`Q ${formatValue(state.Q, 100)}`);
-			if (BIQUAD_GAIN_TYPES.has(type)) bits.push(`${formatValue(state.gainDb, 100)} dB`);
+		// Individually mappable/typeable value chips (js/utils/param-binding.js)
+		// for each attribute the curve draws — replaces the old plain-text info
+		// line so frequency/Q/gain can each be typed into (a number,
+		// expression, or "$name" <Var> reference) or claimed by an armed Var's
+		// "Map...", same as everywhere else in this view. Per Hans (2026-09-29).
+		const chipRow = document.createElement("div");
+		chipRow.className = "hint-text chip-row";
+		const getNodeNow = () => findNodeById(xmlStore.root, node.id);
+		const freqChip = buildParamChip({ getNode: getNodeNow, attrName: "frequency" });
+		const qChip = buildParamChip({ getNode: getNodeNow, attrName: "Q" });
+		const gainChip = buildParamChip({ getNode: getNodeNow, attrName: "gain" });
+
+		const refreshChips = (type) => {
+			const nodeNow = getNodeNow() || node;
+			chipRow.innerHTML = "";
+			const freqLocked = isParamVarControlled(nodeNow, "frequency");
+			freqChip.el.classList.toggle("var-controlled", freqLocked);
+			freqChip.render(freqLocked ? nodeNow.attributes.frequency : `${formatValue(state.freq, 10000)} Hz`);
+			chipRow.appendChild(freqChip.el);
+
+			if (BIQUAD_Q_TYPES.has(type)) {
+				const qLocked = isParamVarControlled(nodeNow, "Q");
+				qChip.el.classList.toggle("var-controlled", qLocked);
+				qChip.render(qLocked ? nodeNow.attributes.Q : `Q ${formatValue(state.Q, 100)}`);
+				chipRow.appendChild(qChip.el);
+			}
+			if (BIQUAD_GAIN_TYPES.has(type)) {
+				const gainLocked = isParamVarControlled(nodeNow, "gain");
+				gainChip.el.classList.toggle("var-controlled", gainLocked);
+				gainChip.render(gainLocked ? nodeNow.attributes.gain : `${formatValue(state.gainDb, 100)} dB`);
+				chipRow.appendChild(gainChip.el);
+			}
 			// Only "peaking" has both a draggable gain *and* a Q — Q has no
 			// drag axis left there, so it stays scroll-only (see yDragMode).
-			// Every other type's whole curve is already fully described by
-			// the drag itself, so no extra hint is needed.
-			if (BIQUAD_GAIN_TYPES.has(type) && BIQUAD_Q_TYPES.has(type)) bits.push("(scroll = Q)");
-			infoLabel.textContent = bits.join(" · ");
+			if (BIQUAD_GAIN_TYPES.has(type) && BIQUAD_Q_TYPES.has(type)) {
+				const scrollHint = document.createElement("span");
+				scrollHint.textContent = "(scroll = Q)";
+				chipRow.appendChild(scrollHint);
+			}
 		};
 
 		const select = this._buildEnumSelect(node, "type", BIQUAD_FILTER_TYPES, "lowpass", (type) => {
 			this._redrawBiquadCanvas(canvas, state, type);
-			updateInfoLabel(type);
+			refreshChips(type);
 		});
 		card.appendChild(select);
 		card.appendChild(canvas);
-		card.appendChild(infoLabel);
+		card.appendChild(chipRow);
 		this._redrawBiquadCanvas(canvas, state, select.value);
-		updateInfoLabel(select.value);
+		refreshChips(select.value);
 
 		canvas.addEventListener("pointerdown", (e) => {
-			const { px, py } = canvasPointFromEvent(canvas, e);
 			const mode = yDragMode(select.value);
+			// A var-controlled axis is locked against direct dragging (would
+			// just fight waxml.js's own Watcher) — the whole 2D handle is
+			// locked if either axis currently in play is, since a single
+			// drag gesture can't sensibly move just one of the two anyway;
+			// use the chips (typing) or Map to change a locked axis instead.
+			const freqLocked = isParamVarControlled(node, "frequency");
+			const yLocked = mode === "gain" ? isParamVarControlled(node, "gain") : mode === "q" ? isParamVarControlled(node, "Q") : false;
+			if (freqLocked || yLocked) return;
+
+			const { px, py } = canvasPointFromEvent(canvas, e);
 			const hx = biquadFreqToXPixel(canvas.width, state.freq);
 			const hy = this._biquadHandleY(select.value, state, canvas.height);
 			if (Math.hypot(px - hx, py - hy) > 16) return;
@@ -910,7 +1046,7 @@ export class WaChainView extends HTMLElement {
 					state.Q = Math.max(BIQUAD_Q_DRAG_MIN, Math.min(BIQUAD_Q_DRAG_MAX, biquadYPixelToQ(canvas.height, my)));
 				}
 				this._redrawBiquadCanvas(canvas, state, select.value);
-				updateInfoLabel(select.value);
+				refreshChips(select.value);
 
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (!nodeNow) return;
@@ -935,11 +1071,11 @@ export class WaChainView extends HTMLElement {
 		canvas.addEventListener(
 			"wheel",
 			(e) => {
-				if (!BIQUAD_Q_TYPES.has(select.value)) return;
+				if (!BIQUAD_Q_TYPES.has(select.value) || isParamVarControlled(node, "Q")) return;
 				e.preventDefault();
 				state.Q = Math.max(0.1, Math.min(20, state.Q - e.deltaY * 0.01));
 				this._redrawBiquadCanvas(canvas, state, select.value);
-				updateInfoLabel(select.value);
+				refreshChips(select.value);
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, Q: String(Math.round(state.Q * 10) / 10) });
 				if (nodeNow?.attributes.id) applyLiveProperty(nodeNow.attributes.id, "Q", state.Q);
@@ -1019,12 +1155,37 @@ export class WaChainView extends HTMLElement {
 		canvas.height = 140;
 		card.appendChild(canvas);
 
+		const liveOrDefault = (attrName, fallback) => {
+			if (!isParamVarControlled(node, attrName)) return readNum(node, attrName, fallback);
+			const live = getLiveProperty(node.attributes.id, attrName);
+			return Number.isFinite(live) ? live : fallback;
+		};
 		const state = {
-			threshold: Math.max(COMP_DB_MIN, readNum(node, "threshold", -24)),
-			ratio: readNum(node, "ratio", 4),
-			knee: readNum(node, "knee", 6)
+			threshold: Math.max(COMP_DB_MIN, liveOrDefault("threshold", -24)),
+			ratio: liveOrDefault("ratio", 4),
+			knee: liveOrDefault("knee", 6)
 		};
 		this._redrawCompressorCanvas(canvas, state);
+
+		// Individually mappable/typeable chips (js/utils/param-binding.js)
+		// for the two canvas-drag-only handles — per Hans (2026-09-29).
+		const getNodeNow = () => findNodeById(xmlStore.root, node.id);
+		const chipRow = document.createElement("div");
+		chipRow.className = "hint-text chip-row";
+		const thresholdChip = buildParamChip({ getNode: getNodeNow, attrName: "threshold" });
+		const ratioChip = buildParamChip({ getNode: getNodeNow, attrName: "ratio" });
+		const thresholdLocked = () => isParamVarControlled(getNodeNow() || node, "threshold");
+		const ratioLocked = () => isParamVarControlled(getNodeNow() || node, "ratio");
+		const refreshChips = () => {
+			const nodeNow = getNodeNow() || node;
+			thresholdChip.el.classList.toggle("var-controlled", thresholdLocked());
+			thresholdChip.render(thresholdLocked() ? nodeNow.attributes.threshold : `${formatValue(state.threshold, 100)} dB`);
+			ratioChip.el.classList.toggle("var-controlled", ratioLocked());
+			ratioChip.render(ratioLocked() ? nodeNow.attributes.ratio : `${formatValue(state.ratio, 100)}:1`);
+		};
+		chipRow.append(thresholdChip.el, ratioChip.el);
+		card.appendChild(chipRow);
+		refreshChips();
 
 		canvas.addEventListener("pointerdown", (e) => {
 			const { px, py } = canvasPointFromEvent(canvas, e);
@@ -1038,6 +1199,11 @@ export class WaChainView extends HTMLElement {
 			if (Math.hypot(px - cornerPx, py - cornerPy) <= 12) mode = "threshold";
 			else if (Math.hypot(px - endPx, py - endPy) <= 12) mode = "ratio";
 			if (!mode) return;
+			// A var-controlled handle is locked against dragging (see
+			// wa-chain-view.js's other cards for the same reasoning) — type
+			// into or Map the chip instead.
+			if (mode === "threshold" && thresholdLocked()) return;
+			if (mode === "ratio" && ratioLocked()) return;
 			e.preventDefault();
 			try {
 				canvas.setPointerCapture(e.pointerId);
@@ -1053,17 +1219,17 @@ export class WaChainView extends HTMLElement {
 					state.ratio = denom > 0.05 ? Math.max(1, Math.min(20, (0 - state.threshold) / denom)) : 20;
 				}
 				this._redrawCompressorCanvas(canvas, state);
+				refreshChips();
 
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (!nodeNow) return;
-				this._commitAttributes(node.id, {
-					...nodeNow.attributes,
-					threshold: String(Math.round(state.threshold * 10) / 10),
-					ratio: String(Math.round(state.ratio * 10) / 10)
-				});
+				const patch = { ...nodeNow.attributes };
+				if (mode === "threshold") patch.threshold = String(Math.round(state.threshold * 10) / 10);
+				else patch.ratio = String(Math.round(state.ratio * 10) / 10);
+				this._commitAttributes(node.id, patch);
 				if (nodeNow.attributes.id) {
-					applyLiveProperty(nodeNow.attributes.id, "threshold", state.threshold);
-					applyLiveProperty(nodeNow.attributes.id, "ratio", state.ratio);
+					if (mode === "threshold") applyLiveProperty(nodeNow.attributes.id, "threshold", state.threshold);
+					else applyLiveProperty(nodeNow.attributes.id, "ratio", state.ratio);
 				}
 			};
 			const onUp = () => {
