@@ -204,6 +204,73 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <!-- // AnalyserNode -->
+
+  <xs:simpleType name="fftSize">
+    <xs:annotation>
+      <xs:documentation>FFT size used for frequency/time-domain analysis, per the Web Audio API spec - must be a power of 2 between 32 and 32768. Either one of those exact values, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="fftSizeValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="fftSizeValue">
+    <xs:restriction base="xs:integer">
+      <xs:enumeration value="32"/>
+      <xs:enumeration value="64"/>
+      <xs:enumeration value="128"/>
+      <xs:enumeration value="256"/>
+      <xs:enumeration value="512"/>
+      <xs:enumeration value="1024"/>
+      <xs:enumeration value="2048"/>
+      <xs:enumeration value="4096"/>
+      <xs:enumeration value="8192"/>
+      <xs:enumeration value="16384"/>
+      <xs:enumeration value="32768"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="minDecibels">
+    <xs:annotation>
+      <xs:documentation>Lower dB bound of the analyser's FFT range (must stay below maxDecibels). Either a numeric value in the range -200-0, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="minDecibelsValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="minDecibelsValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="-200"/>
+      <xs:maxInclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="maxDecibels">
+    <xs:annotation>
+      <xs:documentation>Upper dB bound of the analyser's FFT range (must stay above minDecibels). Either a numeric value in the range -200-0, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="maxDecibelsValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="maxDecibelsValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="-200"/>
+      <xs:maxInclusive value="0"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="smoothingTimeConstant">
+    <xs:annotation>
+      <xs:documentation>Averaging constant between the analyser's current and previous frame - 0 is no smoothing, 1 barely updates at all. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="smoothingTimeConstantValue mathExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="smoothingTimeConstantValue">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/>
+      <xs:maxInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="delayTime">
     <xs:annotation>
       <xs:documentation>Delay time in seconds. Shares the same schema-level range as maxDelayTime (0-10), since delayTime should not exceed the node's own maxDelayTime. Note: this schema cannot enforce that delayTime stays below the actual maxDelayTime value set on the same node (that would require a cross-attribute constraint XSD 1.0 doesn't support) - if a document sets maxDelayTime lower than delayTime, that inconsistency is left for the runtime parser to handle. Either a numeric value in the range 0-10, or a mathematical expression (see mathExpression).</xs:documentation>
@@ -1357,6 +1424,16 @@
 
 
       <!-- Native elements -->
+      <xs:element name="AnalyserNode">
+        <xs:complexType>
+          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attribute name="fftSize" type="fftSize"/>
+          <xs:attribute name="minDecibels" type="minDecibels"/>
+          <xs:attribute name="maxDecibels" type="maxDecibels"/>
+          <xs:attribute name="smoothingTimeConstant" type="smoothingTimeConstant"/>
+        </xs:complexType>
+      </xs:element>
+
       <xs:element name="AudioBufferSourceNode">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributesNoInput"/>

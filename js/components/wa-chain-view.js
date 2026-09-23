@@ -1,6 +1,7 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
+import { playerStore } from "../waxml-integration/player-store.js";
 import { formatValue } from "../utils/number-format.js";
 import {
 	parseGainAttributeToDb,
@@ -54,6 +55,11 @@ import { getLiveProperty } from "../waxml-integration/live-property.js";
 const OSCILLATOR_TYPES = ["sine", "square", "sawtooth", "triangle", "custom"];
 const BIQUAD_FILTER_TYPES = ["lowpass", "highpass", "bandpass", "lowshelf", "highshelf", "peaking", "notch", "allpass"];
 const OVERSAMPLE_OPTIONS = ["none", "2x", "4x"];
+const FFT_SIZE_OPTIONS = ["32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "16384", "32768"];
+// Bar/line count each draw is bounded to, regardless of the analyser's own
+// fftSize (up to 32768) — the whole point of the cap (see _buildAnalyserCard).
+const ANALYSER_WAVEFORM_MAX_POINTS = 200;
+const ANALYSER_FFT_BAR_COUNT = 48;
 
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range, same feel as wa-mixer-view.js
 
@@ -462,6 +468,25 @@ template.innerHTML = `
 			gap: 0.3rem;
 			margin-top: 0.4rem;
 		}
+		.mode-toggle {
+			display: flex;
+			gap: 0.25rem;
+			margin-bottom: 0.4rem;
+		}
+		.mode-toggle button {
+			flex: 1 1 0;
+			background: #1a1c1f;
+			border: 1px solid #0b0c0d;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.62rem;
+			border-radius: 3px;
+			padding: 0.2rem 0.3rem;
+			cursor: pointer;
+		}
+		.mode-toggle button.active {
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
+		}
 		.param-chip-input {
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 			font-size: 0.62rem;
@@ -487,6 +512,18 @@ export class WaChainView extends HTMLElement {
 		this._stackEl = this.shadowRoot.querySelector(".chain-stack");
 		this._isLocalEdit = false;
 		this._onStoreChange = this._onStoreChange.bind(this);
+		// AnalyserNode cards: which display mode (waveform/fft) each node id
+		// is currently showing — an interface-only choice, never written to
+		// the XML document, persisted instead via getState()/applyState()
+		// (see workstation-state.js's registerLayoutExtras). Per Hans
+		// (2026-09-30). _activeAnalyserTicks/_analyserLoopId/
+		// _analyserFrameCounter drive ONE shared rAF loop for every
+		// currently-visible analyser card, rather than one timer per card —
+		// see _ensureAnalyserLoop.
+		this._analyserDisplayModes = new Map();
+		this._activeAnalyserTicks = new Set();
+		this._analyserLoopId = null;
+		this._analyserFrameCounter = 0;
 	}
 
 	connectedCallback() {
@@ -496,6 +533,57 @@ export class WaChainView extends HTMLElement {
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("change", this._onStoreChange);
+		this._stopAnalyserLoop();
+	}
+
+	// ── AnalyserNode cards: persistence (workstation-state.json) ──────────
+	// The waveform/FFT choice is a pure display preference — see the
+	// constructor comment above.
+	getState() {
+		return { analyserDisplayModes: Object.fromEntries(this._analyserDisplayModes) };
+	}
+
+	applyState(state) {
+		if (!state || typeof state !== "object") return;
+		if (state.analyserDisplayModes && typeof state.analyserDisplayModes === "object") {
+			this._analyserDisplayModes = new Map(Object.entries(state.analyserDisplayModes));
+			this._render();
+		}
+	}
+
+	_dispatchStateChange() {
+		this.dispatchEvent(new CustomEvent("state-change", { bubbles: true, composed: true }));
+	}
+
+	// ── Shared rAF loop for every currently-visible AnalyserNode card —
+	// cheap by construction: one timer total regardless of how many
+	// analyser cards exist, each tick only reads+draws a canvas-width-
+	// bounded number of samples (see _buildAnalyserCard), and the loop
+	// only runs at all while at least one such card is actually mounted.
+	// Throttled to every 3rd frame (~20fps) — plenty smooth for a small
+	// meter, a third of the cost of a full 60fps loop. Per Hans (2026-09-30):
+	// "använd ganska low-cost lösningar... så att inte det slöar ner
+	// systemet om man börjar göra många AnalyserNoder."
+	_ensureAnalyserLoop() {
+		if (this._analyserLoopId !== null) return;
+		const loop = () => {
+			this._analyserLoopId = requestAnimationFrame(loop);
+			this._analyserFrameCounter++;
+			if (this._analyserFrameCounter % 3 !== 0) return;
+			if (this._activeAnalyserTicks.size === 0) {
+				this._stopAnalyserLoop();
+				return;
+			}
+			this._activeAnalyserTicks.forEach((tick) => tick());
+		};
+		this._analyserLoopId = requestAnimationFrame(loop);
+	}
+
+	_stopAnalyserLoop() {
+		if (this._analyserLoopId !== null) {
+			cancelAnimationFrame(this._analyserLoopId);
+			this._analyserLoopId = null;
+		}
 	}
 
 	_onStoreChange() {
@@ -545,6 +633,11 @@ export class WaChainView extends HTMLElement {
 		const node = xmlStore.getSelectedNode();
 		const resolved = this._resolveRenderList(node);
 		this._stackEl.innerHTML = "";
+		// Every card (including any AnalyserNode ones) gets rebuilt fresh
+		// below — drop the old tick callbacks so the shared loop (see
+		// _ensureAnalyserLoop) never calls into a canvas that's no longer in
+		// the DOM. Re-populated by _buildAnalyserCard as it runs.
+		this._activeAnalyserTicks = new Set();
 
 		if (!resolved) return;
 
@@ -1451,6 +1544,219 @@ export class WaChainView extends HTMLElement {
 		card.appendChild(this._singleKnobRow(this._buildSimpleKnob(node, "delayTime", 0, 10, "time", (v) => `${Math.round(v * 1000)} ms`, 0.3)));
 		return card;
 	}
+
+	// --- AnalyserNode: waveform or FFT preview ---
+	//
+	// waxml.js's own "analysernode" case just calls createAnalyser() with no
+	// parameters applied at all — fftSize/minDecibels/maxDecibels/
+	// smoothingTimeConstant are never read from XML there (a gap, same kind
+	// as WaveShaperNode's curve — flagged to Hans, not fixed here, never
+	// touch waxml.js). So this card applies them directly onto the *real*
+	// live AnalyserNode itself (playerStore.getLiveObjects(...)[0]._node —
+	// the AudioObject wrapper's own raw Web Audio node) whenever they
+	// change, via _applyAnalyserSettings below.
+
+	// Which node's display-mode Map key to use — the real XML `id` when the
+	// node has one (persists across reload, see getState/applyState),
+	// otherwise the session-only internal tree id (still works, just
+	// doesn't survive a reload) since there's nothing stable to key by.
+	_analyserModeKey(node) {
+		return node.attributes.id || node.id;
+	}
+
+	_buildAnalyserCard(node) {
+		const card = document.createElement("div");
+		card.className = "node-card analyser-card";
+		card.appendChild(this._buildCardHeader(node));
+
+		const getNodeNow = () => findNodeById(xmlStore.root, node.id) || node;
+		const modeKey = this._analyserModeKey(node);
+
+		const toggle = document.createElement("div");
+		toggle.className = "mode-toggle";
+		const waveformBtn = document.createElement("button");
+		waveformBtn.type = "button";
+		waveformBtn.textContent = "Waveform";
+		const fftBtn = document.createElement("button");
+		fftBtn.type = "button";
+		fftBtn.textContent = "FFT";
+		toggle.append(waveformBtn, fftBtn);
+		card.appendChild(toggle);
+
+		const updateToggleUI = () => {
+			const m = this._analyserDisplayModes.get(modeKey) || "waveform";
+			waveformBtn.classList.toggle("active", m === "waveform");
+			fftBtn.classList.toggle("active", m === "fft");
+		};
+		const setMode = (m) => {
+			this._analyserDisplayModes.set(modeKey, m);
+			updateToggleUI();
+			this._dispatchStateChange();
+		};
+		waveformBtn.addEventListener("click", () => setMode("waveform"));
+		fftBtn.addEventListener("click", () => setMode("fft"));
+		updateToggleUI();
+
+		const canvas = document.createElement("canvas");
+		canvas.className = "node-graph";
+		canvas.width = 240;
+		canvas.height = 90;
+		card.appendChild(canvas);
+		this._drawAnalyserIdle(canvas);
+
+		const applySettings = () => this._applyAnalyserSettings(getNodeNow());
+
+		const fftSizeSelect = this._buildEnumSelect(node, "fftSize", FFT_SIZE_OPTIONS, "2048", () => applySettings());
+		card.appendChild(fftSizeSelect);
+
+		const chipRow = document.createElement("div");
+		chipRow.className = "hint-text chip-row";
+		const minDbChip = buildParamChip({ getNode: getNodeNow, attrName: "minDecibels" });
+		const maxDbChip = buildParamChip({ getNode: getNodeNow, attrName: "maxDecibels" });
+		const smoothChip = buildParamChip({ getNode: getNodeNow, attrName: "smoothingTimeConstant" });
+		const refreshChips = () => {
+			const nodeNow = getNodeNow();
+			minDbChip.render(`${formatValue(readNum(nodeNow, "minDecibels", -100), 200)} dB`);
+			maxDbChip.render(`${formatValue(readNum(nodeNow, "maxDecibels", -30), 200)} dB`);
+			smoothChip.render(`smooth ${formatValue(readNum(nodeNow, "smoothingTimeConstant", 0.8), 1)}`);
+		};
+		chipRow.append(minDbChip.el, maxDbChip.el, smoothChip.el);
+		card.appendChild(chipRow);
+		refreshChips();
+
+		applySettings();
+
+		// Reused across ticks rather than reallocated every frame — resized
+		// only when the mode or fftSize actually changes the needed length.
+		let dataArray = null;
+		let dataArraySize = 0;
+
+		const tick = () => {
+			const raw = applySettings();
+			if (!raw) {
+				this._drawAnalyserIdle(canvas);
+				return;
+			}
+			const currentMode = this._analyserDisplayModes.get(modeKey) || "waveform";
+			const size = currentMode === "waveform" ? raw.fftSize : raw.frequencyBinCount;
+			if (!dataArray || dataArraySize !== size) {
+				dataArray = new Uint8Array(size);
+				dataArraySize = size;
+			}
+			if (currentMode === "waveform") {
+				raw.getByteTimeDomainData(dataArray);
+				this._drawAnalyserWaveform(canvas, dataArray);
+			} else {
+				raw.getByteFrequencyData(dataArray);
+				this._drawAnalyserFFT(canvas, dataArray);
+			}
+		};
+		this._activeAnalyserTicks.add(tick);
+		this._ensureAnalyserLoop();
+
+		return card;
+	}
+
+	// Applies fftSize/minDecibels/maxDecibels/smoothingTimeConstant from the
+	// node's current XML attributes onto its real live AnalyserNode, if one
+	// exists right now — see _buildAnalyserCard's own comment for why this
+	// is needed at all. fftSize is only actually written when it differs
+	// (reallocates the analyser's internal buffers — not free, so never done
+	// on every tick regardless of whether the value changed). Returns the
+	// raw node, or null if nothing is live yet.
+	_applyAnalyserSettings(node) {
+		if (!node.attributes.id) return null;
+		let wrapper;
+		try {
+			wrapper = playerStore.getLiveObjects(`[id='${node.attributes.id}']`)?.[0];
+		} catch {
+			return null;
+		}
+		const raw = wrapper?._node;
+		if (!raw || typeof raw.getByteFrequencyData !== "function") return null;
+		try {
+			const fft = parseInt(node.attributes.fftSize, 10);
+			if (Number.isFinite(fft) && raw.fftSize !== fft) raw.fftSize = fft;
+		} catch {}
+		try {
+			const minDb = parseFloat(node.attributes.minDecibels);
+			if (Number.isFinite(minDb)) raw.minDecibels = minDb;
+		} catch {}
+		try {
+			const maxDb = parseFloat(node.attributes.maxDecibels);
+			if (Number.isFinite(maxDb)) raw.maxDecibels = maxDb;
+		} catch {}
+		try {
+			const stc = parseFloat(node.attributes.smoothingTimeConstant);
+			if (Number.isFinite(stc)) raw.smoothingTimeConstant = stc;
+		} catch {}
+		return raw;
+	}
+
+	_drawAnalyserIdle(canvas) {
+		const ctx = canvas.getContext("2d");
+		const w = canvas.width,
+			h = canvas.height;
+		ctx.clearRect(0, 0, w, h);
+		ctx.strokeStyle = "#2a2d31";
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(0, h / 2);
+		ctx.lineTo(w, h / 2);
+		ctx.stroke();
+	}
+
+	// Stride-sampled to at most ANALYSER_WAVEFORM_MAX_POINTS regardless of
+	// fftSize (up to 32768) — the actual "low-cost" guarantee.
+	_drawAnalyserWaveform(canvas, dataArray) {
+		const ctx = canvas.getContext("2d");
+		const w = canvas.width,
+			h = canvas.height;
+		ctx.clearRect(0, 0, w, h);
+		ctx.strokeStyle = "#2a2d31";
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(0, h / 2);
+		ctx.lineTo(w, h / 2);
+		ctx.stroke();
+
+		const len = dataArray.length;
+		const points = Math.min(len, ANALYSER_WAVEFORM_MAX_POINTS);
+		const stride = len / points;
+		ctx.strokeStyle = "#4fa3ff";
+		ctx.lineWidth = 1.5;
+		ctx.beginPath();
+		for (let i = 0; i < points; i++) {
+			const idx = Math.floor(i * stride);
+			const v = dataArray[idx] / 128 - 1; // -1..1
+			const x = (i / (points - 1)) * w;
+			const y = h / 2 - v * (h * 0.45);
+			if (i === 0) ctx.moveTo(x, y);
+			else ctx.lineTo(x, y);
+		}
+		ctx.stroke();
+	}
+
+	// Bucketed into ANALYSER_FFT_BAR_COUNT bars regardless of
+	// frequencyBinCount (up to 16384) — same "low-cost" reasoning.
+	_drawAnalyserFFT(canvas, dataArray) {
+		const ctx = canvas.getContext("2d");
+		const w = canvas.width,
+			h = canvas.height;
+		ctx.clearRect(0, 0, w, h);
+		const barCount = Math.min(ANALYSER_FFT_BAR_COUNT, dataArray.length);
+		const binsPerBar = Math.max(1, Math.floor(dataArray.length / barCount));
+		const barWidth = w / barCount;
+		ctx.fillStyle = "#4fa3ff";
+		for (let i = 0; i < barCount; i++) {
+			let sum = 0;
+			const start = i * binsPerBar;
+			for (let j = 0; j < binsPerBar; j++) sum += dataArray[start + j] || 0;
+			const avg = sum / binsPerBar;
+			const barH = (avg / 255) * h;
+			ctx.fillRect(i * barWidth + 1, h - barH, Math.max(1, barWidth - 2), barH);
+		}
+	}
 }
 
 const NODE_BUILDERS = {
@@ -1460,7 +1766,8 @@ const NODE_BUILDERS = {
 	DynamicsCompressorNode: (view, node) => view._buildCompressorCard(node),
 	WaveShaperNode: (view, node) => view._buildWaveShaperCard(node),
 	StereoPannerNode: (view, node) => view._buildStereoPannerCard(node),
-	DelayNode: (view, node) => view._buildDelayCard(node)
+	DelayNode: (view, node) => view._buildDelayCard(node),
+	AnalyserNode: (view, node) => view._buildAnalyserCard(node)
 };
 
 export const SUPPORTED_CHAIN_NODE_TAGS = new Set(Object.keys(NODE_BUILDERS));

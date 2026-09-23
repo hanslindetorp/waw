@@ -55,6 +55,10 @@ export function registerLayoutExtras(refs) {
 	// stays outside the WAXML spec), just Workstation's own editor state,
 	// same as everything else here.
 	layoutExtras.webcamInput?.addEventListener("state-change", scheduleSave);
+	// wa-chain-view.js's own AnalyserNode display-mode choice (waveform vs.
+	// FFT, per node) — a pure interface preference, never a WAXML document
+	// attribute (per Hans, 2026-09-30), same reasoning as webcamInput above.
+	layoutExtras.chainView?.addEventListener("state-change", scheduleSave);
 }
 
 function captureState() {
@@ -77,6 +81,8 @@ function captureState() {
 	if (typeof sectionLabelWidth === "number") state.sectionLabelWidth = sectionLabelWidth;
 	const webcamState = layoutExtras.webcamInput?.getState();
 	if (webcamState) state.webcamInput = webcamState;
+	const chainViewState = layoutExtras.chainView?.getState();
+	if (chainViewState) state.chainView = chainViewState;
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -119,6 +125,9 @@ function applyState(state) {
 	}
 	if (state.webcamInput) {
 		layoutExtras.webcamInput?.applyState(state.webcamInput);
+	}
+	if (state.chainView) {
+		layoutExtras.chainView?.applyState(state.chainView);
 	}
 }
 

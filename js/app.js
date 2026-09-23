@@ -23,10 +23,10 @@ const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
 const DEFAULT_SCHEMA_NAME = "waxml.xsd";
 
 registerPanels([...document.querySelectorAll("main.app-panels > wa-panel")]);
-// wa-xml-tree, wa-section-view and wa-webcam-input aren't reachable from the
-// top-level document — they're built into wa-xml-editor's/wa-preview's/
-// wa-input-panel's own shadow roots (see those files' constructors) — one
-// shadow-boundary hop each.
+// wa-xml-tree, wa-section-view, wa-chain-view and wa-webcam-input aren't
+// reachable from the top-level document — they're built into
+// wa-xml-editor's/wa-preview's/wa-input-panel's own shadow roots (see those
+// files' constructors) — one shadow-boundary hop each.
 const xmlEditorEl = document.querySelector("wa-xml-editor");
 const previewEl = document.querySelector("wa-preview");
 const inputPanelEl = document.querySelector("wa-input-panel");
@@ -34,7 +34,8 @@ registerLayoutExtras({
 	xmlTree: xmlEditorEl?.shadowRoot.querySelector("wa-xml-tree"),
 	xmlEditor: xmlEditorEl,
 	sectionView: previewEl?.shadowRoot.querySelector("wa-section-view"),
-	webcamInput: inputPanelEl?.shadowRoot.querySelector("wa-webcam-input")
+	webcamInput: inputPanelEl?.shadowRoot.querySelector("wa-webcam-input"),
+	chainView: previewEl?.shadowRoot.querySelector("wa-chain-view")
 });
 initEditHistory();
 loadDefaultSchema().then(createDefaultProject);
