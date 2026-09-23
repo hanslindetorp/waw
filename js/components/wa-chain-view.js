@@ -516,14 +516,17 @@ export class WaChainView extends HTMLElement {
 		// is currently showing — an interface-only choice, never written to
 		// the XML document, persisted instead via getState()/applyState()
 		// (see workstation-state.js's registerLayoutExtras). Per Hans
-		// (2026-09-30). _activeAnalyserTicks/_analyserLoopId/
-		// _analyserFrameCounter drive ONE shared rAF loop for every
-		// currently-visible analyser card, rather than one timer per card —
-		// see _ensureAnalyserLoop.
+		// (2026-09-30). _activeAnalyserTicks and _activeRemoteControlTicks
+		// (the latter added per Hans 2026-09-23: a $var-controlled knob/curve
+		// must keep visually tracking the Variable's live value, not just
+		// snapshot it once at render — including when that Var is itself
+		// driven by an INPUT mapping) share ONE rAF loop rather than one
+		// timer per card/control — see _ensureLiveLoop.
 		this._analyserDisplayModes = new Map();
 		this._activeAnalyserTicks = new Set();
-		this._analyserLoopId = null;
-		this._analyserFrameCounter = 0;
+		this._activeRemoteControlTicks = new Set();
+		this._liveLoopId = null;
+		this._liveFrameCounter = 0;
 	}
 
 	connectedCallback() {
@@ -533,7 +536,7 @@ export class WaChainView extends HTMLElement {
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("change", this._onStoreChange);
-		this._stopAnalyserLoop();
+		this._stopLiveLoop();
 	}
 
 	// ── AnalyserNode cards: persistence (workstation-state.json) ──────────
@@ -555,35 +558,53 @@ export class WaChainView extends HTMLElement {
 		this.dispatchEvent(new CustomEvent("state-change", { bubbles: true, composed: true }));
 	}
 
-	// ── Shared rAF loop for every currently-visible AnalyserNode card —
-	// cheap by construction: one timer total regardless of how many
-	// analyser cards exist, each tick only reads+draws a canvas-width-
-	// bounded number of samples (see _buildAnalyserCard), and the loop
-	// only runs at all while at least one such card is actually mounted.
-	// Throttled to every 3rd frame (~20fps) — plenty smooth for a small
-	// meter, a third of the cost of a full 60fps loop. Per Hans (2026-09-30):
+	// ── Shared rAF loop for every currently-visible AnalyserNode card AND
+	// every currently-visible $var-controlled knob/curve — cheap by
+	// construction: one timer total no matter how many of either exist,
+	// each tick only reads+draws a canvas-width-bounded number of samples
+	// or a single live property, and the loop only runs at all while at
+	// least one such card/control is actually mounted. Throttled to every
+	// 3rd frame (~20fps) — plenty smooth for a small meter or a knob
+	// dial, a third of the cost of a full 60fps loop. Per Hans (2026-09-30):
 	// "använd ganska low-cost lösningar... så att inte det slöar ner
-	// systemet om man börjar göra många AnalyserNoder."
-	_ensureAnalyserLoop() {
-		if (this._analyserLoopId !== null) return;
+	// systemet om man börjar göra många AnalyserNoder." Extended per Hans
+	// (2026-09-23) to also drive remote-controlled knobs/curves, which
+	// previously only ever read the live value once at render time.
+	_ensureLiveLoop() {
+		if (this._liveLoopId !== null) return;
 		const loop = () => {
-			this._analyserLoopId = requestAnimationFrame(loop);
-			this._analyserFrameCounter++;
-			if (this._analyserFrameCounter % 3 !== 0) return;
-			if (this._activeAnalyserTicks.size === 0) {
-				this._stopAnalyserLoop();
+			this._liveLoopId = requestAnimationFrame(loop);
+			this._liveFrameCounter++;
+			if (this._liveFrameCounter % 3 !== 0) return;
+			if (this._activeAnalyserTicks.size === 0 && this._activeRemoteControlTicks.size === 0) {
+				this._stopLiveLoop();
 				return;
 			}
 			this._activeAnalyserTicks.forEach((tick) => tick());
+			this._activeRemoteControlTicks.forEach((tick) => tick());
 		};
-		this._analyserLoopId = requestAnimationFrame(loop);
+		this._liveLoopId = requestAnimationFrame(loop);
 	}
 
-	_stopAnalyserLoop() {
-		if (this._analyserLoopId !== null) {
-			cancelAnimationFrame(this._analyserLoopId);
-			this._analyserLoopId = null;
+	_stopLiveLoop() {
+		if (this._liveLoopId !== null) {
+			cancelAnimationFrame(this._liveLoopId);
+			this._liveLoopId = null;
 		}
+	}
+
+	// Registers `tick` (re-reads a $var-controlled attribute's live value
+	// and reapplies whatever visual represents it — a knob's rotation, a
+	// curve's redraw) to run every throttled frame via the shared loop
+	// above. Call once per locked control/card at build time, right after
+	// its first (snapshot) paint. Per Hans (2026-09-23): a knob mapped to
+	// $var1 must keep moving as $var1's own live value changes — including
+	// when var1 is itself driven by an INPUT mapping, which is just another
+	// source feeding the same live Variable/Watcher chain waxml.js already
+	// resolves; this file doesn't need to know or care which one is driving.
+	_watchRemoteControlled(tick) {
+		this._activeRemoteControlTicks.add(tick);
+		this._ensureLiveLoop();
 	}
 
 	_onStoreChange() {
@@ -633,11 +654,13 @@ export class WaChainView extends HTMLElement {
 		const node = xmlStore.getSelectedNode();
 		const resolved = this._resolveRenderList(node);
 		this._stackEl.innerHTML = "";
-		// Every card (including any AnalyserNode ones) gets rebuilt fresh
-		// below — drop the old tick callbacks so the shared loop (see
-		// _ensureAnalyserLoop) never calls into a canvas that's no longer in
-		// the DOM. Re-populated by _buildAnalyserCard as it runs.
+		// Every card (including any AnalyserNode ones and any $var-controlled
+		// knob/curve) gets rebuilt fresh below — drop the old tick callbacks
+		// so the shared loop (see _ensureLiveLoop) never calls into a
+		// canvas/knob that's no longer in the DOM. Re-populated as cards are
+		// built below.
 		this._activeAnalyserTicks = new Set();
+		this._activeRemoteControlTicks = new Set();
 
 		if (!resolved) return;
 
@@ -831,9 +854,13 @@ export class WaChainView extends HTMLElement {
 		if (isParamVarControlled(node, attrName)) {
 			knob.classList.add("remote-controlled");
 			chip.classList.add("var-controlled");
-			const live = getLiveProperty(node.attributes.id, attrName);
-			applyVisual(Number.isFinite(live) ? live : defaultValue);
+			const applyLive = () => {
+				const live = getLiveProperty(node.attributes.id, attrName);
+				applyVisual(Number.isFinite(live) ? live : defaultValue);
+			};
+			applyLive();
 			renderChip(node.attributes[attrName]);
+			this._watchRemoteControlled(applyLive);
 			return wrap;
 		}
 
@@ -980,12 +1007,16 @@ export class WaChainView extends HTMLElement {
 			knob.classList.add("remote-controlled");
 			chip.classList.add("var-controlled");
 			const isLinear = !isDbNativeGain(node.tagName);
-			const live = getLiveProperty(node.attributes.id, "gain");
-			const liveDb = Number.isFinite(live) ? (isLinear ? 20 * Math.log10(Math.max(1e-6, live)) : live) : 0;
-			applyVisual(liveDb);
+			const applyLive = () => {
+				const live = getLiveProperty(node.attributes.id, "gain");
+				const liveDb = Number.isFinite(live) ? (isLinear ? 20 * Math.log10(Math.max(1e-6, live)) : live) : 0;
+				applyVisual(liveDb);
+			};
+			applyLive();
 			renderChip(node.attributes.gain);
 			wrap.appendChild(chip);
 			card.appendChild(this._singleKnobRow(wrap));
+			this._watchRemoteControlled(applyLive);
 			return card;
 		}
 
@@ -1176,6 +1207,32 @@ export class WaChainView extends HTMLElement {
 			{ passive: false }
 		);
 
+		// Keeps the curve (and its handle) tracking a live $var value for
+		// whichever of frequency/Q/gain are currently locked — a one-time
+		// read at build time (state's own initial liveOrDefault above) would
+		// otherwise freeze the curve at whatever the Var happened to be when
+		// this card was last rebuilt. Per Hans (2026-09-23).
+		const freqIsLocked = isParamVarControlled(node, "frequency");
+		const qIsLocked = isParamVarControlled(node, "Q");
+		const gainIsLocked = isParamVarControlled(node, "gain");
+		if (freqIsLocked || qIsLocked || gainIsLocked) {
+			this._watchRemoteControlled(() => {
+				if (freqIsLocked) {
+					const live = getLiveProperty(node.attributes.id, "frequency");
+					if (Number.isFinite(live)) state.freq = live;
+				}
+				if (qIsLocked) {
+					const live = getLiveProperty(node.attributes.id, "Q");
+					if (Number.isFinite(live)) state.Q = live;
+				}
+				if (gainIsLocked) {
+					const live = getLiveProperty(node.attributes.id, "gain");
+					if (Number.isFinite(live)) state.gainDb = live;
+				}
+				this._redrawBiquadCanvas(canvas, state, select.value);
+			});
+		}
+
 		return card;
 	}
 
@@ -1341,6 +1398,23 @@ export class WaChainView extends HTMLElement {
 		knobRow.appendChild(this._buildSimpleKnob(node, "attack", 0, 1, "atk", (v) => `${Math.round(v * 1000)} ms`, 0.003));
 		knobRow.appendChild(this._buildSimpleKnob(node, "release", 0, 1, "rel", (v) => `${Math.round(v * 1000)} ms`, 0.25));
 		card.appendChild(knobRow);
+
+		// Keeps the transfer curve tracking a live $var value for whichever
+		// of threshold/ratio are currently locked — see the Biquad card's
+		// own identical comment. Per Hans (2026-09-23).
+		if (thresholdLocked() || ratioLocked()) {
+			this._watchRemoteControlled(() => {
+				if (thresholdLocked()) {
+					const live = getLiveProperty(node.attributes.id, "threshold");
+					if (Number.isFinite(live)) state.threshold = Math.max(COMP_DB_MIN, live);
+				}
+				if (ratioLocked()) {
+					const live = getLiveProperty(node.attributes.id, "ratio");
+					if (Number.isFinite(live)) state.ratio = live;
+				}
+				this._redrawCompressorCanvas(canvas, state);
+			});
+		}
 
 		return card;
 	}
@@ -1652,7 +1726,7 @@ export class WaChainView extends HTMLElement {
 			}
 		};
 		this._activeAnalyserTicks.add(tick);
-		this._ensureAnalyserLoop();
+		this._ensureLiveLoop();
 
 		return card;
 	}
@@ -1721,13 +1795,31 @@ export class WaChainView extends HTMLElement {
 		ctx.stroke();
 
 		const len = dataArray.length;
-		const points = Math.min(len, ANALYSER_WAVEFORM_MAX_POINTS);
-		const stride = len / points;
+		// Locks the visible window to the first rising zero-crossing (a
+		// classic oscilloscope trigger) so a periodic signal holds still
+		// instead of jittering every frame — each frame is an independent
+		// snapshot from getByteTimeDomainData, so without this the same
+		// phase of a repeating waveform lands at a different X each tick.
+		// Search only the first half so at least half the buffer always
+		// remains to draw; falls back to index 0 (old behavior) for
+		// silence/noise with no clean crossing.
+		let triggerIdx = 0;
+		const searchEnd = len >> 1;
+		for (let i = 1; i < searchEnd; i++) {
+			if (dataArray[i - 1] < 128 && dataArray[i] >= 128) {
+				triggerIdx = i;
+				break;
+			}
+		}
+
+		const span = len - triggerIdx;
+		const points = Math.min(span, ANALYSER_WAVEFORM_MAX_POINTS);
+		const stride = span / points;
 		ctx.strokeStyle = "#4fa3ff";
 		ctx.lineWidth = 1.5;
 		ctx.beginPath();
 		for (let i = 0; i < points; i++) {
-			const idx = Math.floor(i * stride);
+			const idx = triggerIdx + Math.floor(i * stride);
 			const v = dataArray[idx] / 128 - 1; // -1..1
 			const x = (i / (points - 1)) * w;
 			const y = h / 2 - v * (h * 0.45);
@@ -1738,22 +1830,36 @@ export class WaChainView extends HTMLElement {
 	}
 
 	// Bucketed into ANALYSER_FFT_BAR_COUNT bars regardless of
-	// frequencyBinCount (up to 16384) — same "low-cost" reasoning.
+	// frequencyBinCount (up to 16384) — same "low-cost" reasoning. Bucket
+	// edges are LOG-spaced over the bin index (bin 0, the DC bin, is
+	// skipped) rather than linear, and each bar takes the MAX bin in its
+	// range rather than the average. A linear/average split gave equal Hz
+	// width to every bar, so a fundamental plus its first several harmonics
+	// (where a waveform's shape — e.g. sawtooth vs. square — actually shows
+	// up) all landed in the same wide low bucket; averaging that bucket's
+	// mostly-near-silent neighboring bins against the one bin actually
+	// holding the peak made real peaks vanish (Hans, 2026-09-23: "de lägsta
+	// frekvenserna inkl. grundtonen saknas"), and also blurred distinct
+	// harmonics together into one rounded shape regardless of which were
+	// actually present. Log spacing gives the low/mid range far more of the
+	// 48 bars (where that structure lives) and compresses the sparse highs.
 	_drawAnalyserFFT(canvas, dataArray) {
 		const ctx = canvas.getContext("2d");
 		const w = canvas.width,
 			h = canvas.height;
 		ctx.clearRect(0, 0, w, h);
-		const barCount = Math.min(ANALYSER_FFT_BAR_COUNT, dataArray.length);
-		const binsPerBar = Math.max(1, Math.floor(dataArray.length / barCount));
+		const len = dataArray.length;
+		const barCount = Math.min(ANALYSER_FFT_BAR_COUNT, len - 1);
 		const barWidth = w / barCount;
 		ctx.fillStyle = "#4fa3ff";
 		for (let i = 0; i < barCount; i++) {
-			let sum = 0;
-			const start = i * binsPerBar;
-			for (let j = 0; j < binsPerBar; j++) sum += dataArray[start + j] || 0;
-			const avg = sum / binsPerBar;
-			const barH = (avg / 255) * h;
+			const start = Math.max(1, Math.round(Math.pow(len, i / barCount)));
+			const end = Math.max(start + 1, Math.round(Math.pow(len, (i + 1) / barCount)));
+			let peak = 0;
+			for (let bin = start; bin < end && bin < len; bin++) {
+				if (dataArray[bin] > peak) peak = dataArray[bin];
+			}
+			const barH = (peak / 255) * h;
 			ctx.fillRect(i * barWidth + 1, h - barH, Math.max(1, barWidth - 2), barH);
 		}
 	}

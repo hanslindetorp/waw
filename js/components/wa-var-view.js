@@ -437,13 +437,13 @@ template.innerHTML = `
 				<div class="map-grid">
 					<div class="map-mapin-label">mapin</div>
 					<div class="map-x-labels">
-						<span class="axis-label axis-mapin-min" data-which="mapin" data-endpoint="0" title="Double-click to edit"></span>
-						<span class="axis-label axis-mapin-max" data-which="mapin" data-endpoint="last" title="Double-click to edit"></span>
+						<span class="axis-label axis-mapin-min" title="Double-click to edit"></span>
+						<span class="axis-label axis-mapin-max" title="Double-click to edit"></span>
 					</div>
 					<div class="map-mapout-label">mapout</div>
 					<div class="map-y-labels">
-						<span class="axis-label axis-mapout-max" data-which="mapout" data-endpoint="last" title="Double-click to edit"></span>
-						<span class="axis-label axis-mapout-min" data-which="mapout" data-endpoint="0" title="Double-click to edit"></span>
+						<span class="axis-label axis-mapout-max" title="Double-click to edit"></span>
+						<span class="axis-label axis-mapout-min" title="Double-click to edit"></span>
 					</div>
 					<div class="map-wrap">
 						<canvas class="map-canvas" width="320" height="200"></canvas>
@@ -549,6 +549,20 @@ export class WaVarView extends HTMLElement {
 
 		this._activeNodeId = null;
 		this._ramCache = new Map(); // nodeId -> { mapin, mapout, pattern, curve, convert } (raw attribute strings)
+		// Mapping graph's own axis min/max, per Var — a pure VIEW setting, no
+		// longer the same number as the mapin/mapout endpoint DATA value (see
+		// _mapDomain's own comment). Never written to the XML document;
+		// persisted instead via getState()/applyState() (see
+		// workstation-state.js's registerLayoutExtras), same pattern as
+		// wa-chain-view.js's own _analyserDisplayModes. Keyed by the real XML
+		// `id` when the node has one, else the session-only internal tree id
+		// (see _axisOverrideKey). Per Hans (2026-09-30 correction): dragging a
+		// point used to be able to move this frame (an endpoint's drag did),
+		// which fed back into itself mid-drag — now the frame only ever
+		// changes via double-clicking its own label (_editAxisValue), and
+		// falls back to mapin/mapout's own extremes when nothing's stored
+		// here for this Var yet.
+		this._axisOverrides = new Map(); // key -> { mapinMin?, mapinMax?, mapoutMin?, mapoutMax? }
 		this._drag = null; // { index, isEndpoint, axisLock: "x"|"y"|null, startX, startY, isNew }
 		this._rafId = null;
 		this._disposed = false;
@@ -572,14 +586,11 @@ export class WaVarView extends HTMLElement {
 		window.addEventListener("mousemove", this._onMapPointerMove);
 		window.addEventListener("mouseup", this._onMapPointerUp);
 
-		Object.values(this._axisLabels).forEach((el) => {
+		Object.entries(this._axisLabels).forEach(([overrideKey, el]) => {
 			el.addEventListener("dblclick", () => {
 				const node = xmlStore.getSelectedNode();
 				if (!node || node.tagName !== "Var") return;
-				const which = el.dataset.which;
-				const arr = which === "mapin" ? this._currentMapin : this._currentMapout;
-				const index = el.dataset.endpoint === "last" ? arr.length - 1 : 0;
-				this._editAxisValue(node, which, index, el);
+				this._editAxisValue(node, overrideKey, el);
 			});
 		});
 
@@ -638,6 +649,29 @@ export class WaVarView extends HTMLElement {
 		this._convertSelect.appendChild(custom);
 	}
 
+	// ── Mapping graph axis overrides: persistence (workstation-state.json) ──
+	// See the constructor comment above.
+	_axisOverrideKey(node) {
+		return node.attributes.id || node.id;
+	}
+
+	getState() {
+		return { axisOverrides: Object.fromEntries(this._axisOverrides) };
+	}
+
+	applyState(state) {
+		if (!state || typeof state !== "object") return;
+		if (state.axisOverrides && typeof state.axisOverrides === "object") {
+			this._axisOverrides = new Map(Object.entries(state.axisOverrides));
+			const node = xmlStore.getSelectedNode();
+			if (node && node.tagName === "Var") this._render(node);
+		}
+	}
+
+	_dispatchStateChange() {
+		this.dispatchEvent(new CustomEvent("state-change", { bubbles: true, composed: true }));
+	}
+
 	// wa-preview.js only shows us for a <Var> selection — bail out otherwise
 	// (same shape as wa-wam-view.js's own _onStoreChange).
 	_onStoreChange() {
@@ -670,6 +704,28 @@ export class WaVarView extends HTMLElement {
 		this._currentCurve = curve;
 		this._currentConvert = convert;
 
+		// Bakes today's default-derived frame into this._axisOverrides the
+		// FIRST time this Var's graph ever renders with nothing already
+		// stored for it (a brand new Var, or one from a project file that
+		// predates this feature) — per Hans (2026-10-01 correction): leaving
+		// it un-baked meant _mapDomain's own "no override yet" fallback kept
+		// deriving the frame fresh from mapout's live endpoints on every
+		// render, so it silently snapped right back to "dragging changes the
+		// axes" the moment a drag committed a new endpoint value and the
+		// next render recomputed that same fallback. Once baked, an override
+		// always exists for this node from here on, so dragging (which only
+		// ever touches mapin/mapout DATA, never this map) truly can never
+		// move the frame again, first drag included — no separate "before
+		// you've ever double-clicked a label" gap to fall through.
+		const key = this._axisOverrideKey(node);
+		let override = this._axisOverrides.get(key);
+		if (!override) {
+			override = this._defaultAxisOverride(mapin, mapout);
+			this._axisOverrides.set(key, override);
+			this._dispatchStateChange();
+		}
+		this._currentAxisOverride = override;
+
 		this._renderPatternNode(node, pattern);
 		this._renderCurveNode(node, curve);
 		this._renderConvertNode(node, convert, mapout);
@@ -696,27 +752,26 @@ export class WaVarView extends HTMLElement {
 		if (headerHeight) this._wideConnectorEl.style.height = `${headerHeight}px`;
 
 		const chainRect = this._chainEl.getBoundingClientRect();
+		const graphRect = this._mapCanvas.getBoundingClientRect();
 		const mapRect = this._mapNodeEl.getBoundingClientRect();
 		const convertRect = this._convertNodeEl.getBoundingClientRect();
-		if (!chainRect.width || !mapRect.width || !convertRect.width) return;
+		if (!chainRect.width || !graphRect.width || !mapRect.width || !convertRect.width) return;
 		const GAP = 18;
-		const startX = mapRect.right - chainRect.left;
-		// The merged Mapping/Curve/Pattern box can be tall — starting the
-		// bracket from its vertical CENTER (the old behavior) put the start
-		// point arbitrarily high above Convert, forcing a long, disconnected-
-		// looking vertical run down the outside edge past the whole Pattern
-		// section. Starting from the box's own BOTTOM instead reads as "flow
-		// exits the bottom of this block" and keeps the bracket short and
-		// close to Convert, where it visually belongs. Per Hans (2026-09-30):
-		// "Pilen in i nedre blocket ser fortfarande inte bra ut."
-		const startY = mapRect.bottom - chainRect.top;
-		const bracketX = startX + GAP;
+		// Exact 4-point spec per Hans (2026-09-30), with a sketch: starts to
+		// the right of, and level with the vertical center of, the Mapping
+		// GRAPH itself (not the whole merged Mapping/Curve/Pattern box) —
+		// turns down to the middle of the gap before Convert, turns left
+		// there, then straight down into Convert's own top edge (center),
+		// ending in the arrowhead.
+		const startX = graphRect.right - chainRect.left + GAP;
+		const startY = graphRect.top + graphRect.height / 2 - chainRect.top;
+		const mergedBoxBottom = mapRect.bottom - chainRect.top;
 		const convertTopY = convertRect.top - chainRect.top;
+		const gapMidY = (mergedBoxBottom + convertTopY) / 2;
 		const convertCenterX = convertRect.left + convertRect.width / 2 - chainRect.left;
-		const dropY = convertTopY - 6;
 		this._flowArrowPath.setAttribute(
 			"d",
-			`M${startX},${startY} L${bracketX},${startY} L${bracketX},${dropY} L${convertCenterX},${dropY} L${convertCenterX},${convertTopY}`
+			`M${startX},${startY} L${startX},${gapMidY} L${convertCenterX},${gapMidY} L${convertCenterX},${convertTopY}`
 		);
 	}
 
@@ -796,16 +851,48 @@ export class WaVarView extends HTMLElement {
 		this._drawConvertCurve(convert, this._convertDomain);
 	}
 
-	// The Y-axis frame comes from the two mapout ENDPOINTS only (not every
-	// point's value) — per Hans (2026-09-25): min/max form a fixed frame
-	// that dragging an interior point is clamped inside, rather than the
-	// view rescaling to chase whatever's being dragged. Only moving an
-	// endpoint itself (or double-clicking its axis label) changes the frame.
-	_mapDomain(mapin, mapout) {
-		const minIn = mapin[0];
-		const maxIn = mapin[mapin.length - 1];
-		let minOut = Math.min(mapout[0], mapout[mapout.length - 1]);
-		let maxOut = Math.max(mapout[0], mapout[mapout.length - 1]);
+	// The frame (min/max for both axes) is now a VIEW setting entirely
+	// The plain default frame, before anything's been explicitly overridden
+	// — mapin's own two endpoints for X, the min/max of mapout's two
+	// endpoints for Y (same derivation this always used). _render() bakes
+	// this straight into this._axisOverrides the first time a Var's graph
+	// ever renders with nothing stored yet (see its own comment), so in
+	// practice this only ever runs once per Var, not on every render.
+	_defaultAxisOverride(mapin, mapout) {
+		return {
+			mapinMin: mapin[0],
+			mapinMax: mapin[mapin.length - 1],
+			mapoutMin: Math.min(mapout[0], mapout[mapout.length - 1]),
+			mapoutMax: Math.max(mapout[0], mapout[mapout.length - 1])
+		};
+	}
+
+	// independent of the mapin/mapout DATA — `override` (this._axisOverrides,
+	// see the constructor comment) supplies all 4 edges in practice, since
+	// _render() bakes in _defaultAxisOverride() the very first time this
+	// node ever renders (see its own comment) — the `??` fallbacks below are
+	// only a defensive backstop, never actually exercised in normal use.
+	// Dragging a point NEVER changes this frame, endpoints included — every
+	// dragged point (see _onMapPointerMove's frozen `domain`) is clamped
+	// inside it instead. Per Hans (2026-09-30 / 2026-10-01 corrections): the
+	// frame and the mapin/mapout data used to be the same number, so
+	// dragging an endpoint moved the frame live, which fed back into itself
+	// every mousemove (the frame shifts -> the same pixel now maps to a
+	// different value -> the point jumps -> the frame shifts again) —
+	// visible as the graph "shaking" and the point snapping to an arbitrary
+	// value on release instead of where it was actually dropped. Simply
+	// decoupling them wasn't quite enough on its own, though: a Var with
+	// nothing explicitly overridden yet still recomputed this fallback fresh
+	// on every render, so it silently drifted right back to the same bug the
+	// instant a drag committed a new endpoint value — hence baking the
+	// default in immediately (this override, stored outside the XML document
+	// since it's pure interface state — see getState/applyState) rather than
+	// leaving it to be computed on demand.
+	_mapDomain(mapin, mapout, override) {
+		const minIn = override?.mapinMin ?? mapin[0];
+		const maxIn = override?.mapinMax ?? mapin[mapin.length - 1];
+		let minOut = override?.mapoutMin ?? Math.min(mapout[0], mapout[mapout.length - 1]);
+		let maxOut = override?.mapoutMax ?? Math.max(mapout[0], mapout[mapout.length - 1]);
 		if (minOut === maxOut) {
 			minOut -= 0.5;
 			maxOut += 0.5;
@@ -826,21 +913,29 @@ export class WaVarView extends HTMLElement {
 		return domain.minOut + ((h - MAP_PADDING - py) / (h - 2 * MAP_PADDING)) * (domain.maxOut - domain.minOut);
 	}
 
-	_renderMapCanvas(mapin, mapout, curve, pattern) {
+	// `forcedDomain` (optional): used only while a point drag is in progress
+	// (see _onMapPointerMove) — passes the frame frozen at drag-start instead
+	// of letting this recompute it from the point currently being dragged,
+	// which is exactly the feedback loop _mapDomain's own comment warns
+	// about. Per Hans (2026-09-30).
+	_renderMapCanvas(mapin, mapout, curve, pattern, forcedDomain) {
 		const canvas = this._mapCanvas;
 		const w = canvas.width,
 			h = canvas.height;
 		const ctx = this._mapCtx;
 		ctx.clearRect(0, 0, w, h);
-		const domain = this._mapDomain(mapin, mapout);
+		const domain = forcedDomain || this._mapDomain(mapin, mapout, this._currentAxisOverride);
 		this._mapDomainCache = domain;
 
 		// The big, editable min/max values now live outside the canvas as
 		// real DOM elements (see the axis-label spans in the template) —
 		// easier to hit and to show as editable (text cursor, underline) than
 		// the old in-canvas fillText labels were. Per Hans (2026-09-25).
-		this._axisLabels.mapinMin.textContent = fmtNum(mapin[0]);
-		this._axisLabels.mapinMax.textContent = fmtNum(mapin[mapin.length - 1]);
+		// Shows the FRAME (domain.*), not the raw mapin/mapout endpoint data
+		// — the two can now differ whenever an axis override is set (see
+		// _mapDomain's own comment). Per Hans (2026-09-30 correction).
+		this._axisLabels.mapinMin.textContent = fmtNum(domain.minIn);
+		this._axisLabels.mapinMax.textContent = fmtNum(domain.maxIn);
 		this._axisLabels.mapoutMax.textContent = fmtNum(domain.maxOut);
 		this._axisLabels.mapoutMin.textContent = fmtNum(domain.minOut);
 
@@ -997,7 +1092,11 @@ export class WaVarView extends HTMLElement {
 			isEndpoint: idx === 0 || idx === this._mapPoints.length - 1,
 			axisLock: null,
 			startPx: px,
-			startPy: py
+			startPy: py,
+			// Frozen for the whole gesture — see _mapDomain's own comment and
+			// _onMapPointerMove, which uses this instead of recomputing the
+			// frame from the point currently being dragged.
+			domain: this._mapDomainCache
 		};
 	}
 
@@ -1010,7 +1109,7 @@ export class WaVarView extends HTMLElement {
 		const sy = this._mapCanvas.height / rect.height;
 		const px = (e.clientX - rect.left) * sx;
 		const py = (e.clientY - rect.top) * sy;
-		const domain = this._mapDomainCache;
+		const domain = this._drag.domain;
 		const w = this._mapCanvas.width,
 			h = this._mapCanvas.height;
 
@@ -1028,11 +1127,11 @@ export class WaVarView extends HTMLElement {
 
 		if (!this._drag.axisLock || this._drag.axisLock === "y") {
 			let y = this._fromCanvasY(py, domain, h);
-			// Interior points are clamped inside the current min/max frame —
-			// only dragging an endpoint itself may move the frame. Per Hans
-			// (2026-09-25): the view must never rescale just because a point
-			// was dragged past its edge.
-			if (!this._drag.isEndpoint) y = clampNum(y, domain.minOut, domain.maxOut);
+			// Every point, endpoints included, is clamped inside the frame
+			// frozen at drag-start — dragging never moves or rescales the
+			// frame itself anymore (see _mapDomain's own comment). To change
+			// the frame, double-click its axis label instead.
+			y = clampNum(y, domain.minOut, domain.maxOut);
 			mapout[idx] = y;
 		}
 		if ((!this._drag.axisLock || this._drag.axisLock === "x") && !this._drag.isEndpoint) {
@@ -1046,7 +1145,7 @@ export class WaVarView extends HTMLElement {
 
 		this._currentMapin = mapin;
 		this._currentMapout = mapout;
-		this._renderMapCanvas(mapin, mapout, this._currentCurve, null);
+		this._renderMapCanvas(mapin, mapout, this._currentCurve, null, domain);
 		this._showCoordTooltip(px, py, mapin[idx], mapout[idx]);
 	}
 
@@ -1146,12 +1245,27 @@ export class WaVarView extends HTMLElement {
 		return next.length ? next.join(",") : "linear";
 	}
 
-	// `labelEl` is one of the DOM axis-label spans (see the template) —
-	// swapped for a real <input> in place, rather than an absolutely
-	// positioned overlay, per Hans (2026-09-25): easier to hit, and the
-	// browser's own text cursor makes it obvious it's editable.
-	_editAxisValue(node, which, index, labelEl) {
-		const current = which === "mapin" ? this._currentMapin[index] : this._currentMapout[index];
+	// `labelEl` is one of the DOM axis-label spans (see the template);
+	// `overrideKey` is one of "mapinMin"/"mapinMax"/"mapoutMin"/"mapoutMax"
+	// (see this._axisLabels/this._axisOverrides). Swapped for a real
+	// <input> in place, rather than an absolutely positioned overlay, per
+	// Hans (2026-09-25): easier to hit, and the browser's own text cursor
+	// makes it obvious it's editable.
+	//
+	// Edits the Mapping graph's own VIEW frame (this._axisOverrides,
+	// persisted via getState()/applyState()) — never the mapin/mapout XML
+	// attribute. Per Hans (2026-09-30 correction): the frame and the
+	// mapin/mapout DATA used to be the same number (editing an endpoint's
+	// axis label also rescaled every interior point to fit the new range),
+	// which is exactly the coupling that made dragging a point jitter the
+	// frame mid-drag. They're fully independent now — dragging a point only
+	// ever changes mapin/mapout data (clamped inside whatever frame is
+	// currently showing, see _onMapPointerMove), and double-clicking a
+	// label here is the only thing that changes the frame itself.
+	_editAxisValue(node, overrideKey, labelEl) {
+		const domain = this._mapDomainCache;
+		const current =
+			overrideKey === "mapinMin" ? domain.minIn : overrideKey === "mapinMax" ? domain.maxIn : overrideKey === "mapoutMin" ? domain.minOut : domain.maxOut;
 		const input = document.createElement("input");
 		input.type = "number";
 		input.step = "any";
@@ -1170,13 +1284,13 @@ export class WaVarView extends HTMLElement {
 			const v = parseFloat(input.value);
 			input.replaceWith(labelEl);
 			if (!Number.isFinite(v)) return;
-			const arr = which === "mapin" ? [...this._currentMapin] : [...this._currentMapout];
-			this._rescaleInteriorPoints(arr, index, v);
-			if (which === "mapin") {
-				this._writeAttrs(node, { mapin: arr.join(",") });
-			} else {
-				this._writeAttrs(node, { mapout: arr.join(",") });
-			}
+			const key = this._axisOverrideKey(node);
+			const override = { ...(this._axisOverrides.get(key) || {}) };
+			override[overrideKey] = v;
+			this._axisOverrides.set(key, override);
+			this._currentAxisOverride = override;
+			this._renderMapCanvas(this._currentMapin, this._currentMapout, this._currentCurve, this._currentPattern);
+			this._dispatchStateChange();
 		};
 		input.addEventListener("blur", commit);
 		input.addEventListener("keydown", (e) => {
@@ -1186,28 +1300,6 @@ export class WaVarView extends HTMLElement {
 				input.replaceWith(labelEl);
 			}
 		});
-	}
-
-	// Mutates `arr` in place: sets the edited endpoint to `newValue`, then
-	// rescales every interior point to keep its *relative* position between
-	// the two endpoints — the curve's shape stays intact, only the numbers
-	// move to fit the new range. Per Hans (2026-09-25). The other endpoint
-	// never moves. A degenerate old range (both endpoints were equal) has
-	// no meaningful "relative position" to preserve, so interior points are
-	// left untouched in that case.
-	_rescaleInteriorPoints(arr, editedIndex, newValue) {
-		const otherIndex = editedIndex === 0 ? arr.length - 1 : 0;
-		const oldEdited = arr[editedIndex];
-		const otherValue = arr[otherIndex];
-		const oldRange = otherValue - oldEdited;
-		arr[editedIndex] = newValue;
-		if (oldRange === 0) return;
-		const newRange = otherValue - newValue;
-		for (let k = 0; k < arr.length; k++) {
-			if (k === editedIndex || k === otherIndex) continue;
-			const t = (arr[k] - oldEdited) / oldRange;
-			arr[k] = newValue + t * newRange;
-		}
 	}
 
 	// ── Pattern node ─────────────────────────────────────────────────────

@@ -93,6 +93,14 @@ export class WaxmlBridge {
 		this.waxml.stop("all");
 	}
 
+	// Selector-scoped stop (a root-level Command type="stop" shortcut, see
+	// wa-bottom-bar.js) — unlike stopAll() above, only stops whatever
+	// matches `selector`, same "talk straight to whatever's already loaded
+	// live" idea as trig(). Per Hans (2026-10-01).
+	stopSelector(selector) {
+		this.waxml.stop(selector);
+	}
+
 	// Pushes a live value into a <Var> (see wa-var-knobs.js) — every "$name"
 	// attribute elsewhere in the document that references it picks the new
 	// value up on its own via waxml.js's own Watcher mechanism, no document

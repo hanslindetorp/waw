@@ -13,9 +13,9 @@ import "./wa-var-knobs.js";
 // Variables column by one shared vertical divider whose x-position is
 // balanced by content (see _recalcLayout):
 //   - The GLOBAL row is always visible: PLAY/STOP/the CSS trigger-selector
-//     field and every root-level <Command> (type="trig" *or* "set" — the
-//     "+" button still only ever creates a "trig" one) on the left, every
-//     root-level <Var> knob on the right.
+//     field and every root-level <Command> — type="trig", "set", *or*
+//     "stop" (per Hans, 2026-10-01; the "+" button still only ever creates
+//     a "trig" one) — on the left, every root-level <Var> knob on the right.
 //   - The LOCAL row only appears while the current XML selection has its
 //     own <Command>/<Var> children — same two columns, scoped to that
 //     element instead of the document root, with no "+" buttons (nothing
@@ -235,6 +235,13 @@ template.innerHTML = `
 			opacity: 0.7;
 			color: var(--waw-teal, #45b58c);
 		}
+		.shortcut-stop-icon {
+			flex: 0 0 auto;
+			width: 9px;
+			height: 9px;
+			opacity: 0.7;
+			color: var(--waw-danger, #e5484d);
+		}
 		.shortcut-btn::before {
 			content: "";
 			position: absolute;
@@ -422,6 +429,24 @@ export class WaBottomBar extends HTMLElement {
 		return svg;
 	}
 
+	// A small filled square — the same glyph the transport's own STOP button
+	// uses (see .tp-btn[data-action="stop"]'s "■" text) — for a type="stop"
+	// Command shortcut. Per Hans (2026-10-01).
+	_buildStopIcon() {
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		svg.setAttribute("class", "shortcut-stop-icon");
+		svg.setAttribute("viewBox", "0 0 24 24");
+		svg.setAttribute("fill", "currentColor");
+		const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+		rect.setAttribute("x", "6");
+		rect.setAttribute("y", "6");
+		rect.setAttribute("width", "12");
+		rect.setAttribute("height", "12");
+		rect.setAttribute("rx", "1.5");
+		svg.appendChild(rect);
+		return svg;
+	}
+
 	_onPlayerChange() {
 		this._playBtn.classList.toggle("active", playerStore.isPlaying);
 		this._playBtn.disabled = !playerStore.triggerSelector;
@@ -453,10 +478,13 @@ export class WaBottomBar extends HTMLElement {
 
 	// A Command qualifies as a shortcut button if it's a usable "trig" (has
 	// a selector in `value`, matching wa-player-bar.js's own established
-	// convention) or a usable "set" (has a `variable` to set — `value` can
-	// be empty/0, both truthy *strings*, so this only excludes a Command
-	// missing the attribute entirely). Per Hans (2026-09-20): "inte bara
-	// type='trig' utan även type='set'".
+	// convention), a usable "set" (has a `variable` to set — `value` can be
+	// empty/0, both truthy *strings*, so this only excludes a Command
+	// missing the attribute entirely), or a usable "stop" (has a selector in
+	// `value`, same convention as "trig" — see waxml.stop()'s own selector
+	// argument). Per Hans (2026-09-20): "inte bara type='trig' utan även
+	// type='set'"; per Hans (2026-10-01): "Alla <Command> i rootnivå ska
+	// visas... även type='set' och type='stop'".
 	_qualifyingCommands(scopeNode) {
 		if (!scopeNode) return [];
 		return scopeNode.children.filter((c) => {
@@ -464,6 +492,7 @@ export class WaBottomBar extends HTMLElement {
 			const type = c.attributes.type || "trig";
 			if (type === "trig") return !!c.attributes.value;
 			if (type === "set") return !!c.attributes.variable;
+			if (type === "stop") return !!c.attributes.value;
 			return false;
 		});
 	}
@@ -540,7 +569,7 @@ export class WaBottomBar extends HTMLElement {
 	}
 
 	_buildShortcutButton(cmd) {
-		const isSet = (cmd.attributes.type || "trig") === "set";
+		const type = cmd.attributes.type || "trig";
 		const btn = document.createElement("button");
 		btn.type = "button";
 		btn.className = "shortcut-btn";
@@ -548,17 +577,20 @@ export class WaBottomBar extends HTMLElement {
 
 		const label = document.createElement("span");
 		label.className = "shortcut-label";
-		if (isSet) {
+		if (type === "set") {
 			// variable=value, unless an explicit label overrides it — mirrors
 			// the trig button's own "just show what it does" convention.
 			label.textContent = cmd.attributes.label || `${cmd.attributes.variable}=${cmd.attributes.value ?? ""}`;
 			btn.title = `set(${cmd.attributes.variable} = ${cmd.attributes.value ?? ""})`;
+		} else if (type === "stop") {
+			label.textContent = cmd.attributes.label || (cmd.attributes.value || "").replace(/^[.#]/, "");
+			btn.title = `stop(${cmd.attributes.value})`;
 		} else {
 			label.textContent = (cmd.attributes.value || "").replace(/^[.#]/, "");
 			btn.title = `trig(${cmd.attributes.value})`;
 		}
 		btn.appendChild(label);
-		btn.appendChild(isSet ? this._buildSetIcon() : this._buildPlayIcon());
+		btn.appendChild(type === "set" ? this._buildSetIcon() : type === "stop" ? this._buildStopIcon() : this._buildPlayIcon());
 
 		btn.addEventListener("click", (e) => {
 			const rect = btn.getBoundingClientRect();
@@ -569,9 +601,11 @@ export class WaBottomBar extends HTMLElement {
 				e.clientY <= rect.bottom - SHORTCUT_EDGE_PX;
 			if (inCenter) {
 				this._blink(btn);
-				if (isSet) {
+				if (type === "set") {
 					const parsed = parseFloat(cmd.attributes.value);
 					playerStore.setVariable(cmd.attributes.variable, Number.isFinite(parsed) ? parsed : cmd.attributes.value);
+				} else if (type === "stop") {
+					playerStore.stopShortcut(cmd.attributes.value);
 				} else {
 					playerStore.trigShortcut(cmd.attributes.value);
 				}

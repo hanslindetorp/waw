@@ -59,6 +59,11 @@ export function registerLayoutExtras(refs) {
 	// FFT, per node) — a pure interface preference, never a WAXML document
 	// attribute (per Hans, 2026-09-30), same reasoning as webcamInput above.
 	layoutExtras.chainView?.addEventListener("state-change", scheduleSave);
+	// wa-var-view.js's own Mapping-graph axis min/max overrides, per Var —
+	// a pure VIEW frame, decoupled from the mapin/mapout XML data it used to
+	// double as (per Hans, 2026-09-30 correction — see wa-var-view.js's own
+	// _mapDomain comment), same reasoning as chainView above.
+	layoutExtras.varView?.addEventListener("state-change", scheduleSave);
 }
 
 function captureState() {
@@ -83,6 +88,8 @@ function captureState() {
 	if (webcamState) state.webcamInput = webcamState;
 	const chainViewState = layoutExtras.chainView?.getState();
 	if (chainViewState) state.chainView = chainViewState;
+	const varViewState = layoutExtras.varView?.getState();
+	if (varViewState) state.varView = varViewState;
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -128,6 +135,9 @@ function applyState(state) {
 	}
 	if (state.chainView) {
 		layoutExtras.chainView?.applyState(state.chainView);
+	}
+	if (state.varView) {
+		layoutExtras.varView?.applyState(state.varView);
 	}
 }
 

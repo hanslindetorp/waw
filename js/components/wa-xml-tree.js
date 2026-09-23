@@ -977,7 +977,95 @@ export class WaXmlTree extends HTMLElement {
 			return cell;
 		});
 
+		this._wireAddRowDragEvents([nameCell, ...attrCells], parentNode, allowedChildren);
+
 		return { elementCell: nameCell, attrCells };
+	}
+
+	// The trailing "+" row sits right after a parent's last child (see
+	// _flatten) but — unlike a real node row — had no drag/drop wiring at
+	// all, so dropping there just silently did nothing: the host's own
+	// catch-all `dragover`/`drop` preventDefault() (connectedCallback, "a
+	// file dropped on any gap... falls through to the browser's native
+	// 'open this file' behaviour otherwise") suppressed the browser's
+	// no-drop cursor, making it *look* like a valid target, but nothing ever
+	// actually handled the drop — so the dragged row just snapped back to
+	// its old spot. Bug found per Hans (2026-10-01): "Om man försöker dra
+	// ett element och lägga det sist i sitt parent så går inte det." This
+	// row is always the correct "append as this parent's last child" target
+	// — no before/after distinction needed, unlike a real node row — so
+	// dropping here always calls reparentNode with index=undefined (append).
+	_wireAddRowDragEvents(cells, parentNode, allowedChildren) {
+		const onDragOver = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+
+			const types = e.dataTransfer.types;
+			const isOsFileDrag = types.includes("Files") && !types.includes("text/plain");
+			const isVfsFileDrag = types.includes(VFS_FILE_DRAG_TYPE);
+
+			if (isOsFileDrag) {
+				// Same rule as a real node row's own OS-file handling: only ever
+				// sets an existing element's src, never inserts a new node.
+				e.dataTransfer.dropEffect = "none";
+				return;
+			}
+
+			const schema = xmlStore.schema;
+			let allowed;
+			if (isVfsFileDrag) {
+				allowed = !schema || allowedChildren.includes(FILE_DROP_TAG);
+			} else {
+				const draggedNode = ops.findNodeById(xmlStore.root, this._dragState.draggedNodeId);
+				allowed = !!draggedNode && (!schema || allowedChildren.includes(draggedNode.tagName));
+			}
+
+			if (allowed) {
+				e.dataTransfer.dropEffect = isVfsFileDrag ? "copy" : "move";
+				this._setDropIndicator(cells, parentNode.id, "before");
+			} else {
+				e.dataTransfer.dropEffect = "none";
+				this._clearDropIndicators();
+				this._dragState = { ...this._dragState, dropTargetId: null, dropPosition: null };
+			}
+		};
+
+		const onDrop = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this._clearDropIndicators();
+
+			const types = e.dataTransfer.types;
+			const isOsFileDrag = types.includes("Files") && !types.includes("text/plain");
+			const isVfsFileDrag = types.includes(VFS_FILE_DRAG_TYPE);
+			if (isOsFileDrag) return;
+
+			const schema = xmlStore.schema;
+			if (isVfsFileDrag) {
+				const allowed = !schema || allowedChildren.includes(FILE_DROP_TAG);
+				if (allowed) {
+					const fileNodeId = getDraggedFileIds(e.dataTransfer)[0];
+					const fileNode = vfs.getNode(fileNodeId);
+					if (fileNode && fileNode.type === "file") {
+						xmlStore.insertNewChild(parentNode.id, FILE_DROP_TAG, { src: vfs.getExportPath(fileNode.id) }, undefined);
+					}
+				}
+				this._dragState = { draggedNodeId: null, dropTargetId: null, dropPosition: null };
+				return;
+			}
+
+			const draggedNodeId = this._dragState.draggedNodeId;
+			const draggedNode = draggedNodeId ? ops.findNodeById(xmlStore.root, draggedNodeId) : null;
+			if (draggedNode && (!schema || allowedChildren.includes(draggedNode.tagName))) {
+				xmlStore.reparentNode(draggedNodeId, parentNode.id, undefined);
+			}
+			this._dragState = { draggedNodeId: null, dropTargetId: null, dropPosition: null };
+		};
+
+		cells.forEach((c) => {
+			c.addEventListener("dragover", onDragOver);
+			c.addEventListener("drop", onDrop);
+		});
 	}
 
 	_renderNodeRow({ node, depth, isRoot, hasChildren, canHaveChildren, allowedChildren, parentAllowedChildren }) {

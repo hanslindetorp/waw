@@ -281,6 +281,24 @@ class PlayerStore extends EventTarget {
 		this._emit();
 	}
 
+	// Fires a one-off, selector-scoped stop (a trigger-shortcut Command
+	// button's type="stop") — waxml.stop(selector) only stops whatever
+	// matches that selector, unlike stop() above which is the transport-
+	// level STOP button (stopAll(), the whole graph). Per Hans (2026-10-01):
+	// root-level type="stop" Commands need to actually run waxml.stop(),
+	// same as type="trig"/"set" already run waxml.trig()/setVariable().
+	// Never loads the document first (unlike trigShortcut) — nothing can be
+	// playing on a document that hasn't loaded yet, so there's nothing to
+	// stop.
+	stopShortcut(selector) {
+		if (!selector || !this._documentLoaded) return;
+		try {
+			bridge.stopSelector(selector);
+		} catch {
+			// waxml not loaded / nothing matching — fine, we're stopping anyway.
+		}
+	}
+
 	// Pushes a live value into a <Var> by name (see wa-var-knobs.js) —
 	// independent of isPlaying/triggerSelector, same as trigShortcut, but
 	// doesn't reload the document first: a <Var>'s own Variable object exists
