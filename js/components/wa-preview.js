@@ -10,6 +10,8 @@ import "./wa-mixer-view.js";
 import "./wa-wam-view.js";
 import "./wa-var-view.js";
 import "./wa-composition-view.js";
+import "./wa-chain-view.js";
+import { SUPPORTED_CHAIN_NODE_TAGS } from "./wa-chain-view.js";
 import { isPreviewableAudioFile } from "./wa-file-preview.js";
 
 // Preview panel (panel 3): reflects whatever is selected in the XML editor
@@ -162,6 +164,10 @@ template.innerHTML = `
 		<wa-var-view></wa-var-view>
 	</div>
 
+	<div class="state" data-state="chain">
+		<wa-chain-view></wa-chain-view>
+	</div>
+
 	<div class="state padded" data-state="audio">
 		<canvas class="waveform" width="600" height="100"></canvas>
 		<div class="waxml-controls">
@@ -311,6 +317,21 @@ export class WaPreview extends HTMLElement {
 		// Same idea as the Section carve-out above, for a Mixer's own
 		// descendants — see isDescendantOfTag.
 		if (this._activeState === "mixer" && isDescendantOfTag(node, "Mixer")) {
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
+		// A <Chain> (a freestanding effects chain — not currently showing as
+		// part of a <Mixer> channel strip, which the carve-out just above
+		// already keeps sticky) or one of the native Web Audio node types
+		// wa-chain-view.js has a dedicated card for, selected directly —
+		// e.g. straight from the XML tree, without going through Mixer at
+		// all. Placed after every Mixer-specific branch above so it only
+		// ever replaces what used to be the bare attribute-list fallback,
+		// never the Mixer channel-strip view itself. Per Hans (2026-09-27).
+		if (node.tagName === "Chain" || SUPPORTED_CHAIN_NODE_TAGS.has(node.tagName)) {
+			this._showState("chain");
 			this._lastNodeId = node.id;
 			this._lastResolvedUrl = null;
 			return;

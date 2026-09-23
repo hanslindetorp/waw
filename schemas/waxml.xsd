@@ -427,6 +427,13 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
+  <xs:simpleType name="curveBezier">
+    <xs:annotation>
+      <xs:documentation>Editor-only source data for a WaveShaperNode's bezier curve editor: 8 comma-separated numbers "p0x,p0y,c1x,c1y,c2x,c2y,p3x,p3y" (a single cubic bezier segment, each coordinate in -1..1) describing the handle positions the curve editor UI shows/drags. The actual WaveShaperNode.curve attribute (a flat sample array) is derived from this and is what the audio engine reads - this attribute exists purely so re-opening the editor can restore the exact handle positions instead of re-fitting a bezier from sampled data.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string"/>
+  </xs:simpleType>
+
   <xs:simpleType name="mapin">
     <xs:annotation>
       <xs:documentation></xs:documentation>
@@ -1410,6 +1417,7 @@
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
           <xs:attribute name="curve" type="curve"/>
+          <xs:attribute name="curveBezier" type="curveBezier"/>
           <xs:attribute name="oversample" type="oversample"/>
         </xs:complexType>
       </xs:element>
