@@ -65,6 +65,16 @@ function commitRaw(getNode, attrName, raw) {
 // stopImmediatePropagation keeps that later listener from also firing for
 // the same pointerdown, since registration order (not capture/bubble
 // phase) decides listener order for listeners on the same element.
+//
+// Disarms Map mode itself right after a successful claim, rather than
+// leaving it armed for a follow-up claim elsewhere — per Hans (2026-10-01):
+// the "Map..." button's blink never stopped once you'd actually finished
+// binding a parameter, which read as broken even though it was originally
+// deliberate (2026-09-27: one Var wired to many attributes in a row without
+// re-clicking Map each time). var-map-mode.js's own "any unclaimed click
+// disarms" listener never got a chance to run here anyway, since
+// stopPropagation (needed to stop wireKnobDrag's own pointerdown from also
+// firing) keeps this pointerdown from ever reaching it.
 export function wireMapClaim(el, { getNode, attrName }) {
 	el.addEventListener("pointerdown", (e) => {
 		if (!varMapMode.armed) return;
@@ -72,6 +82,7 @@ export function wireMapClaim(el, { getNode, attrName }) {
 		e.stopPropagation();
 		e.stopImmediatePropagation();
 		commitRaw(getNode, attrName, `$${varMapMode.varName}`);
+		varMapMode.disarm();
 	});
 }
 

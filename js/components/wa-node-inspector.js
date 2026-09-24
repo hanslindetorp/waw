@@ -582,12 +582,21 @@ export class WaNodeInspector extends HTMLElement {
 		// attribute to that Var ($name syntax) instead of doing whatever the
 		// row's own control would normally do — claims the click
 		// (stopPropagation) so var-map-mode's own document-level listener
-		// sees this as "handled" and stays armed, letting one Var get wired
-		// to many attributes without re-clicking Map each time. Per Hans
-		// (2026-09-27). Bubble phase is enough: preventDefault() here still
-		// blocks whatever default action the actual clicked control (an
-		// <input>, <select>, ...) would otherwise have taken, since default
-		// actions run after the whole dispatch, not interleaved with it.
+		// never sees it as an unclaimed click. Bubble phase is enough:
+		// preventDefault() here still blocks whatever default action the
+		// actual clicked control (an <input>, <select>, ...) would otherwise
+		// have taken, since default actions run after the whole dispatch,
+		// not interleaved with it.
+		//
+		// Disarms Map mode itself right after a successful claim — per Hans
+		// (2026-10-01): the "Map..." button kept blinking even after a
+		// parameter was actually bound, which read as broken. (Originally,
+		// 2026-09-27, this deliberately stayed armed so one Var could be
+		// wired to many attributes in a row without re-clicking Map each
+		// time — since stopPropagation here kept the click from ever
+		// reaching var-map-mode's own "unclaimed click disarms" listener
+		// anyway, that never actually gave any visual feedback that the
+		// bind had succeeded.)
 		row.addEventListener("click", (e) => {
 			if (!varMapMode.armed) return;
 			e.preventDefault();
@@ -595,6 +604,7 @@ export class WaNodeInspector extends HTMLElement {
 			const current = xmlStore.getSelectedNode();
 			if (!current || current.id !== node.id) return;
 			xmlStore.updateAttributes(node.id, { ...current.attributes, [attrName]: `$${varMapMode.varName}` });
+			varMapMode.disarm();
 		});
 
 		const nameSpan = document.createElement("span");

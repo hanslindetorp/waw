@@ -1289,7 +1289,14 @@ export class WaVarView extends HTMLElement {
 			override[overrideKey] = v;
 			this._axisOverrides.set(key, override);
 			this._currentAxisOverride = override;
-			this._renderMapCanvas(this._currentMapin, this._currentMapout, this._currentCurve, this._currentPattern);
+			// Widening/narrowing the frame can leave existing mapin/mapout
+			// points outside it entirely — e.g. a 0,0 - 1,1 line whose mapout
+			// axis gets typed to 100..400 would otherwise sit invisible far
+			// below the new bottom edge. Snap any such point back inside
+			// instead. Per Hans (2026-10-01).
+			const domain = this._mapDomain(this._currentMapin, this._currentMapout, override);
+			const clamped = this._clampDataToFrame(node, domain);
+			if (!clamped) this._renderMapCanvas(this._currentMapin, this._currentMapout, this._currentCurve, this._currentPattern);
 			this._dispatchStateChange();
 		};
 		input.addEventListener("blur", commit);
@@ -1300,6 +1307,32 @@ export class WaVarView extends HTMLElement {
 				input.replaceWith(labelEl);
 			}
 		});
+	}
+
+	// Snaps every mapin/mapout value that's outside `domain` back to its
+	// nearest edge, then commits (which re-renders this component via the
+	// normal xmlStore "change" it triggers — see _writeAttrs) — only when at
+	// least one point actually needed it, so an edit that doesn't strand any
+	// point still gets its own single render straight from the caller.
+	// Per Hans (2026-10-01): "Om man ändrar några min/max-värden som
+	// resulterar i att en punkt hamnar utanför grafen ska punkten
+	// korrigeras automatiskt så att den faller innanför grafen." When every
+	// point lands on the same edge (his own worked example: mapout 0,1
+	// against a widened 100..400 frame), the whole line ends up sitting
+	// flat along that edge instead of vanishing off-canvas — exactly the
+	// "lägg den då istället i botten"/top-edge behavior he asked for, as a
+	// natural side effect of clamping each point independently rather than
+	// as a special case. Returns true when it wrote a change.
+	_clampDataToFrame(node, domain) {
+		const mapin = this._currentMapin.map((v) => clampNum(v, domain.minIn, domain.maxIn));
+		const mapout = this._currentMapout.map((v) => clampNum(v, domain.minOut, domain.maxOut));
+		const mapinChanged = mapin.some((v, i) => v !== this._currentMapin[i]);
+		const mapoutChanged = mapout.some((v, i) => v !== this._currentMapout[i]);
+		if (!mapinChanged && !mapoutChanged) return false;
+		this._currentMapin = mapin;
+		this._currentMapout = mapout;
+		this._writeAttrs(node, { mapin: mapin.join(","), mapout: mapout.join(",") });
+		return true;
 	}
 
 	// ── Pattern node ─────────────────────────────────────────────────────

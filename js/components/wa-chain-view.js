@@ -56,10 +56,33 @@ const OSCILLATOR_TYPES = ["sine", "square", "sawtooth", "triangle", "custom"];
 const BIQUAD_FILTER_TYPES = ["lowpass", "highpass", "bandpass", "lowshelf", "highshelf", "peaking", "notch", "allpass"];
 const OVERSAMPLE_OPTIONS = ["none", "2x", "4x"];
 const FFT_SIZE_OPTIONS = ["32", "64", "128", "256", "512", "1024", "2048", "4096", "8192", "16384", "32768"];
-// Bar/line count each draw is bounded to, regardless of the analyser's own
-// fftSize (up to 32768) — the whole point of the cap (see _buildAnalyserCard).
+// Point count the waveform draw is bounded to, regardless of the
+// analyser's own fftSize (up to 32768) — the whole point of the cap (see
+// _buildAnalyserCard). The FFT draw has no such cap — see _drawAnalyserFFT's
+// own comment.
 const ANALYSER_WAVEFORM_MAX_POINTS = 200;
-const ANALYSER_FFT_BAR_COUNT = 48;
+// The FFT draw's log-frequency X axis range — per Hans (2026-10-02): "Jag
+// vill ha en logaritmisk skala där varje oktav är lika bred. Från 20Hz till
+// typ 20.000Hz."
+const ANALYSER_FFT_MIN_FREQ = 20;
+const ANALYSER_FFT_MAX_FREQ = 20000;
+// AnalyserNode's own native default (per the Web Audio spec) is 0.8 — fine
+// for a stable-looking meter, but per Hans (2026-10-02) this preview needs
+// to track a live parameter change (e.g. the oscillator's own frequency)
+// immediately, not over several hundred ms of exponential smoothing (see
+// _ensureLiveLoop's own comment on how that stacks with call frequency).
+// Applied explicitly in _applyAnalyserSettings whenever the XML attribute
+// is absent, rather than silently leaving the browser's own 0.8 in effect.
+const ANALYSER_DEFAULT_SMOOTHING = 0;
+// AnalyserNode's own native default is -100dB — sensitive enough to show a
+// windowed FFT's own quiet leakage skirt around a loud tone (a real, always-
+// present artifact of Blackman windowing, not a bug — see _drawAnalyserFFT's
+// own comment) as a visible slope well away from where the actual energy
+// is. Per Hans (2026-10-02): raised the default floor so that quiet skirt
+// gets cropped to 0 automatically, leaving just the genuinely loud
+// structure visible; still just as freely overridable via the minDecibels
+// chip as before.
+const ANALYSER_DEFAULT_MIN_DB = -60;
 
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range, same feel as wa-mixer-view.js
 
@@ -526,7 +549,6 @@ export class WaChainView extends HTMLElement {
 		this._activeAnalyserTicks = new Set();
 		this._activeRemoteControlTicks = new Set();
 		this._liveLoopId = null;
-		this._liveFrameCounter = 0;
 	}
 
 	connectedCallback() {
@@ -563,19 +585,27 @@ export class WaChainView extends HTMLElement {
 	// construction: one timer total no matter how many of either exist,
 	// each tick only reads+draws a canvas-width-bounded number of samples
 	// or a single live property, and the loop only runs at all while at
-	// least one such card/control is actually mounted. Throttled to every
-	// 3rd frame (~20fps) — plenty smooth for a small meter or a knob
-	// dial, a third of the cost of a full 60fps loop. Per Hans (2026-09-30):
+	// least one such card/control is actually mounted. Per Hans (2026-09-30):
 	// "använd ganska low-cost lösningar... så att inte det slöar ner
 	// systemet om man börjar göra många AnalyserNoder." Extended per Hans
 	// (2026-09-23) to also drive remote-controlled knobs/curves, which
 	// previously only ever read the live value once at render time.
+	//
+	// Used to throttle to every 3rd frame (~20fps) — per Hans (2026-10-02):
+	// "minska eftersläpningen radikalt. När man ändrar frekvens på
+	// oscillatorn tar det nu typ 500ms innan grafen har anpassat sig."
+	// AnalyserNode's own smoothingTimeConstant blends each new reading with
+	// the PREVIOUS one from the last time getByteFrequencyData was actually
+	// called — not on a fixed real-time clock — so calling it only ~20
+	// times/sec instead of ~60 stretched that same fixed *number* of calls
+	// needed to settle across 3x more wall-clock time. Full frame rate here
+	// (still one shared timer, still just a canvas-width-bounded read+draw
+	// per card) cuts that lag by the same factor; see _buildAnalyserCard's
+	// own default smoothingTimeConstant for the rest of the fix.
 	_ensureLiveLoop() {
 		if (this._liveLoopId !== null) return;
 		const loop = () => {
 			this._liveLoopId = requestAnimationFrame(loop);
-			this._liveFrameCounter++;
-			if (this._liveFrameCounter % 3 !== 0) return;
 			if (this._activeAnalyserTicks.size === 0 && this._activeRemoteControlTicks.size === 0) {
 				this._stopLiveLoop();
 				return;
@@ -1690,9 +1720,9 @@ export class WaChainView extends HTMLElement {
 		const smoothChip = buildParamChip({ getNode: getNodeNow, attrName: "smoothingTimeConstant" });
 		const refreshChips = () => {
 			const nodeNow = getNodeNow();
-			minDbChip.render(`${formatValue(readNum(nodeNow, "minDecibels", -100), 200)} dB`);
+			minDbChip.render(`${formatValue(readNum(nodeNow, "minDecibels", ANALYSER_DEFAULT_MIN_DB), 200)} dB`);
 			maxDbChip.render(`${formatValue(readNum(nodeNow, "maxDecibels", -30), 200)} dB`);
-			smoothChip.render(`smooth ${formatValue(readNum(nodeNow, "smoothingTimeConstant", 0.8), 1)}`);
+			smoothChip.render(`smooth ${formatValue(readNum(nodeNow, "smoothingTimeConstant", ANALYSER_DEFAULT_SMOOTHING), 1)}`);
 		};
 		chipRow.append(minDbChip.el, maxDbChip.el, smoothChip.el);
 		card.appendChild(chipRow);
@@ -1722,7 +1752,7 @@ export class WaChainView extends HTMLElement {
 				this._drawAnalyserWaveform(canvas, dataArray);
 			} else {
 				raw.getByteFrequencyData(dataArray);
-				this._drawAnalyserFFT(canvas, dataArray);
+				this._drawAnalyserFFT(canvas, dataArray, raw.context.sampleRate);
 			}
 		};
 		this._activeAnalyserTicks.add(tick);
@@ -1754,7 +1784,7 @@ export class WaChainView extends HTMLElement {
 		} catch {}
 		try {
 			const minDb = parseFloat(node.attributes.minDecibels);
-			if (Number.isFinite(minDb)) raw.minDecibels = minDb;
+			raw.minDecibels = Number.isFinite(minDb) ? minDb : ANALYSER_DEFAULT_MIN_DB;
 		} catch {}
 		try {
 			const maxDb = parseFloat(node.attributes.maxDecibels);
@@ -1762,7 +1792,7 @@ export class WaChainView extends HTMLElement {
 		} catch {}
 		try {
 			const stc = parseFloat(node.attributes.smoothingTimeConstant);
-			if (Number.isFinite(stc)) raw.smoothingTimeConstant = stc;
+			raw.smoothingTimeConstant = Number.isFinite(stc) ? stc : ANALYSER_DEFAULT_SMOOTHING;
 		} catch {}
 		return raw;
 	}
@@ -1829,39 +1859,55 @@ export class WaChainView extends HTMLElement {
 		ctx.stroke();
 	}
 
-	// Bucketed into ANALYSER_FFT_BAR_COUNT bars regardless of
-	// frequencyBinCount (up to 16384) — same "low-cost" reasoning. Bucket
-	// edges are LOG-spaced over the bin index (bin 0, the DC bin, is
-	// skipped) rather than linear, and each bar takes the MAX bin in its
-	// range rather than the average. A linear/average split gave equal Hz
-	// width to every bar, so a fundamental plus its first several harmonics
-	// (where a waveform's shape — e.g. sawtooth vs. square — actually shows
-	// up) all landed in the same wide low bucket; averaging that bucket's
-	// mostly-near-silent neighboring bins against the one bin actually
-	// holding the peak made real peaks vanish (Hans, 2026-09-23: "de lägsta
-	// frekvenserna inkl. grundtonen saknas"), and also blurred distinct
-	// harmonics together into one rounded shape regardless of which were
-	// actually present. Log spacing gives the low/mid range far more of the
-	// 48 bars (where that structure lives) and compresses the sparse highs.
-	_drawAnalyserFFT(canvas, dataArray) {
+	// Log-frequency X axis, ~20Hz..20kHz, every octave equally wide — per
+	// Hans (2026-10-02): a linear bin->pixel mapping (an earlier version, a
+	// direct port of waxml.js's own Meter class) put 4000Hz at 1/5 of the
+	// whole width instead.
+	//
+	// A filled AREA under a line connecting every bin's own (x, value) point
+	// — not a separate 1px bar per bin (this file's own previous attempt at
+	// this). That drew each bin in isolation, so a pure tone's window-
+	// leakage — real energy spread smoothly across a handful of ADJACENT
+	// bins, e.g. fftSize=512 leaking a 316Hz sine across bins n, n+1, n+2 —
+	// showed as several disconnected spikes instead of one blurred peak,
+	// since the log axis happened to push those adjacent bins onto
+	// non-adjacent pixels (Hans, 2026-10-02: "Hur väl representerar den en
+	// enda frekvens?" — poorly, with that version). Connecting consecutive
+	// bins with straight line segments fixes that (adjacent-bin content
+	// reads as one continuous bump again) while still correctly dropping to
+	// the baseline between genuinely separated features — e.g. a square
+	// wave's odd harmonics, with many truly near-silent bins actually
+	// plotted in between them — since those in-between bins really are
+	// near-zero and get visited by the line same as any other bin. Iterates
+	// by BIN, not by pixel, same reasoning as before: many bins legitimately
+	// still compress onto the same few pixels at the high end (that's what a
+	// log scale means for linearly-spaced FFT bins), which reads as solid
+	// fill there, correctly.
+	_drawAnalyserFFT(canvas, dataArray, sampleRate) {
 		const ctx = canvas.getContext("2d");
 		const w = canvas.width,
 			h = canvas.height;
 		ctx.clearRect(0, 0, w, h);
 		const len = dataArray.length;
-		const barCount = Math.min(ANALYSER_FFT_BAR_COUNT, len - 1);
-		const barWidth = w / barCount;
+		const nyquist = sampleRate / 2;
+		const minFreq = ANALYSER_FFT_MIN_FREQ;
+		const maxFreq = Math.min(ANALYSER_FFT_MAX_FREQ, nyquist);
+		const binHz = nyquist / len;
+		const logMin = Math.log2(minFreq);
+		const logRange = Math.log2(maxFreq) - logMin;
+		const firstBin = Math.max(1, Math.floor(minFreq / binHz));
+		const lastBin = Math.min(len - 1, Math.ceil(maxFreq / binHz));
+		const xForBin = (bin) => ((Math.log2(bin * binHz) - logMin) / logRange) * w;
+
 		ctx.fillStyle = "#4fa3ff";
-		for (let i = 0; i < barCount; i++) {
-			const start = Math.max(1, Math.round(Math.pow(len, i / barCount)));
-			const end = Math.max(start + 1, Math.round(Math.pow(len, (i + 1) / barCount)));
-			let peak = 0;
-			for (let bin = start; bin < end && bin < len; bin++) {
-				if (dataArray[bin] > peak) peak = dataArray[bin];
-			}
-			const barH = (peak / 255) * h;
-			ctx.fillRect(i * barWidth + 1, h - barH, Math.max(1, barWidth - 2), barH);
+		ctx.beginPath();
+		ctx.moveTo(xForBin(firstBin), h);
+		for (let bin = firstBin; bin <= lastBin; bin++) {
+			ctx.lineTo(xForBin(bin), h - (dataArray[bin] / 255) * h);
 		}
+		ctx.lineTo(xForBin(lastBin), h);
+		ctx.closePath();
+		ctx.fill();
 	}
 }
 
