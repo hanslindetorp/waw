@@ -1335,11 +1335,13 @@ export class WaWebcamInput extends HTMLElement {
 		const onPick = (e) => {
 			if (!entry.mappings[key]) entry.mappings[key] = [];
 			const list = entry.mappings[key];
+			const mappingIndex = index === null || index === undefined ? list.length : index;
 			if (index === null || index === undefined) {
 				list.push({ varName: e.detail.varName, min: 0, max: 1 });
 			} else {
 				list[index] = { ...list[index], varName: e.detail.varName };
 			}
+			this._writeVarReference(e.detail.varName, this._syntheticVarName(entry, key, mappingIndex));
 			this._refreshMapControl(entry.mapEls[key], entry, key);
 			this._dispatchStateChange();
 		};
@@ -1351,6 +1353,36 @@ export class WaWebcamInput extends HTMLElement {
 		};
 		inputMapMode.addEventListener("pick", onPick);
 		inputMapMode.addEventListener("change", onChange);
+	}
+
+	// A stable, deterministic name for one (entry, key, mapping) triple —
+	// e.g. a single-point entry tracking landmark "rightHand8"'s own "x"
+	// becomes "rightHand8x" (matches Hans's own example exactly); a
+	// multi-point entry (dist2d/dist3d/angle) concatenates every landmark
+	// label involved instead, since it has no single one of its own. A
+	// second+ mapping of the SAME key (per Hans, 2026-09-30: several <Var>s
+	// can share one metric, each with its own calibrated range) gets its
+	// own distinct name (_2, _3, ...) so its independent calibration never
+	// collides with the first mapping's.
+	_syntheticVarName(entry, key, mappingIndex) {
+		const base = entry.labelMetas.map((m) => m.label).join("") + key;
+		return mappingIndex > 0 ? `${base}_${mappingIndex + 1}` : base;
+	}
+
+	// Writes "$syntheticName" onto `targetVarName`'s own "value" attribute —
+	// the explicit XML-visible counterpart to _sendMappedValues' own
+	// playerStore.setVariable(syntheticName, ...) push, so the document
+	// itself shows what's driving this Var instead of it happening only as
+	// an invisible side channel. Per Hans (2026-10-05): "value='$rightHand8x'
+	// ska skrivas in på var1.value... Det blir bara lite mer explicit... för
+	// hur systemet fungerar." wa-var-knobs.js's own pushFromTarget (see its
+	// comment) is what actually keeps the target Var's live value following
+	// along afterward — this call only ever touches the XML attribute.
+	_writeVarReference(targetVarName, syntheticName) {
+		if (!xmlStore.root) return;
+		const targetNode = xmlStore.root.children.find((c) => c.tagName === "Var" && (c.attributes.name || c.attributes.id) === targetVarName);
+		if (!targetNode) return;
+		xmlStore.updateAttributes(targetNode.id, { ...targetNode.attributes, value: `$${syntheticName}` });
 	}
 
 	// Toggles a calibration pass for one saved entry (per Hans, 2026-09-23:
@@ -1408,19 +1440,25 @@ export class WaWebcamInput extends HTMLElement {
 			// Hans, 2026-09-30: several <Var>s can share one metric now) —
 			// they usually converge to the same range when calibrated
 			// together, but nothing forces that if one was added later.
-			for (const mapping of mappings) {
-				if (!mapping?.varName) continue;
+			mappings.forEach((mapping, index) => {
+				if (!mapping?.varName) return;
 				if (entry.calibrating) expandRange(mapping, raw);
 				// Bypass stops this entry from driving its mapped Var(s) — e.g.
 				// so a manual knob drag isn't immediately fought by the next
 				// incoming frame — but keeps calibrating/tracking (and the
 				// mapping itself) intact for whenever it's switched back on.
 				// Per Hans (2026-09-27).
-				if (entry.bypassed) continue;
+				if (entry.bypassed) return;
 				const normalized = normalizeToUnit(raw, mapping.min, mapping.max);
-				if (normalized === undefined) continue; // never calibrated yet — nothing usable to send
-				playerStore.setVariable(mapping.varName, normalized);
-			}
+				if (normalized === undefined) return; // never calibrated yet — nothing usable to send
+				// Pushed under this (entry, key, mapping)'s own synthetic name,
+				// never mapping.varName directly — the target Var's own XML
+				// "value" attribute (written once, at pick time — see
+				// _writeVarReference) is what actually references this name;
+				// wa-var-knobs.js's own pushFromTarget polls it from there. Per
+				// Hans (2026-10-05).
+				playerStore.setVariable(this._syntheticVarName(entry, key, index), normalized);
+			});
 		}
 	}
 }

@@ -110,6 +110,18 @@ export class WaxmlBridge {
 		this.waxml.setVariable(name, value);
 	}
 
+	// Reads a named variable's current raw value straight from the engine —
+	// the read counterpart to setVariable above. Works for both a real
+	// <Var> (delegates to waxml.js's own resolution) and a synthetic,
+	// non-XML name that only ever exists because setVariable() was called
+	// with it (device-motion metrics, wa-webcam-input.js's own per-metric
+	// names — see wa-var-knobs.js's own pushFromTarget). Per Hans
+	// (2026-10-05): "webcam ska köra waxml.set('rightHand8x', value) och
+	// var1 ska slava till webcam."
+	getVariable(name) {
+		return this.waxml.getVariable(name);
+	}
+
 	// Resolves a selector to the live runtime object(s) (not XML DOM nodes —
 	// waxml's own querySelectorAll on the engine itself already returns the
 	// attached .obj/.audioObject wrapper directly) for whatever's currently

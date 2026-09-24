@@ -163,9 +163,27 @@ template.innerHTML = `
 		   Toggled directly in _buildKnob (this component already fully
 		   re-renders on either mode's own "change" event), not via the
 		   inherited-custom-property trick the cross-shadow-root targets
-		   elsewhere need. */
+		   elsewhere need.
+		   Its own dedicated keyframe (border-color, not just a box-shadow
+		   ring) — per Hans (2026-10-05): "blinket ... ska inte vara på
+		   deras map-knapp ... utan hela ramen kring <Var> button (den som
+		   blir blå när man markerar)" — matching .var-knob-wrap.selected's
+		   own border-color treatment below (blue there, yellow+blinking
+		   here) makes it unambiguous this is the SAME box, not the little
+		   "Map..." button inside it. */
+		@keyframes target-armed-blink-wrap {
+			0%,
+			100% {
+				border-color: var(--waw-border, #2f2f2f);
+				box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+			}
+			50% {
+				border-color: #facc15;
+				box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.55);
+			}
+		}
 		.var-knob-wrap.map-target-armed {
-			animation: target-armed-blink 0.9s ease-in-out infinite;
+			animation: target-armed-blink-wrap 0.9s ease-in-out infinite;
 		}
 		/* Knob + its value sit in a row now (value used to be stacked below
 		   the knob along with the name) — per Hans (2026-09-10). Gap widened
@@ -623,12 +641,23 @@ export class WaVarKnobs extends HTMLElement {
 		// "don't fight the live value" lock every other $var-controlled
 		// knob/fader in the app already uses.
 		const slavedToName = variableNameFromValue(node.attributes.value)?.split(".")[0];
-		const slavedToNode = slavedToName ? this._findVarByName(slavedToName) : null;
-		if (slavedToNode) {
+		if (slavedToName) {
 			knob.classList.add("remote-controlled");
+			// The referenced name is either a real root <Var> (claimed via
+			// _claimVarToVarMapping — reads its live Variable property,
+			// suffix included) or a synthetic, non-XML name with no matching
+			// <Var> at all — e.g. "rightHand8x", written by
+			// wa-webcam-input.js's own _writeVarReference. Per Hans
+			// (2026-10-05): "webcam ska köra waxml.set('rightHand8x', value)
+			// och var1 ska slava till webcam precis som tidigare" — that
+			// raw value lives only in waxml.js's own InteractionManager
+			// fallback store (see playerStore.getVariable), never a
+			// Variable instance, so it has no speed/derivative properties —
+			// only the plain value itself is ever meaningful there.
+			const slavedToNode = this._findVarByName(slavedToName);
 			const slavedProp = variablePropFromValue(node.attributes.value);
 			const pushFromTarget = () => {
-				const live = getLiveProperty(slavedToNode.attributes.id, slavedProp);
+				const live = slavedToNode ? getLiveProperty(slavedToNode.attributes.id, slavedProp) : playerStore.getVariable(slavedToName);
 				if (Number.isFinite(live)) playerStore.setVariable(varName, live);
 			};
 			this._activeRemoteControlTicks.add(pushFromTarget);
@@ -659,9 +688,17 @@ export class WaVarKnobs extends HTMLElement {
 		wrap.addEventListener("click", (e) => {
 			if (isVarMapTarget) {
 				e.stopPropagation();
+				// Measure BEFORE disarming — disarm() dispatches varMapMode's own
+				// "change" synchronously, which this component listens for and
+				// re-renders on, tearing down and rebuilding `wrap`. Measuring
+				// after that point read a detached element's rect (all zeros),
+				// which is why the popup opened pinned to the viewport's own
+				// top-left corner instead of near the click. Bug per Hans
+				// (2026-10-05).
+				const anchorRect = wrap.getBoundingClientRect();
 				const armedVarName = varMapMode.varName;
 				varMapMode.disarm();
-				this._claimVarToVarMapping(armedVarName, node, wrap.getBoundingClientRect());
+				this._claimVarToVarMapping(armedVarName, node, anchorRect);
 				return;
 			}
 			if (isInputMapTarget) {
@@ -675,42 +712,38 @@ export class WaVarKnobs extends HTMLElement {
 		return wrap;
 	}
 
-	// Makes the Var currently armed in varMapMode (the one whose "Map..."
-	// button was clicked) slave to `targetNode`'s own OUTPUT value — the
-	// INVERSE of every other varMapMode claim site (param-binding.js's
-	// wireMapClaim, wa-node-inspector.js's attribute rows), which write the
-	// armed Var's name INTO whatever gets clicked. Here it's the other way
-	// around: clicking a target Var means "I want to be driven BY that Var",
-	// so the write lands on the ARMED Var's own "value" attribute instead.
-	// This string is only ever read back by _buildKnob's own slavedToName/
-	// slavedProp — not by waxml.js itself (see its own comment for why).
+	// Makes `targetNode` (the Var just clicked while armed) slave to the
+	// ARMED Var's own OUTPUT value — the SAME direction every other
+	// varMapMode claim site (param-binding.js's wireMapClaim,
+	// wa-node-inspector.js's attribute rows) already uses: the armed Var's
+	// name gets written INTO whatever gets clicked. Per Hans (2026-10-05
+	// correction — the original 2026-10-03 version had this backwards):
+	// "1. klicka på var2 -> map. 2. klicka på var1. -> nu ska var1 ha
+	// value=$var2." This string is only ever read back by _buildKnob's own
+	// slavedToName/slavedProp — not by waxml.js itself (a <Var>'s own
+	// "value" attribute doesn't reach a live Watcher, see _buildKnob's own
+	// comment on that).
 	//
-	// Per Hans (2026-10-04): the popup (wa-var-source-popup.js) offers a
-	// choice of which of the TARGET's live signals to reference — its plain
-	// value/speed/derivative(s) — since the target is the one providing the
-	// live signal here (the armed Var is only ever the one being written
-	// to). "value" (bare "$name", no suffix) resolves to the target's
-	// mappedValue via Variable's own value getter — the same output the old
-	// hardcoded ".mappedValue" suffix produced.
+	// The popup (wa-var-source-popup.js) offers a choice of which of the
+	// ARMED Var's own live signals to reference — its plain value/speed/
+	// derivative(s), same as every other claim site. "value" (bare "$name",
+	// no suffix) resolves to mappedValue via Variable's own value getter.
 	_claimVarToVarMapping(armedVarName, targetNode, anchorRect) {
-		const targetVarName = targetNode.attributes.name || targetNode.attributes.id;
-		const armedNode = this._findVarByName(armedVarName);
-		if (!armedNode || !targetVarName) return;
-		pickVarSourceSuffix(anchorRect, targetVarName).then((suffix) => {
+		pickVarSourceSuffix(anchorRect, armedVarName).then((suffix) => {
 			if (suffix === null) return;
-			const patch = { ...armedNode.attributes, value: `$${targetVarName}${suffix}` };
+			const patch = { ...targetNode.attributes, value: `$${armedVarName}${suffix}` };
 			// speed/derivative(2/3) are waxml.js's own frame-to-frame delta of
 			// mappedValue — naturally tiny numbers (found live, 2026-10-04:
 			// ~0.03-0.06 for an ordinary continuous drag) that a plain 0-1
-			// mapin would barely register. Per Hans: switch the ARMED (slaved)
-			// Var's own mapin to "auto" whenever one of these is picked, which
-			// turns on waxml.js's existing autoInputRange (see Variable's own
-			// constructor: `params.mapin == "auto"`) — it rescales whatever
-			// raw range it actually observes into mapout's own range instead
-			// of a hand-picked one. Never touched for the plain "value" pick
-			// (suffix === ""), which is already full-range.
+			// mapin would barely register. Per Hans: switch the TARGET
+			// (slaved) Var's own mapin to "auto" whenever one of these is
+			// picked, which turns on waxml.js's existing autoInputRange (see
+			// Variable's own constructor: `params.mapin == "auto"`) — it
+			// rescales whatever raw range it actually observes into mapout's
+			// own range instead of a hand-picked one. Never touched for the
+			// plain "value" pick (suffix === ""), which is already full-range.
 			if (suffix !== "") patch.mapin = "auto";
-			xmlStore.updateAttributes(armedNode.id, patch);
+			xmlStore.updateAttributes(targetNode.id, patch);
 		});
 	}
 

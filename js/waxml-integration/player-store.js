@@ -327,6 +327,20 @@ class PlayerStore extends EventTarget {
 		}
 	}
 
+	// Reads a named variable's current raw value — the read counterpart to
+	// setVariable above, for a name that isn't backed by a real <Var> XML
+	// element (see waxml-bridge.js's own getVariable). Same "no graph loaded
+	// -> nothing to read yet" contract as getLiveProperty (live-property.js);
+	// callers should treat undefined as "nothing to show yet", not an error.
+	getVariable(name) {
+		if (!this._documentLoaded || !name) return undefined;
+		try {
+			return bridge.getVariable(name);
+		} catch {
+			return undefined;
+		}
+	}
+
 	get audioContext() {
 		return bridge.audioContext;
 	}
