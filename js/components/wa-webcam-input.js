@@ -1,5 +1,7 @@
 import { playerStore } from "../waxml-integration/player-store.js";
-import { openVarPicker } from "./wa-var-picker.js";
+import { xmlStore } from "../xml-editor/xml-store.js";
+import { inputMapMode } from "../state/input-map-mode.js";
+import { showNotice } from "./wa-notice-dialog.js";
 
 // The INPUT panel's "Web Camera" section — MediaPipe hand/pose/face tracking
 // that lets Hans click a landmark (or several) on the live webcam feed and
@@ -19,15 +21,23 @@ import { openVarPicker } from "./wa-var-picker.js";
 //     (see waxml-bridge.js).
 //   - The reference's own sendToWaxml() was stubbed out with commented
 //     placeholder setVariable() calls and auto-derived variable names
-//     (hand5x, hand5y, ...). Here, each metric is *explicitly* mapped (via
-//     wa-var-picker.js) to an existing-or-new root <Var> — INPUT stays
-//     outside the WAXML spec itself (no new schema elements), but what it
-//     writes into is a completely ordinary root Var. Only mapped metrics are
-//     ever sent; everything else is display-only.
+//     (hand5x, hand5y, ...). Here, each metric is *explicitly* mapped to an
+//     existing root <Var> — INPUT stays outside the WAXML spec itself (no
+//     new schema elements), but what it writes into is a completely
+//     ordinary root Var. Only mapped metrics are ever sent; everything else
+//     is display-only.
 //   - That mapping (plus which models are enabled and which camera is
 //     selected) is persisted via getState()/applyState() — see
 //     workstation-state.js's own registerLayoutExtras wiring — never as
 //     WAXML document content.
+//   - Mapping a metric onto a Var (per Hans, 2026-10-03) arms the shared
+//     input-map-mode.js singleton, the same "arm a mode, let some other
+//     element claim the next click" shape var-map-mode.js's own Var-to-
+//     attribute mapping already uses, instead of a popup menu — see
+//     _mapKey. Every root-level <Var> knob (wa-var-knobs.js's global row
+//     only, never the local one) is the only valid target; there's no way
+//     to create a new one from here anymore, so an empty root gets an
+//     explanatory notice instead of arming with nothing to pick.
 
 const MEDIAPIPE_VERSION = "0.10.35";
 const VISION_BUNDLE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/vision_bundle.mjs`;
@@ -493,6 +503,26 @@ template.innerHTML = `
 			border-color: var(--waw-accent, #4fa3ff);
 			color: var(--waw-accent, #4fa3ff);
 		}
+		/* Whichever button/pill armed input-map-mode.js just now — same
+		   yellow ring wa-var-knobs.js's own Map button and every valid
+		   target use (see that file's own comment on why the @keyframes is
+		   declared again per shadow root). Per Hans (2026-10-03). */
+		@keyframes target-armed-blink {
+			0%,
+			100% {
+				box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+			}
+			50% {
+				box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.55);
+			}
+		}
+		.sv-map-btn.armed,
+		.sv-mapped.armed {
+			border-style: solid;
+			border-color: #facc15;
+			color: #facc15;
+			animation: target-armed-blink 0.9s ease-in-out infinite;
+		}
 		.sv-mapped {
 			display: inline-flex;
 			align-items: center;
@@ -854,20 +884,44 @@ export class WaWebcamInput extends HTMLElement {
 		};
 
 		if (this._modelState.hands.results?.landmarks) {
+			const { landmarks, handedness, handednesses } = this._modelState.hands.results;
+			// The field was renamed "handedness" -> "handednesses" at some
+			// point in @mediapipe/tasks-vision's own history — checking both
+			// costs nothing and keeps this working across versions.
+			const handsList = handednesses || handedness || [];
 			let idx = 0;
-			for (const hand of this._modelState.hands.results.landmarks) {
-				for (const lm of hand) {
-					push({
-						label: `hand${idx++}`,
+			landmarks.forEach((hand, handIdx) => {
+				const rawSide = handsList[handIdx]?.[0]?.categoryName; // "Left" | "Right", per MediaPipe's own (unmirrored) frame
+				// The preview is always shown mirrored (see _startCamera's own
+				// ".mirror" class), so MediaPipe's own Left/Right — classified
+				// from the raw, unmirrored camera frame — reads backwards from
+				// what the user visually sees as *their* left/right hand on
+				// screen; swap to match the display. Per Hans (2026-10-03):
+				// "Det ska gå att mappa händerna separat. Visst finns det
+				// leftHand och rightHand?"
+				const side = rawSide === "Left" ? "rightHand" : rawSide === "Right" ? "leftHand" : null;
+				hand.forEach((lm, i) => {
+					const point = {
 						model: "hands",
 						x: parseFloat(lm.x.toFixed(3)),
 						y: parseFloat(lm.y.toFixed(3)),
 						z: parseFloat((lm.z ?? 0).toFixed(3)),
 						cx: lm.x * this._canvas.width,
 						cy: lm.y * this._canvas.height
-					});
-				}
-			}
+					};
+					// The old combined "hand0".."hand41" labels (first-detected
+					// hand 0-20, second 21-41, no left/right distinction) are
+					// kept ONLY in _landmarkMap — never _allLandmarks, so a new
+					// click in the canvas can never select one — purely so an
+					// already-saved entry that still references one keeps
+					// resolving exactly as it always did. Per Hans (2026-10-03):
+					// "Om man öppnar ett projekt som är gjort med bara 'hand'
+					// ska den mappas från båda händerna som tidigare."
+					this._landmarkMap.set(`hand${idx}`, { label: `hand${idx}`, ...point });
+					idx++;
+					if (side) push({ label: `${side}${i}`, ...point });
+				});
+			});
 		}
 		if (this._modelState.pose.results?.landmarks) {
 			for (const pose of this._modelState.pose.results.landmarks) {
@@ -1219,7 +1273,15 @@ export class WaWebcamInput extends HTMLElement {
 			const nameSpan = document.createElement("span");
 			nameSpan.textContent = mapping.varName;
 			nameSpan.style.cursor = "pointer";
-			nameSpan.addEventListener("click", (e) => this._mapKey(entry, key, e.currentTarget, index));
+			nameSpan.addEventListener("click", (e) => {
+				// Without this, the very click that arms input-map-mode.js
+				// keeps bubbling to document afterward, where its own
+				// "unclaimed click disarms" listener immediately undoes the
+				// arm() this line just did. Same reasoning as var-map-mode.js's
+				// own Map button (wa-var-knobs.js).
+				e.stopPropagation();
+				this._mapKey(entry, key, e.currentTarget, index);
+			});
 			const xBtn = document.createElement("button");
 			xBtn.type = "button";
 			xBtn.className = "sv-unmap";
@@ -1238,7 +1300,10 @@ export class WaWebcamInput extends HTMLElement {
 		btn.type = "button";
 		btn.className = "sv-map-btn";
 		btn.textContent = "Map...";
-		btn.addEventListener("click", (e) => this._mapKey(entry, key, e.currentTarget, null));
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation(); // see the nameSpan click listener's own comment above
+			this._mapKey(entry, key, e.currentTarget, null);
+		});
 		wrap.appendChild(btn);
 	}
 
@@ -1246,18 +1311,46 @@ export class WaWebcamInput extends HTMLElement {
 	// that index (keeping its existing calibrated range) — same "remapping
 	// keeps the range, a fresh mapping starts at 0-1" reasoning as before,
 	// just per-pill instead of per-key now.
-	async _mapKey(entry, key, anchorEl, index) {
-		const name = await openVarPicker(anchorEl.getBoundingClientRect());
-		if (!name) return;
-		if (!entry.mappings[key]) entry.mappings[key] = [];
-		const list = entry.mappings[key];
-		if (index === null || index === undefined) {
-			list.push({ varName: name, min: 0, max: 1 });
-		} else {
-			list[index] = { ...list[index], varName: name };
+	//
+	// Arms input-map-mode.js instead of opening wa-var-picker.js's old popup
+	// menu — per Hans (2026-10-03): "när man ska mappa ett entry dyker det
+	// nu upp en popup-meny. Ändra det så att det fungerar som när man
+	// mappar en <Var>knob." wa-var-knobs.js's own ROOT-scoped knobs are the
+	// only valid targets (that component enforces the root-only rule
+	// itself — see its own isInputMapTarget); clicking one resolves via
+	// input-map-mode's "pick" event. A root with no <Var> at all has
+	// nothing to arm toward, so this shows an explanatory notice instead
+	// (per Hans: "Om det inte finns någon <Var> i rooten ska det komma upp
+	// en instruktion om att man behöver skapa en").
+	_mapKey(entry, key, anchorEl, index) {
+		const hasRootVar = xmlStore.root?.children.some((c) => c.tagName === "Var" && (c.attributes.name || c.attributes.id));
+		if (!hasRootVar) {
+			showNotice("Map... needs at least one root-level <Var> to target. Add one first — click the + next to Variables in the bottom bar.");
+			return;
 		}
-		this._refreshMapControl(entry.mapEls[key], entry, key);
-		this._dispatchStateChange();
+		if (inputMapMode.armed) inputMapMode.disarm(); // re-arming for a different anchor — see the "change" cleanup below
+		inputMapMode.arm();
+		const visualEl = anchorEl.closest(".sv-mapped") || anchorEl;
+		visualEl.classList.add("armed");
+		const onPick = (e) => {
+			if (!entry.mappings[key]) entry.mappings[key] = [];
+			const list = entry.mappings[key];
+			if (index === null || index === undefined) {
+				list.push({ varName: e.detail.varName, min: 0, max: 1 });
+			} else {
+				list[index] = { ...list[index], varName: e.detail.varName };
+			}
+			this._refreshMapControl(entry.mapEls[key], entry, key);
+			this._dispatchStateChange();
+		};
+		const onChange = () => {
+			if (inputMapMode.armed) return;
+			inputMapMode.removeEventListener("pick", onPick);
+			inputMapMode.removeEventListener("change", onChange);
+			visualEl.classList.remove("armed");
+		};
+		inputMapMode.addEventListener("pick", onPick);
+		inputMapMode.addEventListener("change", onChange);
 	}
 
 	// Toggles a calibration pass for one saved entry (per Hans, 2026-09-23:

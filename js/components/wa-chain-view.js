@@ -16,6 +16,7 @@ import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshap
 import { wireKnobDrag } from "../utils/knob-drag.js";
 import { buildParamChip, isParamVarControlled } from "../utils/param-binding.js";
 import { getLiveProperty } from "../waxml-integration/live-property.js";
+import "./wa-panner-view.js";
 
 // Preview-panel state (see wa-preview.js) for a selected <Chain> — a
 // vertical stack of small per-node-type "cards" (one per native Web Audio
@@ -483,6 +484,23 @@ template.innerHTML = `
 			border: 1px dashed var(--waw-accent, #4fa3ff);
 			cursor: default;
 		}
+		/* Faint yellow ring on every mappable chip/knob while a Var's
+		   "Map..." is armed (param-binding.js's wireMapClaim already marks
+		   them "map-target-armed" — see its own comment for why this is
+		   driven by an inherited custom property rather than a listener per
+		   element). Per Hans (2026-10-03). */
+		@keyframes target-armed-blink {
+			0%,
+			100% {
+				box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+			}
+			50% {
+				box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.55);
+			}
+		}
+		.map-target-armed {
+			animation: var(--waw-map-armed-anim, none) 0.9s ease-in-out infinite;
+		}
 		.chip-row {
 			display: flex;
 			flex-wrap: wrap;
@@ -680,37 +698,63 @@ export class WaChainView extends HTMLElement {
 		return null;
 	}
 
+	// Re-entrancy guard: a card builder can itself synchronously write to
+	// xmlStore while THIS render is still mid-flight (e.g. _buildPannerCard
+	// materializing PannerNode's own panningModel default the first time it
+	// sees one absent — see wa-panner-view.js's own comment) — that write's
+	// "change" event reaches this same _onStoreChange listener immediately,
+	// so without this guard, a nested _render() call would run to
+	// completion (clearing+rebuilding this._stackEl) *while* the outer
+	// call's own forEach loop is still going, and the outer call would then
+	// keep appending its own (now-stale) cards on top of what the nested
+	// call just built — duplicate cards. Queuing one more pass for after
+	// the current one finishes, instead of recursing immediately, keeps
+	// this simple regardless of how many levels deep a builder's own writes
+	// go. Per Hans's own PannerNode feature (2026-10-04).
 	_render() {
-		const node = xmlStore.getSelectedNode();
-		const resolved = this._resolveRenderList(node);
-		this._stackEl.innerHTML = "";
-		// Every card (including any AnalyserNode ones and any $var-controlled
-		// knob/curve) gets rebuilt fresh below — drop the old tick callbacks
-		// so the shared loop (see _ensureLiveLoop) never calls into a
-		// canvas/knob that's no longer in the DOM. Re-populated as cards are
-		// built below.
-		this._activeAnalyserTicks = new Set();
-		this._activeRemoteControlTicks = new Set();
-
-		if (!resolved) return;
-
-		if (resolved.children.length === 0) {
-			const hint = document.createElement("p");
-			hint.className = "centered";
-			hint.textContent = "Empty chain — add elements in the XML editor.";
-			this._stackEl.appendChild(hint);
+		if (this._rendering) {
+			this._renderQueued = true;
 			return;
 		}
+		this._rendering = true;
+		try {
+			const node = xmlStore.getSelectedNode();
+			const resolved = this._resolveRenderList(node);
+			this._stackEl.innerHTML = "";
+			// Every card (including any AnalyserNode ones and any
+			// $var-controlled knob/curve) gets rebuilt fresh below — drop the
+			// old tick callbacks so the shared loop (see _ensureLiveLoop)
+			// never calls into a canvas/knob that's no longer in the DOM.
+			// Re-populated as cards are built below.
+			this._activeAnalyserTicks = new Set();
+			this._activeRemoteControlTicks = new Set();
 
-		this._stackEl.appendChild(this._buildArrow());
-		resolved.children.forEach((child, i) => {
-			if (i > 0) this._stackEl.appendChild(this._buildArrow());
-			const builder = NODE_BUILDERS[child.tagName];
-			const card = builder ? builder(this, child) : this._buildGenericCard(child);
-			if (child.id === resolved.highlightId) card.classList.add("selected");
-			this._stackEl.appendChild(card);
-		});
-		this._stackEl.appendChild(this._buildArrow());
+			if (!resolved) return;
+
+			if (resolved.children.length === 0) {
+				const hint = document.createElement("p");
+				hint.className = "centered";
+				hint.textContent = "Empty chain — add elements in the XML editor.";
+				this._stackEl.appendChild(hint);
+				return;
+			}
+
+			this._stackEl.appendChild(this._buildArrow());
+			resolved.children.forEach((child, i) => {
+				if (i > 0) this._stackEl.appendChild(this._buildArrow());
+				const builder = NODE_BUILDERS[child.tagName];
+				const card = builder ? builder(this, child) : this._buildGenericCard(child);
+				if (child.id === resolved.highlightId) card.classList.add("selected");
+				this._stackEl.appendChild(card);
+			});
+			this._stackEl.appendChild(this._buildArrow());
+		} finally {
+			this._rendering = false;
+			if (this._renderQueued) {
+				this._renderQueued = false;
+				this._render();
+			}
+		}
 	}
 
 	_buildArrow() {
@@ -1909,6 +1953,23 @@ export class WaChainView extends HTMLElement {
 		ctx.closePath();
 		ctx.fill();
 	}
+
+	// --- PannerNode: a shared 3D-panning "radar" (see wa-panner-view.js) ---
+	// Per Hans (2026-10-04): "Om den ligger i en Chain ska den in som ett
+	// objekt i den vertikala kedjan med seriekopplade objekt" — a completely
+	// ordinary card in the chain stack (this file's own _render() already
+	// gives it that for free, same as any other NODE_BUILDERS entry); the
+	// only PannerNode-specific work here is embedding the shared radar
+	// widget and pointing it at this node.
+	_buildPannerCard(node) {
+		const card = document.createElement("div");
+		card.className = "node-card panner-card";
+		card.appendChild(this._buildCardHeader(node));
+		const view = document.createElement("wa-panner-view");
+		card.appendChild(view);
+		view.setPrimaryNode(node.id);
+		return card;
+	}
 }
 
 const NODE_BUILDERS = {
@@ -1919,7 +1980,8 @@ const NODE_BUILDERS = {
 	WaveShaperNode: (view, node) => view._buildWaveShaperCard(node),
 	StereoPannerNode: (view, node) => view._buildStereoPannerCard(node),
 	DelayNode: (view, node) => view._buildDelayCard(node),
-	AnalyserNode: (view, node) => view._buildAnalyserCard(node)
+	AnalyserNode: (view, node) => view._buildAnalyserCard(node),
+	PannerNode: (view, node) => view._buildPannerCard(node)
 };
 
 export const SUPPORTED_CHAIN_NODE_TAGS = new Set(Object.keys(NODE_BUILDERS));

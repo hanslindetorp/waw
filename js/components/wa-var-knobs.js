@@ -5,7 +5,11 @@ import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { mapStage1, applyConvertFn } from "../xml-editor/var-mapper-math.js";
 import { formatValue } from "../utils/number-format.js";
 import { varMapMode } from "../state/var-map-mode.js";
+import { inputMapMode } from "../state/input-map-mode.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
+import { variableNameFromValue, variablePropFromValue } from "../xml-editor/variable-references.js";
+import { getLiveProperty } from "../waxml-integration/live-property.js";
+import { pickVarSourceSuffix } from "./wa-var-source-popup.js";
 
 // One knob per <Var> child of a "scope" node — lets you nudge a variable
 // live while playing, right from the player/bottom bar. Turning a knob never
@@ -122,20 +126,46 @@ template.innerHTML = `
 			border-color: var(--waw-accent, #4fa3ff);
 			color: var(--waw-accent, #4fa3ff);
 		}
-		@keyframes var-map-armed-blink {
+		/* Faint yellow ring — the Map button's own armed state, and every
+		   valid target (a root Var knob, for the other kind of Map mode —
+		   see .var-knob-wrap.map-target-armed below) while either is armed.
+		   Same "--waw-map-armed-anim"-driven keyframe param-binding.js's
+		   own wireMapClaim (Chain view/Mixer knobs) and wa-node-inspector.js
+		   (attribute rows) already use for their own targets — declared
+		   again here since a keyframe name is resolved within whichever
+		   shadow root's own stylesheet references it, never shared across
+		   shadow boundaries. Per Hans (2026-10-03): "likadan gul ram" on the
+		   button as on every target it can bind to, replacing the old plain
+		   opacity blink (2026-09-27).
+		   .map-btn.armed uses the same box-shadow ring, unconditionally
+		   (not gated behind the custom property) — a plain infinite
+		   animation is enough since this button only ever renders while
+		   varMapMode is actually armed for this exact Var. */
+		@keyframes target-armed-blink {
 			0%,
 			100% {
-				opacity: 1;
+				box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
 			}
 			50% {
-				opacity: 0.35;
+				box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.55);
 			}
 		}
 		.map-btn.armed {
 			border-style: solid;
-			border-color: var(--waw-accent, #4fa3ff);
-			color: var(--waw-accent, #4fa3ff);
-			animation: var-map-armed-blink 0.9s ease-in-out infinite;
+			border-color: #facc15;
+			color: #facc15;
+			animation: target-armed-blink 0.9s ease-in-out infinite;
+		}
+		/* Every OTHER root Var knob is a valid target while either Map mode
+		   is armed — mapping this Var to another Var's output (varMapMode,
+		   see _buildKnob's own claim logic), or mapping an INPUT entry onto
+		   a Var (inputMapMode, root-scope only — see wa-webcam-input.js).
+		   Toggled directly in _buildKnob (this component already fully
+		   re-renders on either mode's own "change" event), not via the
+		   inherited-custom-property trick the cross-shadow-root targets
+		   elsewhere need. */
+		.var-knob-wrap.map-target-armed {
+			animation: target-armed-blink 0.9s ease-in-out infinite;
 		}
 		/* Knob + its value sit in a row now (value used to be stacked below
 		   the knob along with the name) — per Hans (2026-09-10). Gap widened
@@ -172,6 +202,18 @@ template.innerHTML = `
 		.var-knob.disabled {
 			cursor: default;
 			opacity: 0.4;
+		}
+		/* This Var's own "value" is a "$otherVar" reference (see
+		   _buildKnob) — same "don't fight the live value" blue ring every
+		   other remote-controlled knob/fader in the app already uses
+		   (wa-mixer-view.js's own .remote-controlled). Dragging is skipped
+		   entirely for this knob; _pollRemoteControlled keeps its dial
+		   honest instead. Per Hans (2026-10-03): "Det ska gå att mappa en
+		   variabel till en annan... slava till sin target <Var>s
+		   outputvärde." */
+		.var-knob.remote-controlled {
+			cursor: default;
+			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6);
 		}
 		/* Selection highlight moved to the whole box (per Hans, 2026-09-30) —
 		   not just the knob, which is drag-only territory (see the wrap-level
@@ -269,6 +311,23 @@ export class WaVarKnobs extends HTMLElement {
 		// (_onXmlStoreChange), so this stays consistent rather than trying to
 		// patch just the one button in place. Per Hans (2026-09-27).
 		this._onVarMapModeChange = () => this._render();
+		// Same reasoning, for the OTHER mapping direction (an INPUT entry
+		// onto a root Var — see wa-webcam-input.js/input-map-mode.js): every
+		// root knob's own ".map-target-armed" highlight is recomputed fresh
+		// in _buildKnob on every render, so a full re-render here is enough,
+		// same as _onVarMapModeChange. Per Hans (2026-10-03).
+		this._onInputMapModeChange = () => this._render();
+		// Shared rAF loop for every currently-visible knob whose own "value"
+		// slaves off another Var (see _buildKnob's own slavedToName) — same
+		// "one shared timer, only runs while something actually needs it"
+		// shape as wa-chain-view.js's own _ensureLiveLoop, just without that
+		// file's AnalyserNode half (nothing here needs it). Each tick reads
+		// the target Var's live "mappedValue" and pushes it through
+		// playerStore.setVariable() — the existing _onVariableChange
+		// listener below picks that up and updates the dial for free, same
+		// as any other setVariable() caller.
+		this._activeRemoteControlTicks = new Set();
+		this._liveLoopId = null;
 	}
 
 	// Points this instance at a specific node's own <Var> children instead of
@@ -304,6 +363,7 @@ export class WaVarKnobs extends HTMLElement {
 		playerStore.addEventListener("variable-change", this._onVariableChange);
 		document.addEventListener("keydown", this._onKeyDown);
 		varMapMode.addEventListener("change", this._onVarMapModeChange);
+		inputMapMode.addEventListener("change", this._onInputMapModeChange);
 		this._render();
 	}
 
@@ -313,6 +373,31 @@ export class WaVarKnobs extends HTMLElement {
 		playerStore.removeEventListener("variable-change", this._onVariableChange);
 		document.removeEventListener("keydown", this._onKeyDown);
 		varMapMode.removeEventListener("change", this._onVarMapModeChange);
+		inputMapMode.removeEventListener("change", this._onInputMapModeChange);
+		this._stopLiveLoop();
+	}
+
+	// Shared rAF loop — see the constructor's own comment on
+	// _activeRemoteControlTicks. Mirrors wa-chain-view.js's own
+	// _ensureLiveLoop/_stopLiveLoop shape exactly.
+	_ensureLiveLoop() {
+		if (this._liveLoopId !== null) return;
+		const loop = () => {
+			this._liveLoopId = requestAnimationFrame(loop);
+			if (this._activeRemoteControlTicks.size === 0) {
+				this._stopLiveLoop();
+				return;
+			}
+			this._activeRemoteControlTicks.forEach((tick) => tick());
+		};
+		this._liveLoopId = requestAnimationFrame(loop);
+	}
+
+	_stopLiveLoop() {
+		if (this._liveLoopId !== null) {
+			cancelAnimationFrame(this._liveLoopId);
+			this._liveLoopId = null;
+		}
 	}
 
 	// Follows a variable set by *anything* (a Command type="set" shortcut,
@@ -373,6 +458,10 @@ export class WaVarKnobs extends HTMLElement {
 	_render() {
 		this._container.innerHTML = "";
 		this._knobRuntime.clear();
+		// Every knob gets rebuilt fresh below — drop the old tick callbacks
+		// so the shared loop (see _ensureLiveLoop) never calls into a knob
+		// that's no longer in the DOM. Re-populated by _buildKnob as it runs.
+		this._activeRemoteControlTicks = new Set();
 		const scopeNode = this._getScopeNode();
 		const varNodes = scopeNode ? scopeNode.children.filter((c) => c.tagName === "Var") : [];
 		this.hidden = varNodes.length === 0;
@@ -472,6 +561,19 @@ export class WaVarKnobs extends HTMLElement {
 			return wrap;
 		}
 
+		// Every OTHER root Var is a valid target while varMapMode is armed
+		// (map this Var to become a slave of the one you click — see the
+		// wrap click listener below), and — root scope only, per Hans
+		// (2026-10-03): "target kan bara vara ett <Var>-element / knob i
+		// rooten" — every root Var is also a valid target while
+		// inputMapMode is armed (an INPUT entry being mapped, see
+		// wa-webcam-input.js). Recomputed fresh on every render, which both
+		// modes already trigger via their own "change" listeners
+		// (_onVarMapModeChange/_onInputMapModeChange).
+		const isVarMapTarget = varMapMode.armed && varMapMode.varName !== varName;
+		const isInputMapTarget = this._scopeNodeId === null && inputMapMode.armed;
+		wrap.classList.toggle("map-target-armed", isVarMapTarget || isInputMapTarget);
+
 		const mapin = parseNumberList(node.attributes.mapin);
 		const min = mapin.length ? Math.min(...mapin) : 0;
 		const max = mapin.length ? Math.max(...mapin) : 1;
@@ -501,28 +603,133 @@ export class WaVarKnobs extends HTMLElement {
 		applyVisual(current);
 		this._knobRuntime.set(node.id, { applyVisual, min, max });
 
-		const commit = (v) => {
-			this._values.set(node.id, v);
-			applyVisual(v);
-			playerStore.setVariable(varName, v);
-		};
+		// This Var's own "value" is itself a "$otherVar.mappedValue"
+		// reference — i.e. it was mapped to another Var via the wrap click
+		// listener below (see _claimVarToVarMapping). waxml.js's own
+		// generic per-attribute $-reference resolution (the mechanism every
+		// *other* "$name"-controlled attribute in this app already relies
+		// on) turns out not to actually reach a <Var>'s own "value" live —
+		// verified live (2026-10-03): the generic Watcher it wraps `value`
+		// in calls `xmlNode.obj.setTargetAtTime(...)`, which Variable
+		// objects don't have, so the callback silently no-ops. Rather than
+		// touch waxml.js (never edited from here), this drives the slaving
+		// entirely from our own side instead: every tick, read the TARGET
+		// Var's live "mappedValue" (its fully computed output, post
+		// mapin/mapout/curve/pattern/convert) and push it through
+		// playerStore.setVariable() — the exact same call a knob drag
+		// already uses, so the existing _onVariableChange listener picks it
+		// up and updates this dial for free, no separate apply-visual path
+		// needed here. Dragging is skipped entirely while slaved, same
+		// "don't fight the live value" lock every other $var-controlled
+		// knob/fader in the app already uses.
+		const slavedToName = variableNameFromValue(node.attributes.value)?.split(".")[0];
+		const slavedToNode = slavedToName ? this._findVarByName(slavedToName) : null;
+		if (slavedToNode) {
+			knob.classList.add("remote-controlled");
+			const slavedProp = variablePropFromValue(node.attributes.value);
+			const pushFromTarget = () => {
+				const live = getLiveProperty(slavedToNode.attributes.id, slavedProp);
+				if (Number.isFinite(live)) playerStore.setVariable(varName, live);
+			};
+			this._activeRemoteControlTicks.add(pushFromTarget);
+			this._ensureLiveLoop();
+		} else {
+			const commit = (v) => {
+				this._values.set(node.id, v);
+				applyVisual(v);
+				playerStore.setVariable(varName, v);
+			};
 
-		wireKnobDrag(knob, {
-			getStartValue: () => this._values.get(node.id),
-			min,
-			max,
-			onChange: commit,
-			defaultValue,
-			pxPerRange: KNOB_PX_PER_RANGE
+			wireKnobDrag(knob, {
+				getStartValue: () => this._values.get(node.id),
+				min,
+				max,
+				onChange: commit,
+				defaultValue,
+				pxPerRange: KNOB_PX_PER_RANGE
+			});
+		}
+
+		// Click anywhere in the box either claims this Var as a mapping
+		// target (while either Map mode is armed — see above for which
+		// knobs qualify) or, the normal case, selects the node — except on
+		// the knob itself (drag-only, see above) or on an element that
+		// already handles its own click (the Map button stops propagation
+		// itself). Per Hans (2026-09-30 / 2026-10-03).
+		wrap.addEventListener("click", (e) => {
+			if (isVarMapTarget) {
+				e.stopPropagation();
+				const armedVarName = varMapMode.varName;
+				varMapMode.disarm();
+				this._claimVarToVarMapping(armedVarName, node, wrap.getBoundingClientRect());
+				return;
+			}
+			if (isInputMapTarget) {
+				e.stopPropagation();
+				inputMapMode.pick(varName);
+				return;
+			}
+			xmlStore.selectNode(node.id);
 		});
 
-		// Click anywhere in the box selects the node — except on the knob
-		// itself (drag-only, see above) or on an element that already
-		// handles its own click (the Map button stops propagation itself).
-		// Per Hans (2026-09-30).
-		wrap.addEventListener("click", () => xmlStore.selectNode(node.id));
-
 		return wrap;
+	}
+
+	// Makes the Var currently armed in varMapMode (the one whose "Map..."
+	// button was clicked) slave to `targetNode`'s own OUTPUT value — the
+	// INVERSE of every other varMapMode claim site (param-binding.js's
+	// wireMapClaim, wa-node-inspector.js's attribute rows), which write the
+	// armed Var's name INTO whatever gets clicked. Here it's the other way
+	// around: clicking a target Var means "I want to be driven BY that Var",
+	// so the write lands on the ARMED Var's own "value" attribute instead.
+	// This string is only ever read back by _buildKnob's own slavedToName/
+	// slavedProp — not by waxml.js itself (see its own comment for why).
+	//
+	// Per Hans (2026-10-04): the popup (wa-var-source-popup.js) offers a
+	// choice of which of the TARGET's live signals to reference — its plain
+	// value/speed/derivative(s) — since the target is the one providing the
+	// live signal here (the armed Var is only ever the one being written
+	// to). "value" (bare "$name", no suffix) resolves to the target's
+	// mappedValue via Variable's own value getter — the same output the old
+	// hardcoded ".mappedValue" suffix produced.
+	_claimVarToVarMapping(armedVarName, targetNode, anchorRect) {
+		const targetVarName = targetNode.attributes.name || targetNode.attributes.id;
+		const armedNode = this._findVarByName(armedVarName);
+		if (!armedNode || !targetVarName) return;
+		pickVarSourceSuffix(anchorRect, targetVarName).then((suffix) => {
+			if (suffix === null) return;
+			const patch = { ...armedNode.attributes, value: `$${targetVarName}${suffix}` };
+			// speed/derivative(2/3) are waxml.js's own frame-to-frame delta of
+			// mappedValue — naturally tiny numbers (found live, 2026-10-04:
+			// ~0.03-0.06 for an ordinary continuous drag) that a plain 0-1
+			// mapin would barely register. Per Hans: switch the ARMED (slaved)
+			// Var's own mapin to "auto" whenever one of these is picked, which
+			// turns on waxml.js's existing autoInputRange (see Variable's own
+			// constructor: `params.mapin == "auto"`) — it rescales whatever
+			// raw range it actually observes into mapout's own range instead
+			// of a hand-picked one. Never touched for the plain "value" pick
+			// (suffix === ""), which is already full-range.
+			if (suffix !== "") patch.mapin = "auto";
+			xmlStore.updateAttributes(armedNode.id, patch);
+		});
+	}
+
+	// Same flat "search the whole document by name" the rest of the app
+	// already assumes for $-references (varMapMode.arm() itself only ever
+	// carries a bare name, not a node id — see its own comment) — the armed
+	// Var could be from either this instance's row or the other one
+	// (global/local), so scope isn't known here either way.
+	_findVarByName(name) {
+		if (!xmlStore.root || !name) return null;
+		const walk = (node) => {
+			if (node.tagName === "Var" && (node.attributes.name || node.attributes.id) === name) return node;
+			for (const child of node.children) {
+				const found = walk(child);
+				if (found) return found;
+			}
+			return null;
+		};
+		return walk(xmlStore.root);
 	}
 
 	_buildTicks(count = 11) {

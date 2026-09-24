@@ -18,6 +18,7 @@ import {
 } from "../waxml-integration/gain-units.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
 import { wireMapClaim, wireInlineTextEdit } from "../utils/param-binding.js";
+import "./wa-panner-view.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
@@ -54,6 +55,15 @@ function applyLiveGainDb(nodeId, db, isLinearGainNode) {
 function readPan(node) {
 	const num = parseFloat(node.attributes.pan);
 	return Number.isFinite(num) ? Math.max(-1, Math.min(1, num)) : 0;
+}
+
+// Drops any key whose value is undefined — used by the 3D-panning cache
+// (_switchToPannerNode/_switchToStereoPanner) so an attribute the node
+// never actually had doesn't get stored (and later restored) as a literal
+// `undefined` value, which xmlStore's own XML serialization can't handle
+// (found live, 2026-10-04: it assumes every attribute value is a string).
+function pruneUndefined(obj) {
+	return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 }
 
 function displayLabel(node) {
@@ -418,6 +428,23 @@ template.innerHTML = `
 		}
 		.solo-btn.remote-controlled:hover {
 			border-color: #0b0c0d;
+		}
+		/* Faint yellow ring on every mappable knob/chip while a Var's
+		   "Map..." is armed (param-binding.js's wireMapClaim already marks
+		   them "map-target-armed" — see its own comment for why this is
+		   driven by an inherited custom property rather than a listener per
+		   element). Per Hans (2026-10-03). */
+		@keyframes target-armed-blink {
+			0%,
+			100% {
+				box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+			}
+			50% {
+				box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.55);
+			}
+		}
+		.map-target-armed {
+			animation: var(--waw-map-armed-anim, none) 0.9s ease-in-out infinite;
 		}
 		.lamp {
 			width: 8px;
@@ -1081,6 +1108,104 @@ template.innerHTML = `
 			border-radius: 4px;
 			padding: 0.2rem 0.1rem;
 		}
+		/* 3D panning toggle + thumbnail — per Hans (2026-10-04): a channel
+		   only ever gets this row when it actually has a StereoPannerNode
+		   or PannerNode child (see _buildPanRow). */
+		.panner-3d-toggle {
+			flex: 0 0 auto;
+			width: 20px;
+			height: 16px;
+			border-radius: 4px;
+			background: #1a1c1f;
+			border: 1px solid #0b0c0d;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.55rem;
+			font-weight: 700;
+			line-height: 1;
+			cursor: pointer;
+			padding: 0;
+		}
+		.panner-3d-toggle:hover {
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
+		}
+		.panner-3d-toggle.active {
+			background: var(--waw-accent, #4fa3ff);
+			border-color: var(--waw-accent, #4fa3ff);
+			color: #06131f;
+		}
+		.panner-thumb-wrap {
+			position: relative;
+			width: 26px;
+			height: 26px;
+			border-radius: 50%;
+			overflow: hidden;
+			border: 1px solid #0b0c0d;
+			background: #111315;
+			cursor: pointer;
+			flex: 0 0 auto;
+		}
+		.panner-thumb-wrap wa-panner-view {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			/* CANVAS_W/CANVAS_H from wa-panner-view.js (240x262) scaled down
+			   to fit this thumbnail's own 26px circle — the grid's own
+			   padding (LABEL_H etc.) means only the circle itself, not the
+			   label/slider/zoom row, ends up visible here, which is exactly
+			   the point of a *thumbnail*. pointer-events: none hands every
+			   click to .panner-thumb-wrap's own listener instead (opens the
+			   popup) rather than this — otherwise fully interactive —
+			   instance's own drag handling at a scale far too small to
+			   usefully drag anything in. */
+			width: 240px;
+			height: 262px;
+			transform: translate(-50%, -54%) scale(0.14);
+			transform-origin: center;
+			pointer-events: none;
+		}
+		.panner-popup-backdrop {
+			position: fixed;
+			inset: 0;
+			z-index: 60;
+			background: rgba(0, 0, 0, 0.55);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
+		.panner-popup-backdrop[hidden] {
+			display: none;
+		}
+		.panner-popup {
+			background: #1c1c1c;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 10px;
+			box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+			padding: 0.8rem 1rem 1rem;
+		}
+		.panner-popup-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 1rem;
+			margin-bottom: 0.4rem;
+		}
+		.panner-popup-title {
+			font-weight: 600;
+			font-size: 0.85rem;
+		}
+		.panner-popup-close {
+			background: none;
+			border: none;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 1.1rem;
+			line-height: 1;
+			cursor: pointer;
+			padding: 0.1rem 0.3rem;
+		}
+		.panner-popup-close:hover {
+			color: var(--waw-fg, #e8e8e8);
+		}
 	</style>
 	<div class="mixer">
 		<div class="mixer-body">
@@ -1122,6 +1247,15 @@ template.innerHTML = `
 				</div>
 				<span class="solo-slider-minmax">100%</span>
 			</div>
+		</div>
+	</div>
+	<div class="panner-popup-backdrop" hidden>
+		<div class="panner-popup">
+			<div class="panner-popup-header">
+				<span class="panner-popup-title"></span>
+				<button class="panner-popup-close" type="button" title="Close">×</button>
+			</div>
+			<wa-panner-view class="panner-popup-view"></wa-panner-view>
 		</div>
 	</div>
 `;
@@ -1185,6 +1319,21 @@ export class WaMixerView extends HTMLElement {
 		this._meterRafId = null;
 		this._remoteControls = []; // per-frame tick()s for <Var>-controlled knobs — see _lockRemoteControlled
 		this._soloLocked = false; // set every _render() — guards _wireSoloSliderDrag's pointerdown, since that's wired once, not rebuilt per render
+		// 3D-panning toggle (see _buildPanRow/_switchToPannerNode/
+		// _switchToStereoPanner) — each Map is nodeId (the shared XML `id`
+		// StereoPannerNode<->PannerNode keeps across the tag swap) -> that
+		// side's own last-known attributes, so switching back restores
+		// exactly where you left off instead of resetting to a default.
+		// Per Hans (2026-10-04): "För att inställningarna inte ska gå
+		// förlorade när man switchar ska de sparas i json-filen" — unlike
+		// e.g. wa-var-view.js's own RAM-only toggle-off cache, this one is
+		// real getState()/applyState() persistence (see those methods
+		// below), since he explicitly asked for it to survive a reload.
+		this._stereoPanSettings = new Map();
+		this._pannerSettings = new Map();
+		this._pannerPopupBackdrop = this.shadowRoot.querySelector(".panner-popup-backdrop");
+		this._pannerPopupTitle = this.shadowRoot.querySelector(".panner-popup-title");
+		this._pannerPopupView = this.shadowRoot.querySelector(".panner-popup-view");
 		this._onStoreChange = this._onStoreChange.bind(this);
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
 		this._onKeyDown = this._onKeyDown.bind(this);
@@ -1216,6 +1365,10 @@ export class WaMixerView extends HTMLElement {
 		this._mixerRoot.addEventListener("click", () => {
 			if (this._activeMixerId) xmlStore.selectNode(this._activeMixerId);
 		});
+		this._pannerPopupBackdrop.addEventListener("click", (e) => {
+			if (e.target === this._pannerPopupBackdrop) this._closePannerPopup();
+		});
+		this.shadowRoot.querySelector(".panner-popup-close").addEventListener("click", () => this._closePannerPopup());
 		this._onStoreChange();
 		this._onPlayerStoreChange();
 	}
@@ -1228,6 +1381,32 @@ export class WaMixerView extends HTMLElement {
 		this._disconnectMeters();
 		this._unwireMixerUpdateListener();
 		this._resizeObserver?.disconnect();
+	}
+
+	// ── 3D-panning cache: persistence (workstation-state.json, via
+	// workstation-state.js's own registerLayoutExtras — see that file's
+	// "mixerView" wiring) ── See the constructor's own comment on why this
+	// (unlike most of this app's other RAM-only interface caches) is real
+	// persistence rather than session-only.
+	getState() {
+		return {
+			stereoPanSettings: Object.fromEntries(this._stereoPanSettings),
+			pannerSettings: Object.fromEntries(this._pannerSettings)
+		};
+	}
+
+	applyState(state) {
+		if (!state || typeof state !== "object") return;
+		if (state.stereoPanSettings && typeof state.stereoPanSettings === "object") {
+			this._stereoPanSettings = new Map(Object.entries(state.stereoPanSettings));
+		}
+		if (state.pannerSettings && typeof state.pannerSettings === "object") {
+			this._pannerSettings = new Map(Object.entries(state.pannerSettings));
+		}
+	}
+
+	_dispatchStateChange() {
+		this.dispatchEvent(new CustomEvent("state-change", { bubbles: true, composed: true }));
 	}
 
 	// --- live metering, driven by the global player (see player-store.js) ---
@@ -1538,6 +1717,10 @@ export class WaMixerView extends HTMLElement {
 	// container" behavior as wa-section-view's own delete handling, since
 	// xmlStore.removeNode only clears selectedNodeId, never _activeMixerId.
 	_onKeyDown(e) {
+		if (e.key === "Escape" && !this._pannerPopupBackdrop.hidden) {
+			this._closePannerPopup();
+			return;
+		}
 		if (e.key !== "Backspace" && e.key !== "Delete") return;
 		if (this._isTextEditingTarget(e)) return;
 		const selectedId = xmlStore.selectedNodeId;
@@ -2332,7 +2515,17 @@ export class WaMixerView extends HTMLElement {
 		const panRow = document.createElement("div");
 		panRow.className = "pan-row";
 		panRow.style.height = `${PAN_ROW_HEIGHT}px`;
-		if (roles.stereoPanner) panRow.appendChild(this._buildPanKnob(roles.stereoPanner));
+		// A "3D" toggle only ever shows up alongside one of these two — per
+		// Hans (2026-10-04): "När en kanal med <StereoPannerNode> skapas ska
+		// det visas en liten knapp." A channel with neither (e.g. a VU-only
+		// strip) gets no pan-row content at all, same as before.
+		if (roles.stereoPanner) {
+			panRow.appendChild(this._buildPanKnob(roles.stereoPanner));
+			panRow.appendChild(this._build3DToggle(roles.stereoPanner, false));
+		} else if (roles.pannerNode) {
+			panRow.appendChild(this._buildPannerThumb(roles.pannerNode));
+			panRow.appendChild(this._build3DToggle(roles.pannerNode, true));
+		}
 		bottomGroup.appendChild(panRow);
 
 		const faderRow = document.createElement("div");
@@ -2379,12 +2572,132 @@ export class WaMixerView extends HTMLElement {
 		return {
 			filters: children.filter((c) => c.tagName === "BiquadFilterNode"),
 			stereoPanner: children.find((c) => c.tagName === "StereoPannerNode"),
+			pannerNode: children.find((c) => c.tagName === "PannerNode"),
 			gainNode,
 			muteGainNode,
 			wams: children.filter((c) => c.tagName === "Wam"),
 			preSends: gainIdx === -1 ? sends : sends.filter((s) => children.indexOf(s) < gainIdx),
 			postSends: gainIdx === -1 ? [] : sends.filter((s) => children.indexOf(s) > gainIdx)
 		};
+	}
+
+	// --- 3D panning: StereoPannerNode <-> PannerNode toggle ---
+	// Per Hans (2026-10-04): "Om den trycks in byts <StereoPannerNode> ut
+	// mot en <PannerNode>... Om man klickar ur '3D' byts <PannerNode>
+	// tillbaka till <StereoPannerNode>."
+
+	_build3DToggle(node, isPannerActive) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "panner-3d-toggle";
+		btn.classList.toggle("active", isPannerActive);
+		btn.textContent = "3D";
+		btn.title = isPannerActive ? "Switch back to stereo pan" : "Switch to 3D panning";
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
+			if (!nodeNow) return;
+			if (isPannerActive) this._switchToStereoPanner(nodeNow);
+			else this._switchToPannerNode(nodeNow);
+		});
+		return btn;
+	}
+
+	// A small, non-interactive preview of the shared 3D-panning radar (see
+	// wa-panner-view.js) — clicking it opens the real, full-size one as a
+	// popup instead of trying to drag anything at thumbnail scale. Per
+	// Hans: "visas en miniatyr av 3D-panner-vyn på själva kanalen. När man
+	// klickar miniatyren öppnas ett lagom stort popup-fönster."
+	_buildPannerThumb(node) {
+		const wrap = document.createElement("div");
+		wrap.className = "panner-thumb-wrap";
+		wrap.title = "Open 3D panning";
+		const view = document.createElement("wa-panner-view");
+		wrap.appendChild(view);
+		view.setPrimaryNode(node.id);
+		wrap.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._openPannerPopup(node);
+		});
+		return wrap;
+	}
+
+	_openPannerPopup(node) {
+		this._pannerPopupTitle.textContent = `3D panning — ${node.attributes.label || node.attributes.id || "PannerNode"}`;
+		this._pannerPopupBackdrop.hidden = false;
+		this._pannerPopupView.setPrimaryNode(node.id);
+	}
+
+	_closePannerPopup() {
+		this._pannerPopupBackdrop.hidden = true;
+	}
+
+	// nodeId (the shared XML `id` StereoPannerNode<->PannerNode keeps across
+	// updateTagName, since that only ever changes the tag itself) is what
+	// both caches below are keyed by — see the constructor's own comment.
+	// Falls back to the internal tree id on a node with no `id` attribute
+	// yet, same as e.g. wa-chain-view.js's own _analyserModeKey.
+	_pannerCacheKey(node) {
+		return node.attributes.id || node.id;
+	}
+
+	_switchToPannerNode(stereoNode) {
+		const key = this._pannerCacheKey(stereoNode);
+		this._stereoPanSettings.set(key, pruneUndefined({ pan: stereoNode.attributes.pan }));
+		const { pan, ...commonAttrs } = stereoNode.attributes;
+		const restored = this._pannerSettings.get(key);
+		const nextAttrs = {
+			...commonAttrs,
+			...(restored && Object.keys(restored).length ? restored : { positionX: "0", positionY: "0", positionZ: "-1", panningModel: "HRTF" })
+		};
+		xmlStore.updateTagName(stereoNode.id, "PannerNode");
+		xmlStore.updateAttributes(stereoNode.id, nextAttrs);
+		this._dispatchStateChange();
+	}
+
+	_switchToStereoPanner(pannerNode) {
+		const key = this._pannerCacheKey(pannerNode);
+		const {
+			positionX,
+			positionY,
+			positionZ,
+			panningModel,
+			distanceModel,
+			refDistance,
+			maxDistance,
+			rolloffFactor,
+			coneInnerAngle,
+			coneOuterAngle,
+			coneOuterGain,
+			orientationX,
+			orientationY,
+			orientationZ,
+			...commonAttrs
+		} = pannerNode.attributes;
+		this._pannerSettings.set(
+			key,
+			pruneUndefined({
+				positionX,
+				positionY,
+				positionZ,
+				panningModel,
+				distanceModel,
+				refDistance,
+				maxDistance,
+				rolloffFactor,
+				coneInnerAngle,
+				coneOuterAngle,
+				coneOuterGain,
+				orientationX,
+				orientationY,
+				orientationZ
+			})
+		);
+		const restored = this._stereoPanSettings.get(key);
+		const nextAttrs = { ...commonAttrs, ...(restored && restored.pan !== undefined ? restored : { pan: "0" }) };
+		xmlStore.updateTagName(pannerNode.id, "StereoPannerNode");
+		xmlStore.updateAttributes(pannerNode.id, nextAttrs);
+		this._dispatchStateChange();
 	}
 
 	// --- filter row: one large gain knob + small freq/Q knobs ---

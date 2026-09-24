@@ -23,3 +23,17 @@ export function variableNameFromValue(value) {
 	if (!match) return null;
 	return match[1] || match[2] || match[3] || null;
 }
+
+// The dot-suffix a value references on its target Var (e.g. "$name.speed"
+// -> "speed"), or "value" when the reference is bare (e.g. "$name") — same
+// default waxml.js's own WebAudioUtils.replaceVariableNames falls back to.
+// Only the bare "$name[.prop]" form (group 2 above) actually allows a dot;
+// "${name}"/"var(name)" never do, matching waxml.js's own rxp regex.
+export function variablePropFromValue(value) {
+	if (typeof value !== "string") return "value";
+	const match = new RegExp(VAR_REF_SOURCE, "i").exec(value);
+	if (!match) return "value";
+	const full = match[1] || match[2] || match[3] || "";
+	const dot = full.indexOf(".");
+	return dot === -1 ? "value" : full.slice(dot + 1) || "value";
+}

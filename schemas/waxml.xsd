@@ -592,6 +592,19 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
+  <xs:simpleType name="varValue">
+    <xs:annotation>
+      <xs:documentation>A &lt;Var&gt;'s own raw input value: a plain number, or a variable reference / mathematical expression (see varValueExpression). Unlike a regular attribute's own mathExpression, a variable reference here may carry a dotted property suffix ($name.speed, $name.derivative, $name.derivative2, $name.derivative3) alongside the plain $name form — per Hans (2026-10-04): "jag inser att speed/derivative bara är vettiga alternativ när man mappar en &lt;Var&gt; till en &lt;Var&gt;," so only Var's own value attribute needs this, not every numeric attribute in general (see wa-var-knobs.js's own _claimVarToVarMapping, the only site that ever writes one of these).</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="xs:decimal varValueExpression"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="varValueExpression">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="(\(*\s*(\$[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?|\d+(\.\d+)?)\s*\)*\s*[+\-*/]\s*)*\(*\s*\$[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?\s*\)*(\s*[+\-*/]\s*\(*\s*(\$[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?|\d+(\.\d+)?)\s*\)*)*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="default">
     <xs:annotation>
       <xs:documentation></xs:documentation>
@@ -1585,7 +1598,7 @@
           <xs:attribute name="mapin" type="mapin"/>
           <xs:attribute name="mapout" type="mapout"/>
           <xs:attribute name="default" type="default"/>
-          <xs:attribute name="value" type="value"/>
+          <xs:attribute name="value" type="varValue"/>
           <xs:attribute name="trig" type="xs:string"/>
           <xs:attribute name="smoothDerivative" type="smoothDerivative"/>
           <xs:attribute name="curve" type="curve"/>

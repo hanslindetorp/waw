@@ -8,6 +8,7 @@ import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribut
 import { openIoPicker } from "./wa-io-picker.js";
 import { openVoicePicker } from "./wa-voice-picker.js";
 import { varMapMode } from "../state/var-map-mode.js";
+import { isNumericAttributeSchema } from "../xml-editor/schema-parser.js";
 
 // Showing/editing an element's own tag name here is turned off per Hans
 // (2026-09-03) — _renderTagNameField (and xmlStore.updateTagName) are left
@@ -152,6 +153,26 @@ template.innerHTML = `
 			display: flex;
 			align-items: center;
 			gap: 0.4rem;
+			border-radius: 4px;
+		}
+		/* Faint yellow ring while a Var's "Map..." is armed — every row is a
+		   valid target (see this row's own click listener above). Driven by
+		   the "--waw-map-armed-anim" custom property var-map-mode.js's own
+		   arm()/disarm() set on document.documentElement (inherits through
+		   the shadow boundary); the @keyframes itself has to be declared
+		   again in every shadow root that references it by name. Per Hans
+		   (2026-10-03). */
+		@keyframes target-armed-blink {
+			0%,
+			100% {
+				box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+			}
+			50% {
+				box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.55);
+			}
+		}
+		.map-target-armed {
+			animation: var(--waw-map-armed-anim, none) 0.9s ease-in-out infinite;
 		}
 		.attr-name {
 			flex: 0 0 auto;
@@ -575,7 +596,15 @@ export class WaNodeInspector extends HTMLElement {
 
 	_renderAttributeRow(node, attrName, value, attrSchema) {
 		const row = document.createElement("div");
-		row.className = "attr-row";
+		// "map-target-armed" is static (see param-binding.js's own
+		// wireMapClaim for why) — the actual blink is driven purely by the
+		// inherited "--waw-map-armed-anim" custom property. Only a
+		// numerically-typed attribute is a valid Map-mode target at all (see
+		// isNumericAttributeSchema's own comment) — everything else (label,
+		// id, class, an enum-only union, ...) never gets the ring, and the
+		// click listener below bails out for the same reason.
+		const isNumericTarget = isNumericAttributeSchema(attrSchema);
+		row.className = isNumericTarget ? "attr-row map-target-armed" : "attr-row";
 
 		// While a <Var> knob's "Map..." is armed (see wa-var-knobs.js /
 		// var-map-mode.js), a click anywhere on this row wires this
@@ -597,8 +626,15 @@ export class WaNodeInspector extends HTMLElement {
 		// reaching var-map-mode's own "unclaimed click disarms" listener
 		// anyway, that never actually gave any visual feedback that the
 		// bind had succeeded.)
+		//
+		// Per Hans (2026-10-04 correction): speed/derivative(s) are only ever
+		// meaningful when mapping a Var TO another Var (see wa-var-knobs.js's
+		// own _claimVarToVarMapping, which still offers that choice) — a claim
+		// landing on a regular attribute row always writes the bare "$name"
+		// directly, no popup, same as before that feature briefly existed on
+		// this path too.
 		row.addEventListener("click", (e) => {
-			if (!varMapMode.armed) return;
+			if (!varMapMode.armed || !isNumericTarget) return;
 			e.preventDefault();
 			e.stopPropagation();
 			const current = xmlStore.getSelectedNode();

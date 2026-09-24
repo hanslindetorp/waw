@@ -64,6 +64,12 @@ export function registerLayoutExtras(refs) {
 	// double as (per Hans, 2026-09-30 correction — see wa-var-view.js's own
 	// _mapDomain comment), same reasoning as chainView above.
 	layoutExtras.varView?.addEventListener("state-change", scheduleSave);
+	// wa-mixer-view.js's own StereoPannerNode<->PannerNode settings cache
+	// (see its own _switchToPannerNode/_switchToStereoPanner) — per Hans
+	// (2026-10-04), explicitly real persistence (unlike chainView/varView
+	// above) so switching a channel's "3D" toggle off and back on later
+	// never loses either side's settings.
+	layoutExtras.mixerView?.addEventListener("state-change", scheduleSave);
 }
 
 function captureState() {
@@ -90,6 +96,8 @@ function captureState() {
 	if (chainViewState) state.chainView = chainViewState;
 	const varViewState = layoutExtras.varView?.getState();
 	if (varViewState) state.varView = varViewState;
+	const mixerViewState = layoutExtras.mixerView?.getState();
+	if (mixerViewState) state.mixerView = mixerViewState;
 	// The internal tree id (xmlStore.selectedNodeId) is a session-local
 	// counter that resets on every reparse — never stable across a save/load
 	// round-trip. Only the XML `id` *attribute* is a meaningful, durable
@@ -138,6 +146,9 @@ function applyState(state) {
 	}
 	if (state.varView) {
 		layoutExtras.varView?.applyState(state.varView);
+	}
+	if (state.mixerView) {
+		layoutExtras.mixerView?.applyState(state.mixerView);
 	}
 }
 

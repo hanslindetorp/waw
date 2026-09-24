@@ -42,6 +42,22 @@ class VarMapMode extends EventTarget {
 		// since that element still works correctly as a map target either
 		// way, this is just the visual hint for everything else.
 		document.documentElement.style.cursor = "crosshair";
+		// Every valid target (see param-binding.js's wireMapClaim and
+		// wa-node-inspector.js's own attribute row, both of which set a
+		// permanent, static ".map-target-armed" class — never toggled per
+		// instance, to avoid needing a listener per element that would leak
+		// across every re-render) blinks a faint yellow ring while armed —
+		// per Hans (2026-10-03): "samtliga tillgängliga target ska blinka
+		// med motsvarande gul ram." A custom property is the only way to
+		// reach *into* every shadow root those targets live in (Chain view,
+		// Mixer, Inspector, ...) from here without each of them subscribing
+		// to this module directly — custom properties inherit through
+		// shadow boundaries even though selectors can't cross them; each of
+		// those components' own stylesheets still needs its own identical
+		// "target-armed-blink" @keyframes declaration (a keyframe name is
+		// resolved within whichever stylesheet uses it, never shared), just
+		// not a live subscription to this class.
+		document.documentElement.style.setProperty("--waw-map-armed-anim", "target-armed-blink");
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 
@@ -49,6 +65,7 @@ class VarMapMode extends EventTarget {
 		if (this._varName === null) return;
 		this._varName = null;
 		document.documentElement.style.cursor = "";
+		document.documentElement.style.setProperty("--waw-map-armed-anim", "none");
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 }

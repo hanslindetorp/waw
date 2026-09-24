@@ -2,6 +2,7 @@ import { varMapMode } from "../state/var-map-mode.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { isVariableControlled, variableNameFromValue } from "../xml-editor/variable-references.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
+import { isNumericAttributeSchema } from "../xml-editor/schema-parser.js";
 
 // A bare plain number (no "$name" reference, no unit suffix like "XdB", no
 // math expression) — the shape where the committed string IS the node's own
@@ -75,9 +76,36 @@ function commitRaw(getNode, attrName, raw) {
 // disarms" listener never got a chance to run here anyway, since
 // stopPropagation (needed to stop wireKnobDrag's own pointerdown from also
 // firing) keeps this pointerdown from ever reaching it.
+//
+// Per Hans (2026-10-04 correction): speed/derivative(s) are only ever
+// meaningful when mapping a Var TO another Var (see wa-var-knobs.js's own
+// _claimVarToVarMapping, which still offers that choice) — a claim landing
+// on a regular attribute here always writes the bare "$name" directly, no
+// popup, same as before that feature briefly existed on this path too.
 export function wireMapClaim(el, { getNode, attrName }) {
+	// Static — never toggled per instance/per arm-disarm cycle, so this
+	// never needs its own varMapMode listener (which, called fresh on every
+	// re-render the way this function is, would leak one new listener per
+	// render). The actual on/off blink is driven purely by the inherited
+	// "--waw-map-armed-anim" custom property var-map-mode.js's own arm()/
+	// disarm() set on document.documentElement — see its comment. The host
+	// component's own <style> still needs a matching ".map-target-armed"
+	// rule + "target-armed-blink" @keyframes (e.g. wa-chain-view.js's own).
+	//
+	// Every chip built via buildParamChip is already, by construction, a
+	// numeric parameter (frequency/gain/pan/...) — but resolved from the
+	// schema here too, rather than just trusted by convention, so the ring
+	// (and the claim itself) only ever lights up for a genuinely numeric
+	// attribute. Per Hans (2026-10-04): "Den gula blinkande ramen kring
+	// potentiella targets när man mappar ska bara vara kring [attribut med
+	// numeriska värden / <Var>-element]." Resolved once, at wiring time — a
+	// chip's own attrName/node tagName never change across its lifetime.
+	const nodeForSchema = getNode();
+	const attrSchema = nodeForSchema && xmlStore.schema?.elements[nodeForSchema.tagName]?.allowedAttributes.find((a) => a.name === attrName);
+	const isNumericTarget = isNumericAttributeSchema(attrSchema);
+	if (isNumericTarget) el.classList.add("map-target-armed");
 	el.addEventListener("pointerdown", (e) => {
-		if (!varMapMode.armed) return;
+		if (!varMapMode.armed || !isNumericTarget) return;
 		e.preventDefault();
 		e.stopPropagation();
 		e.stopImmediatePropagation();

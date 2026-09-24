@@ -358,3 +358,18 @@ function applyFacets(schemaAttr, restrictions) {
 		}
 	}
 }
+
+// True when this attribute's schema type is (or, for a union like
+// curve/panningModel, includes) a bare number — the only kind of target a
+// Map-mode claim (wa-node-inspector.js's attribute rows, param-binding.js's
+// wireMapClaim) should light up for. Per Hans (2026-10-04): "Den gula
+// blinkande ramen kring potentiella targets när man mappar ska bara vara
+// kring [attribut med numeriska värden]." An attribute with no schema entry
+// at all (freeform/schemaless mode) can't be confirmed numeric, so it's
+// excluded rather than assumed.
+export function isNumericAttributeSchema(attrSchema) {
+	if (!attrSchema) return false;
+	if (attrSchema.type === "number") return true;
+	if (attrSchema.type === "union") return (attrSchema.unionMembers || []).some((m) => m.type === "number");
+	return false;
+}

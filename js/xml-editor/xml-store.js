@@ -249,9 +249,7 @@ class XmlStore extends EventTarget {
 	// Creates a new root-level <Var>, in the same "grouped with every other
 	// root Var" spot wa-bottom-bar.js's own "+" button already used (right
 	// after the last existing root Var, else right after the last root
-	// Command, else as root's very first child) — factored out here so that
-	// button and wa-var-picker.js's own "New Variable..." flow can't drift
-	// apart. `name` is optional — omit it (rather than passing undefined
+	// Command, else as root's very first child). `name` is optional — omit it (rather than passing undefined
 	// through) to let insertNewChild's own Var defaulting generate one, same
 	// as the bottom bar's "+" already relied on. Never selects the new node
 	// (matches every other "+"-created root Command/Var in this app — per
@@ -449,6 +447,20 @@ class XmlStore extends EventTarget {
 	// live nudge case below — a silent no-op that never reaches the engine.
 	// Per Hans (2026-09-24): every add/remove/change of these needs a real
 	// updateFromString() every time.
+	//
+	// "value" deliberately NOT included here, even though mapping one <Var>
+	// to slave off another writes a "$otherVar.mappedValue" string into it
+	// (see wa-var-knobs.js's own _claimVarToVarMapping) — that slaving is
+	// driven entirely from our own side (a polling tick pushing the
+	// target's live output through playerStore.setVariable(), same call a
+	// knob drag already uses) rather than through waxml.js's own generic
+	// $-reference resolution, which — verified live, 2026-10-03 — doesn't
+	// actually reach a Var's own "value" (its Watcher callback calls
+	// xmlNode.obj.setTargetAtTime(...), which Variable objects don't have).
+	// wa-var-knobs.js already re-renders on every xmlStore "change" event
+	// regardless of this flag, so forcing a full engine reload here would
+	// only add an unnecessary graph rebuild (interrupting whatever's
+	// playing) for no benefit.
 	static VAR_MAPPING_ATTRS = new Set(["mapin", "mapout", "curve", "pattern", "convert"]);
 
 	// <Section>/<Layer>/<Stinger> build a Section/Track/Motif at the waxml.js

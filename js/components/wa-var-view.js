@@ -692,6 +692,20 @@ export class WaVarView extends HTMLElement {
 
 	// ── Rendering ────────────────────────────────────────────────────────
 	_render(node) {
+		// A literal mapin="auto" (never "auto,auto" — waxml.js's own Variable
+		// constructor only recognizes the bare string) turns on waxml.js's
+		// existing autoInputRange feature — see _claimVarToVarMapping in
+		// wa-var-knobs.js, which now writes this whenever a Var-to-Var mapping
+		// targets .speed/.derivative(2/3): those are naturally tiny numbers,
+		// and autoInputRange rescales them into mapout's own range instead of
+		// requiring a hand-picked mapin. parseNumberList("auto") already
+		// falls back to the placeholder [0,1] below on its own (not valid
+		// numbers), so only the *display* needs to know about this case — see
+		// _mapinIsAuto's use in _renderMapCanvas/_editAxisValue. Per Hans
+		// (2026-10-04): "'auto' måste reflekteras i översta grafen i
+		// previewn... Istället för min/max på X-axeln ska det stå auto på
+		// båda."
+		this._mapinIsAuto = node.attributes.mapin === "auto";
 		const mapin = parseNumberList(node.attributes.mapin) || [0, 1];
 		const mapout = parseNumberList(node.attributes.mapout) || [0, 1];
 		const pattern = parseNumberList(node.attributes.pattern);
@@ -934,8 +948,8 @@ export class WaVarView extends HTMLElement {
 		// Shows the FRAME (domain.*), not the raw mapin/mapout endpoint data
 		// — the two can now differ whenever an axis override is set (see
 		// _mapDomain's own comment). Per Hans (2026-09-30 correction).
-		this._axisLabels.mapinMin.textContent = fmtNum(domain.minIn);
-		this._axisLabels.mapinMax.textContent = fmtNum(domain.maxIn);
+		this._axisLabels.mapinMin.textContent = this._mapinIsAuto ? "auto" : fmtNum(domain.minIn);
+		this._axisLabels.mapinMax.textContent = this._mapinIsAuto ? "auto" : fmtNum(domain.maxIn);
 		this._axisLabels.mapoutMax.textContent = fmtNum(domain.maxOut);
 		this._axisLabels.mapoutMin.textContent = fmtNum(domain.minOut);
 
@@ -1285,6 +1299,26 @@ export class WaVarView extends HTMLElement {
 			input.replaceWith(labelEl);
 			if (!Number.isFinite(v)) return;
 			const key = this._axisOverrideKey(node);
+			// Typing a real value onto a mapin="auto" axis replaces the whole
+			// attribute with a real two-value range instead of just nudging the
+			// view-only frame (below) — "auto" is a single literal string, per
+			// waxml.js's own Variable constructor (see _render's comment), so
+			// there's no partial-auto state to preserve once either end gets a
+			// real number. The untouched end starts from the same [0,1] a
+			// brand new Var's mapin would. Per Hans (2026-10-04): "Dock ska det
+			// gå att dubbelklicka och skriva in manuella värden på båda."
+			if (this._mapinIsAuto && (overrideKey === "mapinMin" || overrideKey === "mapinMax")) {
+				const pair = [0, 1];
+				pair[overrideKey === "mapinMin" ? 0 : 1] = v;
+				this._mapinIsAuto = false;
+				this._currentMapin = pair;
+				const override = { ...(this._axisOverrides.get(key) || {}), mapinMin: pair[0], mapinMax: pair[1] };
+				this._axisOverrides.set(key, override);
+				this._currentAxisOverride = override;
+				this._writeAttrs(node, { mapin: pair.join(",") });
+				this._dispatchStateChange();
+				return;
+			}
 			const override = { ...(this._axisOverrides.get(key) || {}) };
 			override[overrideKey] = v;
 			this._axisOverrides.set(key, override);
