@@ -109,7 +109,10 @@ template.innerHTML = `
 			<button class="menu-item" type="button" data-action="save-as">
 				<span>Save As...</span><span class="menu-shortcut">⇧${MOD_KEY_LABEL}S</span>
 			</button>
-			<button class="menu-item" type="button" data-action="share">Share...</button>
+			<!-- Label reads "Export..." (data-action stays "share" — an
+			     internal wiring string, never shown) — per Hans (2026-09-27):
+			     "Share" is reserved for a different, future feature. -->
+			<button class="menu-item" type="button" data-action="share">Export...</button>
 		</div>
 		<div class="confirm-view" hidden>
 			<p class="confirm-message"></p>

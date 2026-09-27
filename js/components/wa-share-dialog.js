@@ -1,9 +1,12 @@
 import "./wa-api-view.js";
 
-// The "Share..." dialog (File menu) — a modal overlay on top of Workstation
-// showing the same embed instructions/API reference as the old standalone
-// API view (see wa-api-view.js, reused as-is here — the View menu's "API"
-// entry is gone, this dialog is its only home now). Per Hans (2026-09-13).
+// The "Export..." dialog (File menu, labeled "Share..." until 2026-09-27 —
+// per Hans, "Share" is reserved for a different, future feature; the
+// element/file name and internal "share" action id stayed as-is, only the
+// user-visible text changed) — a modal overlay on top of Workstation showing
+// the same embed instructions/API reference as the old standalone API view
+// (see wa-api-view.js, reused as-is here — the View menu's "API" entry is
+// gone, this dialog is its only home now). Per Hans (2026-09-13).
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -67,7 +70,7 @@ template.innerHTML = `
 	<div class="backdrop">
 		<div class="dialog">
 			<div class="dialog-header">
-				<span>Share</span>
+				<span>Export</span>
 				<button class="close-btn" type="button" title="Close">✕</button>
 			</div>
 			<wa-api-view></wa-api-view>

@@ -225,8 +225,15 @@ export class WaApiView extends HTMLElement {
 	}
 
 	_render() {
+		// Every example element here is a real open/close pair — <script> and
+		// <a> aren't void elements, so a self-closing "/>" (valid in the XML
+		// this app edits, but not in HTML) left the browser parsing everything
+		// after it as if it were still inside that one tag. Bug per Hans
+		// (2026-09-27). The <a> examples' own "..." inner text is just a
+		// placeholder — they illustrate an ATTRIBUTE to add to an element the
+		// host page already has, not a literal anchor to paste verbatim.
 		this._htmlCodeSlot.replaceChildren(
-			this._buildCodeBlock([plainLine(`<script src="waxml.js" data-source="${getMainDocumentName()}" />`)])
+			this._buildCodeBlock([plainLine(`<script src="waxml.js" data-source="${getMainDocumentName()}"></script>`)])
 		);
 
 		const commands = rootTrigCommands(xmlStore.root);
@@ -235,7 +242,7 @@ export class WaApiView extends HTMLElement {
 
 		this._trigAttrsSlot.replaceChildren(
 			this._buildCodeBlock(
-				commands.length ? commands.map((c) => plainLine(`<a data-waxml-click-trig="${c.attributes.value}" />`)) : null,
+				commands.length ? commands.map((c) => plainLine(`<a data-waxml-click-trig="${c.attributes.value}">...</a>`)) : null,
 				"No <Command type=\"trig\"> elements at the document root yet."
 			)
 		);
@@ -246,19 +253,19 @@ export class WaApiView extends HTMLElement {
 				// Bracketed ([value], still italic) here specifically because
 				// it sits inside a quoted HTML attribute value — unlike the JS
 				// call below, where a bare `value` is already unambiguous.
-				vars.length ? vars.map((v) => withPlaceholder(`<a data-waxml-click-set="${varName(v)}=`, "[value]", `" />`)) : null,
+				vars.length ? vars.map((v) => withPlaceholder(`<a data-waxml-click-set="${varName(v)}=`, "[value]", `">...</a>`)) : null,
 				"No <Var> elements at the document root yet."
 			)
 		);
 		this._trigJsSlot.replaceChildren(
 			this._buildCodeBlock(
-				commands.length ? commands.map((c) => plainLine(`waxml.trig("${c.attributes.value}")`)) : null,
+				commands.length ? commands.map((c) => plainLine(`waxml.trig("${c.attributes.value}");`)) : null,
 				"No <Command type=\"trig\"> elements at the document root yet."
 			)
 		);
 		this._setJsSlot.replaceChildren(
 			this._buildCodeBlock(
-				vars.length ? vars.map((v) => withPlaceholder(`waxml.set("${varName(v)}", `, "value", `)`)) : null,
+				vars.length ? vars.map((v) => withPlaceholder(`waxml.set("${varName(v)}", `, "value", `);`)) : null,
 				"No <Var> elements at the document root yet."
 			)
 		);
