@@ -1152,7 +1152,16 @@ export class WaNodeInspector extends HTMLElement {
 				if (!picked) return;
 				const input = frag.querySelector("input");
 				input.value = picked;
+				// "input" alone only refreshes the ✓/✗ validity styling —
+				// _renderStringControl's own commit only ever runs on
+				// "blur"/Enter (never per keystroke, see its own comment), so
+				// picking a value here never actually wrote it until the user
+				// also clicked into the field and pressed Enter. Bug per Hans
+				// (2026-09-27). A synthetic "blur" dispatch (not a real
+				// .blur() call, which requires the element to actually be
+				// focused) reaches that same commit listener regardless.
 				input.dispatchEvent(new Event("input"));
+				input.dispatchEvent(new FocusEvent("blur"));
 			});
 		});
 		frag.appendChild(pickBtn);
