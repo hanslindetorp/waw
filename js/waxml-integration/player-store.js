@@ -228,12 +228,20 @@ class PlayerStore extends EventTarget {
 		// _scheduleReload) — this is just the fallback for the narrow race
 		// where Play is clicked before that debounce has had a chance to fire.
 		if (!this._documentLoaded) await this._reloadDocument();
+		// Synchronous — fires right before the engine actually starts, so a
+		// listener (wa-section-view.js's own _onBeforePlay) can push a
+		// pending seek position into the engine first. Per Hans (2026-10-06):
+		// calling setOffset() *after* trig() glitched visibly (briefly showed
+		// bar 1 before jumping) — "Du ändrar så att setOffset() körs först
+		// och play() sedan."
+		this.dispatchEvent(new CustomEvent("beforeplay"));
 		bridge.trig(this.triggerSelector);
 		this.isPlaying = true;
 		this._emit();
 	}
 
 	stop() {
+		const wasPlaying = this.isPlaying;
 		try {
 			bridge.stopAll();
 		} catch {
@@ -241,6 +249,14 @@ class PlayerStore extends EventTarget {
 		}
 		this.isPlaying = false;
 		this._emit();
+		// A second, more specific event than "change" — wa-section-view.js's
+		// own seek/resume feature (per Hans, 2026-10-06) needs to tell
+		// "Stop pressed while already stopped" (which "change" alone can't:
+		// isPlaying was false and stays false, so nothing there actually
+		// transitions) apart from "Stop pressed while playing" (a genuine
+		// transition "change" already reports). wasPlaying carries that
+		// distinction; every other existing "change" listener is untouched.
+		this.dispatchEvent(new CustomEvent("stop", { detail: { wasPlaying } }));
 	}
 
 	// Fires a one-off trig for an arbitrary selector (a trigger-shortcut
@@ -276,6 +292,11 @@ class PlayerStore extends EventTarget {
 		if (!this._documentLoaded) await this._reloadDocument();
 		this.triggerSelector = selector;
 		if (sectionId !== null) this.activeSectionId = sectionId;
+		// See play()'s own identical comment — fired before bridge.trig() for
+		// the same "push a pending seek in before the engine starts, not
+		// after" reason. This is also the path wa-section-view.js's own
+		// _seekTo re-triggers through for a live jump while already playing.
+		this.dispatchEvent(new CustomEvent("beforeplay"));
 		bridge.trig(selector);
 		this.isPlaying = true;
 		this._emit();

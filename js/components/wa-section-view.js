@@ -43,11 +43,21 @@ import { applyLiveMethodCall } from "../waxml-integration/live-property.js";
 // xmlStore, so the XML editor and XML code panels already stay in sync for
 // free.
 //
-// Known limitation, called out here rather than silently faked: waxml.js has
-// no seek/scrub API we could find (see chat) — Play always starts the engine
-// from its own true beginning. Rewind/fast-forward are hidden for now since
-// they'd have nothing real to do; Go-to-start stays visible since "stop and
-// reset the visual cursor to 0" is meaningful on its own.
+// Click-to-seek: BUILT BUT CURRENTLY DISABLED (per Hans, 2026-10-07: "Det
+// där blev struligt... nu kräver det för mycket fix av gammal sladdrig kod
+// för att få det att funka" — rolled back until waxml.js's own play() stops
+// overwriting a pre-set offset right after starting, on his side). Every
+// piece stays in the file, just not wired up — see the commented-out
+// listener registrations in connectedCallback for exactly what to restore:
+// _onRulerClick/_seekTo (ruler click -> live jump or remembered position),
+// _onBeforePlay (pushes a pending seek into the engine via
+// Section.setOffset(ms) — a real waxml.js function Hans found, see its own
+// comment on _applyEngineOffset for exactly how it behaves — BEFORE
+// play()/trig, through the "beforeplay" event player-store.js's own
+// play()/trigShortcut() still dispatch), and _onPlayerStop (resets the
+// pending position on a double Stop). _onPlayerStoreChange itself is back
+// to its original pre-feature form (plain "_cursorTime = 0" on Play, no
+// position capture on Stop) so nothing above ever actually runs right now.
 
 const bridge = new WaxmlBridge();
 
@@ -89,8 +99,18 @@ const DEFAULT_ROW_HEIGHT = 56;
 // project's own Layer/Stinger labels tend to be. Doubled again to 640 (per
 // Hans, 2026-09-16: still too little room) — MAX_LABEL_WIDTH raised to
 // leave headroom to size it wider still.
-const DEFAULT_LABEL_WIDTH = 640;
+//
+// Shrunk back down to MIN_LABEL_WIDTH (per Hans, 2026-10-01): the fader/
+// mute/solo controls that 640px was sized for are currently commented out
+// in _buildLayerControls (per Hans, 2026-09-15: "de funkar inte"), so today
+// this column only ever holds the label text + the output button — right
+// now, reserving 640px for that leaves a big dead gap before the timeline,
+// sometimes crowding it out of view entirely ("output-knappen... ibland...
+// oproportionerligt stor plats... timeLine ibland inte alls syns"). Back to
+// MIN_LABEL_WIDTH once those controls return (still user-resizable wider
+// via the drag handle in the meantime, same as before).
 const MIN_LABEL_WIDTH = 140;
+const DEFAULT_LABEL_WIDTH = MIN_LABEL_WIDTH;
 const MAX_LABEL_WIDTH = 800;
 const RULER_HEIGHT = 32;
 const FALLBACK_BOX_BARS = 1;
@@ -1063,6 +1083,13 @@ export class WaSectionView extends HTMLElement {
 		this._cursorTime = 0;
 		this._isPlaying = false;
 		this._playStartAudioTime = 0;
+		// Click-to-seek's own per-<Section> pending position (internal tree id
+		// -> seconds from bar 1) — currently unused dead state, kept declared
+		// because _onRulerClick/_seekTo/_onBeforePlay/_onPlayerStop still
+		// read/write it; the feature itself is disabled (see the file header
+		// comment) until its listener registrations in connectedCallback are
+		// restored.
+		this._pendingOffsetBySectionId = new Map();
 		this._renderToken = 0;
 		this._bufferCache = new Map(); // resolvedUrl -> Promise<AudioBuffer>
 		this._resolvedBuffers = new Map(); // resolvedUrl -> AudioBuffer, once decode() actually settles (Promises can't be read synchronously, needed for a ghost's width during dragover)
@@ -1086,6 +1113,8 @@ export class WaSectionView extends HTMLElement {
 
 		this._onKeyDown = this._onKeyDown.bind(this);
 		this._onPlayerStoreChange = this._onPlayerStoreChange.bind(this);
+		this._onPlayerStop = this._onPlayerStop.bind(this);
+		this._onBeforePlay = this._onBeforePlay.bind(this);
 		this._onDividerResizeMove = this._onDividerResizeMove.bind(this);
 		this._onDividerResizeEnd = this._onDividerResizeEnd.bind(this);
 		this._onLabelResizeMove = this._onLabelResizeMove.bind(this);
@@ -1149,6 +1178,18 @@ export class WaSectionView extends HTMLElement {
 		xmlStore.addEventListener("change", () => this._onStoreChange());
 		document.addEventListener("keydown", this._onKeyDown);
 		playerStore.addEventListener("change", this._onPlayerStoreChange);
+		// Click-to-seek's own listener registrations — DISABLED, see the file
+		// header comment (per Hans, 2026-10-07: rolled back as "för mycket
+		// fix av gammal sladdrig kod", kept here ready to uncomment once
+		// waxml.js's own play()-overwrites-setOffset issue is sorted on his
+		// end). Un-comment these three (and the matching removeEventListener
+		// pair in disconnectedCallback) to turn it back on — nothing else
+		// needs to change.
+		// playerStore.addEventListener("stop", this._onPlayerStop);
+		// playerStore.addEventListener("beforeplay", this._onBeforePlay);
+		// this._grid.addEventListener("click", (e) => {
+		// 	if (e.target.closest(".ruler")) this._onRulerClick(e);
+		// });
 		this._onStoreChange();
 	}
 
@@ -1159,6 +1200,8 @@ export class WaSectionView extends HTMLElement {
 		this._resizeObserver.disconnect();
 		document.removeEventListener("keydown", this._onKeyDown);
 		playerStore.removeEventListener("change", this._onPlayerStoreChange);
+		// playerStore.removeEventListener("stop", this._onPlayerStop);
+		// playerStore.removeEventListener("beforeplay", this._onBeforePlay);
 	}
 
 	// --- reacting to selection / edits ---
@@ -1338,8 +1381,10 @@ export class WaSectionView extends HTMLElement {
 
 		this._isPlaying = isThisSectionPlaying;
 		if (this._isPlaying) {
-			// No known seek API (see file header) — every trig starts the
-			// engine from its true beginning, so the visual cursor resets too.
+			// Click-to-seek (_onRulerClick/_seekTo/_onBeforePlay) would seed
+			// this from a pending offset instead, once re-enabled — see the
+			// file header comment. Disabled for now, so this always starts
+			// from the true beginning, same as before that feature existed.
 			this._cursorTime = 0;
 			this._playStartAudioTime = playerStore.audioContext.currentTime;
 			// A fresh play session should page forward from wherever the view
@@ -1352,6 +1397,135 @@ export class WaSectionView extends HTMLElement {
 			this._updatePlayheadVisual();
 			this._activeStingerTriggers.forEach((entry) => entry.el?.remove());
 			this._activeStingerTriggers.clear();
+		}
+	}
+
+	// Fires synchronously from player-store.js's own play()/trigShortcut(),
+	// right before the engine actually starts (bridge.trig) — the one place
+	// this view can push a pending seek into the engine BEFORE play() runs,
+	// rather than after. Per Hans (2026-10-06): calling setOffset() once
+	// play() had already started caused a visible glitch (the preview
+	// briefly showed bar 1 before jumping) — "det verkar som att PLAY
+	// först spelar från början och sedan ändrar setOffset... Du ändrar så
+	// att setOffset() körs först och play() sedan." He's making waxml.js's
+	// own play() continue from a pre-set offset instead of resetting it
+	// (superseding the earlier 250ms-delay workaround this replaced — see
+	// git history), so all this needs to do now is call setOffset() early
+	// enough. Scoped to whichever Section is actually about to play
+	// (playerStore.activeSectionId), not necessarily the one this view
+	// currently has open.
+	_onBeforePlay() {
+		const sectionId = playerStore.activeSectionId;
+		if (!sectionId) return;
+		const pending = this._pendingOffsetBySectionId.get(sectionId);
+		if (!pending) return; // 0 or unset -> nothing pending, let it start from its own true beginning
+		const node = ops.findNodeById(xmlStore.root, sectionId);
+		if (node) this._applyEngineOffset(node, pending);
+	}
+
+	// The single, undocumented-but-verified-live (2026-10-06) music-engine
+	// instance this whole document's Sections share — window.iMus.getVariable
+	// /getPosition's own internal "defaultInstance" isn't itself exposed, but
+	// instances[0] is the same object in every live test run against it
+	// (single-Composition documents, which is all this app supports today).
+	_liveMusicInstance() {
+		const iMus = window.iMus;
+		return (iMus && Array.isArray(iMus.instances) && iMus.instances[0]) || null;
+	}
+
+	// Finds `node`'s own live Section object by its id/class — waxml.js's own
+	// `tags` array (set from the XML id/class, same thing a trig selector
+	// matches against) is the only link back to the XML a live Section
+	// object carries. Deliberately NOT keyed off instance.currentSection:
+	// that's only ever set once *something* has played in this session (see
+	// Section.play()'s own delayed `myInstance.currentSection = this`), so
+	// it can't be relied on for _onBeforePlay's own case — applying a
+	// pending offset to a Section that's never played before, the very
+	// first time it's about to.
+	_findLiveSectionForNode(node) {
+		const instance = this._liveMusicInstance();
+		if (!instance || !instance.sections) return null;
+		const classes = (node.attributes.class || "").trim().split(/\s+/).filter(Boolean);
+		const wanted = node.attributes.id ? [node.attributes.id, ...classes] : classes;
+		if (!wanted.length) return null;
+		return Object.values(instance.sections).find((s) => (s.tags || []).some((t) => wanted.includes(t))) || null;
+	}
+
+	// Section.setOffset(ms) (found by Hans, 2026-10-06) sets
+	// myInstance.sectionStart = currentTime - ms/1000, i.e. "pretend
+	// playback started this long ago", which is exactly "jump to ms
+	// milliseconds into the piece": verified live, the position reading
+	// (and the engine's own scheduling) picks it up cleanly and keeps
+	// advancing normally afterward. A no-op (not an error) if nothing's
+	// actually live yet — same "no graph loaded -> nothing to do" contract
+	// as live-property.js's own applyLiveProperty.
+	_applyEngineOffset(node, seconds) {
+		const section = this._findLiveSectionForNode(node);
+		if (section && typeof section.setOffset === "function") section.setOffset(seconds * 1000);
+	}
+
+	// Click-to-seek on the ruler — per Hans (2026-10-06). _timeToPx/_pxToTime
+	// are relative to the RULER's own left edge (column 2 of .grid's
+	// `grid-template-columns: var(--label-width) 1fr`) — column 1 (.corner,
+	// width _labelWidth) sits before it, same reason _updatePlayheadVisual
+	// has to ADD _labelWidth back on top of _timeToPx's result to place the
+	// (".grid"-relative, position:absolute) playhead correctly. This click
+	// handler needs the INVERSE: subtract _labelWidth before converting
+	// back to seconds, or every click lands off by a constant _labelWidth
+	// PIXELS — invisible at a glance since it's always the same pixel
+	// amount, but a *time* error that grows the further zoomed OUT you are
+	// (fewer seconds per pixel). Bug found live per Hans (2026-10-06): "Den
+	// påverkas av H-zoom så jag får en känsla av att det är ett
+	// pixel-offset-problem" — exactly this.
+	_onRulerClick(e) {
+		const node = this._getActiveSectionNode();
+		if (!node) return;
+		const info = readSectionInfo(node, this._getCompositionAncestor(node));
+		const offsetPx = e.clientX - this._layerScroll.getBoundingClientRect().left + this._layerScroll.scrollLeft - this._labelWidth;
+		const seconds = Math.max(0, this._pxToTime(offsetPx, info));
+		this._seekTo(node, seconds);
+	}
+
+	_seekTo(node, seconds) {
+		this._pendingOffsetBySectionId.set(node.id, seconds);
+		this._cursorTime = seconds;
+		this._updatePlayheadVisual();
+		this._updatePositionReadout();
+		// Moving the pointer always stops whatever's currently scheduled/
+		// sounding first — per Hans (2026-10-06): "annars fortsätter den
+		// senaste triggen att spela klart sina ljudfiler." A no-op while
+		// already stopped (bridge.stopAll() straight to waxml.stop("all"),
+		// never touches playerStore.isPlaying/emits "change" — this view's
+		// own _isPlaying stays whatever it already was).
+		bridge.stopAll();
+		// Playing right now (this Section specifically) -> immediately
+		// re-trigger so it keeps going, just from the new position —
+		// _onBeforePlay (fired from inside trigShortcut, before the engine
+		// actually restarts) applies the pending offset just set above.
+		// Stopped -> the writes above are the whole story; the next real
+		// Play picks the pending value back up the same way. Per Hans: "Om
+		// <Section> spelar hoppar uppspelningen dit och fortsätter."
+		if (this._isPlaying && this._lastSectionId === node.id) {
+			playerStore.trigShortcut(playerStore.triggerSelector, node.id);
+		}
+	}
+
+	// "Stop pressed while this Section was already stopped" resets its
+	// pending position back to bar 1 — per Hans (2026-10-06): "Om
+	// Stoppknappen trycks när <Section> inte spelar återställs
+	// positionPointer till takt 1." wasPlaying=true means this Stop was a
+	// genuine transition instead (a pause, not a reset) — already handled by
+	// _onPlayerStoreChange, which runs first (player-store.js's own stop()
+	// emits "change" before "stop" — see there).
+	_onPlayerStop(e) {
+		if (e.detail.wasPlaying) return;
+		const sectionId = playerStore.activeSectionId;
+		if (!sectionId) return;
+		this._pendingOffsetBySectionId.set(sectionId, 0);
+		if (sectionId === this._lastSectionId) {
+			this._cursorTime = 0;
+			this._updatePlayheadVisual();
+			this._updatePositionReadout();
 		}
 	}
 

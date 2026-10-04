@@ -49,7 +49,36 @@ export class VFS extends EventTarget {
 		this._nodes.set(node.id, node);
 		parent.children.push(node.id);
 		this._emitChange();
+		this._solidify(node);
 		return node;
+	}
+
+	// A File from drag-and-drop or a file picker keeps a lazy reference to
+	// its path on disk rather than holding its bytes — reading it (e.g.
+	// jszip's own lazy prepareContent, which only runs once generateAsync()
+	// is actually called at Save/Export time) re-opens that path. If the
+	// file has since moved, been deleted, or been evicted to a cloud-only
+	// placeholder (iCloud Drive/OneDrive "optimize storage", common on a
+	// project that's been open a while), that re-open throws jszip's own
+	// NotFoundError/NotReadableError — the "ibland går det inte att spara"
+	// bug (2026-10-02). Reading the bytes into memory immediately, while the
+	// file was just picked/dropped and is as fresh as it'll ever be, and
+	// swapping node.file for a pure in-memory copy makes every later read
+	// (Save/Export, however long after) immune to the original file's fate.
+	// Fire-and-forget: a read failure here just leaves the original lazy
+	// File in place, same as today's behavior, rather than failing the
+	// upload itself over a read that might still succeed later.
+	async _solidify(node) {
+		try {
+			const buffer = await node.file.arrayBuffer();
+			if (this._nodes.get(node.id) !== node) return; // deleted/replaced meanwhile
+			const type = node.file.type;
+			if (node.sessionUrl) URL.revokeObjectURL(node.sessionUrl);
+			node.file = new File([buffer], node.name, { type });
+			node.sessionUrl = URL.createObjectURL(node.file);
+		} catch {
+			// Leave the original (lazy) File in place.
+		}
 	}
 
 	// Replaces a file's content in place (same id, same name) — used to keep a

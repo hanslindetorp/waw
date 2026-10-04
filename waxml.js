@@ -20291,8 +20291,7 @@ class Music extends EventTarget {
 			switch(param){
 	
 				case "volume":
-	
-	
+				case "gain":
 				if(this.setVolume){
 					this.setVolume(value);
 				}
