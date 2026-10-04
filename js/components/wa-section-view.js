@@ -33,6 +33,7 @@ import { playerStore } from "../waxml-integration/player-store.js";
 import { buildRoutingTree } from "../xml-editor/io-routing.js";
 import { openIoPicker } from "./wa-io-picker.js";
 import { applyLiveMethodCall } from "../waxml-integration/live-property.js";
+import { parseGainAttributeToDb, formatGainAttribute, dbToFaderPosition, faderPositionToDb } from "../waxml-integration/gain-units.js";
 
 // DAW-style "arrange window" for the <Section> element type: transport bar, a
 // bars/beats ruler derived from the section's own tempo/timeSign, one lane per
@@ -100,17 +101,12 @@ const DEFAULT_ROW_HEIGHT = 56;
 // Hans, 2026-09-16: still too little room) — MAX_LABEL_WIDTH raised to
 // leave headroom to size it wider still.
 //
-// Shrunk back down to MIN_LABEL_WIDTH (per Hans, 2026-10-01): the fader/
-// mute/solo controls that 640px was sized for are currently commented out
-// in _buildLayerControls (per Hans, 2026-09-15: "de funkar inte"), so today
-// this column only ever holds the label text + the output button — right
-// now, reserving 640px for that leaves a big dead gap before the timeline,
-// sometimes crowding it out of view entirely ("output-knappen... ibland...
-// oproportionerligt stor plats... timeLine ibland inte alls syns"). Back to
-// MIN_LABEL_WIDTH once those controls return (still user-resizable wider
-// via the drag handle in the meantime, same as before).
+// Shrunk back to 140 while the fader/mute/solo controls were hidden (per
+// Hans, 2026-10-01), then set to 300 when they came back (per Hans,
+// 2026-10-04) — enough for the label text plus fader, M, S and output
+// without the dead gap the old 640 left before the timeline.
 const MIN_LABEL_WIDTH = 140;
-const DEFAULT_LABEL_WIDTH = MIN_LABEL_WIDTH;
+const DEFAULT_LABEL_WIDTH = 300;
 const MAX_LABEL_WIDTH = 800;
 const RULER_HEIGHT = 32;
 const FALLBACK_BOX_BARS = 1;
@@ -412,16 +408,19 @@ template.innerHTML = `
 		   space left over after the (non-growing) text — NOT margin-left:
 		   auto, which would consume that slack as empty margin instead of
 		   space the fader's own flex-grow (see _buildGainFader) can expand
-		   into. justify-content:flex-end keeps M/S/output pinned to the
-		   true right edge for the rare case where the fader has already
-		   hit its own 200px ceiling and space still remains. The cluster's
-		   own overflow:hidden is what makes controls that don't fit (see
-		   _buildGainFader's floor) clip away instead of forcing the row
-		   wider. */
+		   into. The first control's margin-left:auto (below) keeps M/S/
+		   output pinned to the true right edge for the rare case where the
+		   fader has already hit its own 200px ceiling and space still
+		   remains — an auto margin rather than justify-content:flex-end,
+		   which pushed any *overflow* out the left (start) edge instead,
+		   hiding the fader and M under the label text whenever the column
+		   was too narrow (found 2026-10-04 when restoring these controls).
+		   The cluster's own overflow:hidden is what makes controls that
+		   don't fit (see _buildGainFader's floor) clip away off the right
+		   end instead of forcing the row wider. */
 		.layer-controls {
 			display: flex;
 			align-items: center;
-			justify-content: flex-end;
 			gap: 3px;
 			flex: 1 1 auto;
 			min-width: 0;
@@ -429,6 +428,9 @@ template.innerHTML = `
 			padding-left: 0.4rem;
 			border-left: 1px solid var(--waw-border, #2f2f2f);
 			height: 60%;
+		}
+		.layer-controls > :first-child {
+			margin-left: auto;
 		}
 		.layer-fader {
 			/* Shadow DOM doesn't inherit main.css's global box-sizing reset —
@@ -3072,14 +3074,14 @@ export class WaSectionView extends HTMLElement {
 	_buildLayerControls(node, siblings) {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-controls";
-		// Volume fader, Mute and Solo temporarily hidden for both <Layer> and
-		// <Stinger> — per Hans (2026-09-15): "De funkar inte och jag hinner
-		// inte titta på det just nu" (first just for Layer, then "Ta bort för
-		// <Stinger> också" once he noticed it's the same shared function).
-		// Revisit and restore these three once fixed:
-		// wrap.appendChild(this._buildGainFader(node));
-		// wrap.appendChild(this._buildMuteButton(node));
-		// wrap.appendChild(this._buildSoloButton(node, siblings));
+		// Hidden 2026-09-15 ("De funkar inte") and restored 2026-10-04 once
+		// the actual causes were found: waxml-bridge.js's getLiveObjects
+		// never resolved a Layer/Stinger to its live Track/Motif (so every
+		// mute/gain/VU call silently no-op'd), and _writeMute passed
+		// setMuteState an inverted value.
+		wrap.appendChild(this._buildGainFader(node));
+		wrap.appendChild(this._buildMuteButton(node));
+		wrap.appendChild(this._buildSoloButton(node, siblings));
 		wrap.appendChild(this._buildOutputButton(node));
 		return wrap;
 	}
@@ -3109,7 +3111,11 @@ export class WaSectionView extends HTMLElement {
 		const nodeNow = ops.findNodeById(xmlStore.root, nodeId);
 		if (!nodeNow) return;
 		xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, mute: boolVal ? "1" : "0" });
-		applyLiveMethodCall(nodeNow.attributes.id, "setMuteState", boolVal ? 1 : 0);
+		// setMuteState's argument is the mute *gain* (waxml.js ramps
+		// bus.muteGain straight to it), so it's the inverse of the XML
+		// attribute: 0 = silent, 1 = audible. Passing mute's own 1/0 here
+		// (as this used to) made M un-mute and un-M mute.
+		applyLiveMethodCall(nodeNow.attributes.id, "setMuteState", boolVal ? 0 : 1);
 	}
 
 	_buildMuteButton(node) {
@@ -3186,21 +3192,6 @@ export class WaSectionView extends HTMLElement {
 		}
 	}
 
-	// "gain" (schema type, see schemas/waxml.xsd) is a plain 0-1 decimal, an
-	// "XdB" string, or a $var math expression — this fader only ever reads/
-	// writes the plain-decimal form (dropping any dB formatting the user
-	// may have hand-typed).
-	_parseGainLinear(raw) {
-		if (raw === undefined || raw === null || raw === "") return 1;
-		const str = String(raw).trim();
-		if (/db$/i.test(str)) {
-			const db = parseFloat(str);
-			return Number.isFinite(db) ? Math.pow(10, db / 20) : 1;
-		}
-		const val = parseFloat(str);
-		return Number.isFinite(val) ? val : 1;
-	}
-
 	// Same _isLocalEdit guard/reasoning as wa-mixer-view.js's own
 	// _commitAttributes — wraps a write this view makes to its *own*
 	// currently-rendered DOM so _onStoreChange's full _renderSection rebuild
@@ -3232,7 +3223,6 @@ export class WaSectionView extends HTMLElement {
 		const wrap = document.createElement("div");
 		wrap.className = "layer-fader";
 		wrap.dataset.nodeId = node.id;
-		wrap.title = "Gain (drag to adjust)";
 
 		// .layer-fader-track clips the fill bars to the rounded pill shape;
 		// .layer-fader-handle stays a direct child of `wrap` (not clipped by
@@ -3254,13 +3244,22 @@ export class WaSectionView extends HTMLElement {
 		handle.className = "layer-fader-handle";
 		wrap.appendChild(handle);
 
-		const gainToFraction = (gain) => Math.max(0, Math.min(1, gain));
-		const paint = (gain) => {
-			const pct = `${gainToFraction(gain) * 100}%`;
-			trackFill.style.width = pct;
-			handle.style.left = pct;
+		// The handle's center travels HANDLE_INSET px in from each end of
+		// the track (not the track's full width), so at either extreme the
+		// 16px knob still sits inside the track instead of poking out over
+		// the M button next to it. Pointer mapping below uses the same inset.
+		const HANDLE_INSET = 8;
+		const paint = (position) => {
+			const at = `calc(${HANDLE_INSET}px + ${position} * (100% - ${HANDLE_INSET * 2}px))`;
+			trackFill.style.width = at;
+			handle.style.left = at;
 		};
-		paint(this._parseGainLinear(node.attributes.gain));
+		const showDb = (db) => {
+			wrap.title = `Gain ${Number.isFinite(db) ? `${db.toFixed(1)} dB` : "-∞ dB"} (drag to adjust)`;
+		};
+		const initialDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
+		paint(dbToFaderPosition(initialDb));
+		showDb(initialDb);
 
 		wrap.addEventListener("pointerdown", (e) => {
 			if (e.button !== 0) return;
@@ -3276,11 +3275,21 @@ export class WaSectionView extends HTMLElement {
 			// xml-store.js's LIVE_NUDGEABLE_COMPOSITION_TAGS) makes the drag
 			// audible in real time instead of only on release. Per Hans
 			// (2026-09-08).
+			//
+			// Same dB taper and "XdB" attribute format as the <Mixer> fader
+			// (gain-units.js), so the drag feels like a normal mixer volume
+			// rather than a linear 0-1 ratio that crams nearly the whole
+			// audible range into the last few pixels. Per Hans (2026-10-04).
+			// xml-store.js's _buildLiveNudge converts the dB string back to a
+			// linear value for the live setVolume() call.
 			const commitFromEvent = (moveEvt) => {
-				const fraction = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left) / rect.width));
-				paint(fraction);
+				const usable = rect.width - HANDLE_INSET * 2;
+				const position = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left - HANDLE_INSET) / usable));
+				const db = faderPositionToDb(position);
+				paint(position);
+				showDb(db);
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
-				if (nodeNow) this._commitAttributes(nodeNow.id, { ...nodeNow.attributes, gain: String(Math.round(fraction * 1000) / 1000) });
+				if (nodeNow) this._commitAttributes(nodeNow.id, { ...nodeNow.attributes, gain: formatGainAttribute(node.tagName, db) });
 			};
 			commitFromEvent(e);
 
@@ -3292,6 +3301,9 @@ export class WaSectionView extends HTMLElement {
 			wrap.addEventListener("pointermove", onMove);
 			wrap.addEventListener("pointerup", onUp);
 		});
+		// The click that follows a drag's pointerup would otherwise bubble to
+		// the label's own click handler and select the row in the XML editor.
+		wrap.addEventListener("click", (e) => e.stopPropagation());
 
 		return wrap;
 	}

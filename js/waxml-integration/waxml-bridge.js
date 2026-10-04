@@ -131,8 +131,38 @@ export class WaxmlBridge {
 	// loadDocumentTargeting/loadNode; each call to those tears down and
 	// rebuilds every object, so any reference obtained here goes stale the
 	// next time the document reloads.
+	//
+	// <Section>/<Layer>/<Stinger> are the exception: waxml.js's iMus side
+	// (MusicParser) builds their Section/Track/Motif objects without ever
+	// attaching them to the XML node's .obj (the Web Audio side's
+	// convention), so waxml.querySelectorAll returns `undefined` for them —
+	// which silently turned every Layer/Stinger mute, gain nudge and VU tap
+	// into a no-op. Found 2026-10-04 while restoring those controls. Those
+	// three are resolved from the iMus instance's own object lists instead,
+	// matched on idName (= the XML id attribute).
 	getLiveObjects(selector) {
-		return this.waxml.querySelectorAll(selector);
+		const xmlRoot = this.waxml._xml;
+		if (!xmlRoot) return this.waxml.querySelectorAll(selector);
+		return [...xmlRoot.querySelectorAll(selector)].map((xmlNode) => xmlNode.obj ?? this._findMusicObject(xmlNode));
+	}
+
+	_findMusicObject(xmlNode) {
+		const id = xmlNode.getAttribute("id");
+		const tag = xmlNode.localName.toLowerCase();
+		if (!id || !["section", "layer", "stinger"].includes(tag)) return undefined;
+		const instance = this.waxml.musicEngine?.defaultInstance;
+		if (!instance) return undefined;
+		const sections = instance.sections || [];
+		const byId = (o) => o && o.idName === id;
+		if (tag === "section") return sections.find(byId);
+		if (tag === "layer") {
+			for (const section of sections) {
+				const track = (section.tracks || []).find(byId);
+				if (track) return track;
+			}
+			return undefined;
+		}
+		return (instance.motifs || []).find(byId) ?? sections.flatMap((s) => s.motifs || []).find(byId);
 	}
 }
 

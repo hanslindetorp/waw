@@ -64,3 +64,23 @@ export const FADER_GAIN_MAX_DB = 9;
 export function gainDbRangeForTag(tagName) {
 	return isDbNativeGain(tagName) ? { min: EQ_GAIN_MIN_DB, max: EQ_GAIN_MAX_DB } : { min: FADER_GAIN_MIN_DB, max: FADER_GAIN_MAX_DB };
 }
+
+// Fader taper: 0dB sits at FADER_ZERO_DB_POS along the track (a typical
+// mixer convention — the top portion is a small +dB boost range, the much
+// larger bottom portion tapers down to silence), not a plain linear dB
+// scale. Shared by wa-mixer-view.js's vertical channel faders and
+// wa-section-view.js's horizontal Layer/Stinger faders, so both feel the
+// same. Position is 0-1 along the track; 0 is silence (-Infinity dB).
+export const FADER_ZERO_DB_POS = 0.75;
+
+export function dbToFaderPosition(db) {
+	if (!(db > FADER_GAIN_MIN_DB)) return 0;
+	if (db >= 0) return FADER_ZERO_DB_POS + (Math.min(db, FADER_GAIN_MAX_DB) / FADER_GAIN_MAX_DB) * (1 - FADER_ZERO_DB_POS);
+	return (1 - db / FADER_GAIN_MIN_DB) * FADER_ZERO_DB_POS;
+}
+
+export function faderPositionToDb(t) {
+	if (t <= 0) return -Infinity;
+	if (t >= FADER_ZERO_DB_POS) return ((t - FADER_ZERO_DB_POS) / (1 - FADER_ZERO_DB_POS)) * FADER_GAIN_MAX_DB;
+	return FADER_GAIN_MIN_DB * (1 - t / FADER_ZERO_DB_POS);
+}

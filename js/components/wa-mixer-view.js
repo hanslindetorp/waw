@@ -14,7 +14,8 @@ import {
 	EQ_GAIN_MIN_DB as EQ_MIN_DB,
 	EQ_GAIN_MAX_DB as EQ_MAX_DB,
 	FADER_GAIN_MIN_DB as FADER_MIN_DB,
-	FADER_GAIN_MAX_DB as FADER_MAX_DB
+	dbToFaderPosition,
+	faderPositionToDb
 } from "../waxml-integration/gain-units.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
 import { wireMapClaim, wireInlineTextEdit } from "../utils/param-binding.js";
@@ -93,12 +94,8 @@ function hasAudioSignal(node) {
 	return !MIXER_NO_SIGNAL_TAGS.has(node.tagName);
 }
 
-// Fader taper: 0dB sits at FADER_ZERO_DB_POS up the track (a typical mixer
-// convention — the top portion is a small +dB boost range, the much larger
-// bottom portion tapers down to silence), not a plain linear dB scale.
-// FADER_MAX_DB/FADER_MIN_DB themselves come from gain-units.js (imported
-// above) — shared with wa-node-inspector.js's own generic gain slider.
-const FADER_ZERO_DB_POS = 0.75;
+// Fader taper (dbToFaderPosition/faderPositionToDb) lives in gain-units.js
+// — shared with wa-section-view.js's Layer/Stinger faders.
 const FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
 
 // VU meter: peak amplitude -> dB -> 0-1 fill, same "quick attack, slow
@@ -108,18 +105,6 @@ const FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
 const VU_MIN_DB = -48;
 const VU_MAX_DB = 0;
 const VU_RELEASE = 0.85;
-
-function dbToFaderPosition(db) {
-	if (!(db > FADER_MIN_DB)) return 0;
-	if (db >= 0) return FADER_ZERO_DB_POS + (Math.min(db, FADER_MAX_DB) / FADER_MAX_DB) * (1 - FADER_ZERO_DB_POS);
-	return (1 - db / FADER_MIN_DB) * FADER_ZERO_DB_POS;
-}
-
-function faderPositionToDb(t) {
-	if (t <= 0) return -Infinity;
-	if (t >= FADER_ZERO_DB_POS) return ((t - FADER_ZERO_DB_POS) / (1 - FADER_ZERO_DB_POS)) * FADER_MAX_DB;
-	return FADER_MIN_DB * (1 - t / FADER_ZERO_DB_POS);
-}
 
 // Frequency knob: 40Hz-10kHz, logarithmic (equal knob rotation per octave).
 // Knob drags happen in "t" space (0-1 = one full octave-log sweep) via the
