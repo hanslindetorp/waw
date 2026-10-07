@@ -179,6 +179,7 @@ function sendSectionHeightFor(sendCount) {
 // types.
 const PAN_ROW_HEIGHT = 40;
 const FADER_ROW_HEIGHT = FADER_TRACK_HEIGHT + 20;
+const THUMB_VIEW_SIDE = 168; // wa-panner-view's thumb-mode square (SQUARE_SIDE there)
 const ON_SOLO_ROW_HEIGHT = 28; // ON + Solo now share one row, side by side, per Hans
 const ROW_LABELS_WIDTH = 92; // wide enough to also host the blend/transitionTime mini-sliders + quantize select, per Hans
 // Fixed px footprints for .channel-label and .mini-sliders — deliberately
@@ -1152,24 +1153,56 @@ template.innerHTML = `
 			cursor: pointer;
 			flex: 0 0 auto;
 		}
+		/* The view's thumb mode is a 168px square (see wa-panner-view.js,
+		   attribute "thumb") — scaled down to the wrap's own size via the
+		   --thumb-scale set from JS. pointer-events: none hands every click
+		   to .panner-thumb-wrap's own listener instead (opens the popup)
+		   rather than this instance's own drag handling. */
 		.panner-thumb-wrap wa-panner-view {
 			position: absolute;
-			top: 50%;
-			left: 50%;
-			/* CANVAS_W/CANVAS_H from wa-panner-view.js (240x262) scaled down
-			   to fit this thumbnail's own 26px circle — the grid's own
-			   padding (LABEL_H etc.) means only the circle itself, not the
-			   label/slider/zoom row, ends up visible here, which is exactly
-			   the point of a *thumbnail*. pointer-events: none hands every
-			   click to .panner-thumb-wrap's own listener instead (opens the
-			   popup) rather than this — otherwise fully interactive —
-			   instance's own drag handling at a scale far too small to
-			   usefully drag anything in. */
-			width: 240px;
-			height: 262px;
-			transform: translate(-50%, -54%) scale(0.14);
-			transform-origin: center;
+			top: 0;
+			left: 0;
+			transform-origin: 0 0;
+			transform: scale(var(--thumb-scale, 0.15));
 			pointer-events: none;
+		}
+		/* The master strip's 3D thumbnail: the strip's whole content width,
+		   sitting in the upper (EQ/insert/send) area just above the rows
+		   below it — per Hans (2026-10-09). */
+		.master-top {
+			position: relative;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			width: 100%;
+			/* Takes the strip's leftover height exactly like the channel
+			   strips' own flex-growing Insert/Send sections do, so the
+			   master's fader and label stay level with theirs. */
+			flex: 1 0 auto;
+		}
+		/* The master's output field sits at the very top of the strip, over
+		   the (blank) area the channels use for EQ/insert/send. */
+		.master-top .master-output-row {
+			position: absolute;
+			top: 4px;
+			left: 0;
+			right: 0;
+		}
+		/* The three blank rows above the master fader (ON|Solo, mini sliders,
+		   pan) — the 3D thumbnail sits over them, right above the fader. */
+		.master-above-fader {
+			position: relative;
+			width: 100%;
+			flex: 0 0 auto;
+		}
+		.master-above-fader .panner-thumb-wrap.large {
+			position: absolute;
+			left: 0;
+			right: 0;
+			bottom: 4px;
+			width: auto;
+			height: auto;
+			aspect-ratio: 1 / 1;
 		}
 		.panner-popup-backdrop {
 			position: fixed;
@@ -2208,18 +2241,26 @@ export class WaMixerView extends HTMLElement {
 	// (including the dividers between them), so a VU-only or "other" strip's
 	// Pan/Vol/Solo rows still line up with a full channel strip's, per
 	// Hans's "alla channel-typer ska vara i linje".
-	_buildSectionSpacers(sectionHeights) {
+	// hideDividers keeps the dividers' space (so the rows below stay level
+	// with the channels') but draws nothing — the master strip has no
+	// filter/insert/send sections to divide.
+	_buildSectionSpacers(sectionHeights, hideDividers = false) {
 		const frag = document.createDocumentFragment();
+		const divider = () => {
+			const d = this._buildDivider();
+			if (hideDividers) d.style.visibility = "hidden";
+			return d;
+		};
 		const filterSpacer = document.createElement("div");
 		filterSpacer.className = "filter-section";
 		filterSpacer.style.height = `${sectionHeights.filter}px`;
 		frag.appendChild(filterSpacer);
-		frag.appendChild(this._buildDivider());
+		frag.appendChild(divider());
 		const insertSpacer = document.createElement("div");
 		insertSpacer.className = "insert-section";
 		insertSpacer.style.height = `${sectionHeights.insert}px`;
 		frag.appendChild(insertSpacer);
-		frag.appendChild(this._buildDivider());
+		frag.appendChild(divider());
 		const sendSpacer = document.createElement("div");
 		sendSpacer.className = "sends-section";
 		sendSpacer.style.height = `${sectionHeights.send}px`;
@@ -2365,18 +2406,41 @@ export class WaMixerView extends HTMLElement {
 		const strip = document.createElement("div");
 		strip.className = "channel-strip master-strip";
 		strip.addEventListener("click", (e) => e.stopPropagation());
-		strip.appendChild(this._buildSectionSpacers(sectionHeights));
+		// The EQ/insert/send area is blank (same height as the channels', and
+		// without their dividers); the output field sits at the very top of it.
+		const top = document.createElement("div");
+		top.className = "master-top";
+		top.appendChild(this._buildSectionSpacers(sectionHeights, true));
+		top.appendChild(this._buildMasterOutputRow(mixerNode));
+		strip.appendChild(top);
 
 		const bottomGroup = document.createElement("div");
 		bottomGroup.className = "bottom-group";
 
+		// Blank rows with the same footprint as the channels' ON|Solo, mini
+		// sliders and pan rows. When at least two channels are set up for 3D
+		// the 3D-panning thumbnail sits over them, directly above the fader —
+		// one X/Z view of all of them together, as wide as the strip (per
+		// Hans, 2026-10-09).
+		const aboveFader = document.createElement("div");
+		aboveFader.className = "master-above-fader";
 		const onSoloSpacer = document.createElement("div");
 		onSoloSpacer.style.height = `${ON_SOLO_ROW_HEIGHT}px`;
-		onSoloSpacer.style.width = "100%";
-		bottomGroup.appendChild(onSoloSpacer);
-		bottomGroup.appendChild(this._buildMiniSlidersRowSpacer());
-
-		bottomGroup.appendChild(this._buildMasterOutputRow(mixerNode));
+		aboveFader.appendChild(onSoloSpacer);
+		aboveFader.appendChild(this._buildMiniSlidersRowSpacer());
+		const panSpacer = document.createElement("div");
+		panSpacer.style.height = `${PAN_ROW_HEIGHT}px`;
+		aboveFader.appendChild(panSpacer);
+		const channelPanners = mixerNode.children
+			.filter((c) => c.tagName === "Chain")
+			.map((c) => c.children.find((cc) => cc.tagName === "PannerNode"))
+			.filter(Boolean);
+		if (channelPanners.length >= 2) {
+			const thumb = this._buildPannerThumb(channelPanners[0], `3D panning — ${displayLabel(mixerNode)}`, { group: true, large: true });
+			thumb.title = "Open 3D panning for all channels";
+			aboveFader.appendChild(thumb);
+		}
+		bottomGroup.appendChild(aboveFader);
 
 		const faderRow = document.createElement("div");
 		faderRow.className = "fader-row-wrap";
@@ -2717,24 +2781,38 @@ export class WaMixerView extends HTMLElement {
 	// popup instead of trying to drag anything at thumbnail scale. Per
 	// Hans: "visas en miniatyr av 3D-panner-vyn på själva kanalen. När man
 	// klickar miniatyren öppnas ett lagom stort popup-fönster."
-	_buildPannerThumb(node) {
+	// group: show every channel's speaker (the master strip's thumbnail and
+	// window) rather than just this one channel's own. size: the wrap's
+	// pixel size, used to scale the 168px thumbnail view down to fit (a
+	// "large" wrap measures itself once it is in the DOM).
+	_buildPannerThumb(node, popupTitle = null, { group = false, large = false } = {}) {
 		const wrap = document.createElement("div");
-		wrap.className = "panner-thumb-wrap";
+		wrap.className = "panner-thumb-wrap" + (large ? " large" : "");
 		wrap.title = "Open 3D panning";
 		const view = document.createElement("wa-panner-view");
+		view.setAttribute("thumb", "");
 		wrap.appendChild(view);
-		view.setPrimaryNode(node.id);
+		view.setPrimaryNode(node.id, !group);
+		const fit = () => {
+			const w = wrap.clientWidth || 26;
+			view.style.setProperty("--thumb-scale", String((w - 2) / THUMB_VIEW_SIDE));
+		};
+		fit();
+		if (large) {
+			requestAnimationFrame(fit);
+			new ResizeObserver(fit).observe(wrap);
+		}
 		wrap.addEventListener("click", (e) => {
 			e.stopPropagation();
-			this._openPannerPopup(node);
+			this._openPannerPopup(node, popupTitle, group);
 		});
 		return wrap;
 	}
 
-	_openPannerPopup(node) {
-		this._pannerPopupTitle.textContent = `3D panning — ${node.attributes.label || node.attributes.id || "PannerNode"}`;
+	_openPannerPopup(node, title = null, group = false) {
+		this._pannerPopupTitle.textContent = title || `3D panning — ${node.attributes.label || node.attributes.id || "PannerNode"}`;
 		this._pannerPopupBackdrop.hidden = false;
-		this._pannerPopupView.setPrimaryNode(node.id);
+		this._pannerPopupView.setPrimaryNode(node.id, !group);
 	}
 
 	_closePannerPopup() {

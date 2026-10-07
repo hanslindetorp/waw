@@ -59,6 +59,7 @@ const CIRCLE_PX_RADIUS = (CANVAS_H - LABEL_H) / 2 - 6;
 // sized/placed to match them exactly (per Hans, 2026-10-08).
 const SQUARE_TOP = CIRCLE_CY - CIRCLE_PX_RADIUS;
 const SQUARE_SIDE = CIRCLE_PX_RADIUS * 2;
+const SQUARE_LEFT = CIRCLE_CX - CIRCLE_PX_RADIUS;
 const SIDE_W = 36; // the Y-slider's own column — wide enough for a 3-digit max-value label without overflowing
 const SPEAKER_HIT_RADIUS = 14;
 const SPEAKER_BADGE_PX = 9; // the speaker icon's own circular badge radius
@@ -75,6 +76,25 @@ template.innerHTML = `
 			display: flex;
 			align-items: flex-start;
 			gap: 0.4rem;
+		}
+		/* Thumbnail mode (attribute "thumb"): just the square, non-interactive,
+		   at its natural ${SQUARE_SIDE}px size — the owner scales it with CSS
+		   (see wa-mixer-view.js's .panner-thumb-wrap). */
+		:host([thumb]) {
+			width: ${SQUARE_SIDE}px;
+			height: ${SQUARE_SIDE}px;
+		}
+		:host([thumb]) .side,
+		:host([thumb]) .zoom-row {
+			display: none;
+		}
+		:host([thumb]) .stage {
+			width: ${SQUARE_SIDE}px;
+			height: ${SQUARE_SIDE}px;
+			overflow: hidden;
+		}
+		:host([thumb]) canvas {
+			margin: -${SQUARE_TOP}px 0 0 -${SQUARE_LEFT}px;
 		}
 		.stage {
 			position: relative;
@@ -242,9 +262,18 @@ export class WaPannerView extends HTMLElement {
 		window.removeEventListener("pointerup", this._onPointerUp);
 	}
 
-	setPrimaryNode(nodeId) {
+	// onlyPrimary: show just this one speaker (a single mixer channel's own
+	// window) instead of every sibling PannerNode around it — it is then
+	// also the active one, so its values show at once. Per Hans (2026-10-09).
+	setPrimaryNode(nodeId, onlyPrimary = false) {
+		if (nodeId !== this._primaryNodeId || onlyPrimary !== this._onlyPrimary) this._zoomRadius = undefined;
 		this._primaryNodeId = nodeId;
+		this._onlyPrimary = onlyPrimary;
 		this._render();
+	}
+
+	get _thumb() {
+		return this.hasAttribute("thumb");
 	}
 
 	// Every sibling <PannerNode> — direct siblings that are themselves one,
@@ -282,6 +311,7 @@ export class WaPannerView extends HTMLElement {
 	}
 
 	_groupKey(node) {
+		if (this._onlyPrimary) return `solo-${node.attributes.id || node.id}`;
 		const root = this._groupRoot(node);
 		return root ? root.attributes.id || root.id : `solo-${node.id}`;
 	}
@@ -332,7 +362,7 @@ export class WaPannerView extends HTMLElement {
 			return; // the resulting xmlStore "change" re-enters _render() with it set
 		}
 
-		const group = this._findGroupPanners(primary);
+		const group = this._onlyPrimary ? [primary] : this._findGroupPanners(primary);
 		this._panners = group.map((node) => ({
 			node,
 			x: parseFloat(node.attributes.positionX) || 0,
@@ -359,11 +389,15 @@ export class WaPannerView extends HTMLElement {
 	}
 
 	// The speaker the readout and the Y slider currently work on: the one
-	// selected in the document if it's part of this group (clicking a
-	// speaker selects it), otherwise this view's own primary node.
+	// selected in the document if it's part of this group (clicking or
+	// dragging a speaker selects it). With several speakers and none
+	// selected yet there is no active one, and the readout shows "-" (per
+	// Hans, 2026-10-09); a lone speaker is always the active one.
 	_activePanner() {
 		const selectedId = this._selectedNodeId();
-		return this._panners.find((p) => p.node.id === selectedId) || this._panners.find((p) => p.node.id === this._primaryNodeId) || null;
+		const selected = this._panners.find((p) => p.node.id === selectedId);
+		if (selected) return selected;
+		return this._panners.length === 1 ? this._panners[0] : null;
 	}
 
 	// posX/posY/posZ under the square, one decimal, from the same local
@@ -377,6 +411,17 @@ export class WaPannerView extends HTMLElement {
 		this._readoutX.textContent = p ? fmt(p.x) : "-";
 		this._readoutY.textContent = p ? fmt(p.y) : "-";
 		this._readoutZ.textContent = p ? fmt(p.z) : "-";
+	}
+
+	// The name drawn next to a speaker — label/id/class of the mixer
+	// *channel* it belongs to (the same text the channel strip's own label
+	// shows) when it sits in a <Chain> directly inside a <Mixer>, otherwise
+	// of the <PannerNode> itself. Per Hans (2026-10-09).
+	_channelName(node) {
+		const parent = node.parent ? findNodeById(xmlStore.root, node.parent) : null;
+		const grandparent = parent && parent.parent ? findNodeById(xmlStore.root, parent.parent) : null;
+		const target = grandparent && grandparent.tagName === "Mixer" ? parent : node;
+		return target.attributes.label || target.attributes.id || target.attributes.class || target.tagName;
 	}
 
 	// ── Canvas ───────────────────────────────────────────────────────────
@@ -472,15 +517,15 @@ export class WaPannerView extends HTMLElement {
 		const soloSource = this._panners.length === 1;
 		this._panners.forEach((p) => {
 			if (Math.max(Math.abs(p.x), Math.abs(p.z)) > zoom) return;
-			const isSelected = p.node.id === selectedId || (soloSource && p.node.id === this._primaryNodeId);
+			const isSelected = this._thumb || p.node.id === selectedId || (soloSource && p.node.id === this._primaryNodeId);
 			const { px, py } = worldToCanvas(p.x, p.z, zoom, CIRCLE_CX, CIRCLE_CY, CIRCLE_PX_RADIUS);
 			drawSpeakerBadge(ctx, px, py, isSelected);
 
 			// Per Hans (2026-10-04): "Om det bara finns en ljudkälla ska
 			// högtalaren inte ha någon label" — no fallback-to-"Panner" text
 			// at all in that case, not even a dimmed one.
-			if (!soloSource) {
-				const label = p.node.attributes.label || p.node.attributes.id || p.node.attributes.class || "Panner";
+			if (!soloSource && !this._thumb) {
+				const label = this._channelName(p.node);
 				ctx.font = "9px monospace";
 				ctx.textAlign = "center";
 				ctx.fillStyle = isSelected ? "#cdd3d8" : "rgba(138,138,138,0.7)";
@@ -497,7 +542,10 @@ export class WaPannerView extends HTMLElement {
 		// label ovanför som indikerar mx-värdet." (a plain unitless number,
 		// same as positionY itself, not a grid-square count — Y isn't
 		// gridded, so the raw zoom radius IS its reachable max.)
-		const primaryY = this._activePanner()?.y ?? 0;
+		const active = this._activePanner();
+		this._sliderThumb.style.display = active ? "" : "none";
+		this._sliderFill.style.display = active ? "" : "none";
+		const primaryY = active?.y ?? 0;
 		// 0 = track bottom (Y = -zoom), 1 = track top (Y = +zoom) — screen-up
 		// is positive Y, matching how a real fader/slider reads.
 		const t = Math.max(0, Math.min(1, (primaryY + zoom) / (2 * zoom)));
@@ -536,7 +584,15 @@ export class WaPannerView extends HTMLElement {
 		// så markeras den" — clicking (even just to start a drag) any
 		// sibling speaker selects it first, so the drag (and every XML
 		// write below) always targets the one actually being touched.
-		if (hit.node.id !== this._selectedNodeId()) xmlStore.selectNode(hit.node.id);
+		if (hit.node.id !== this._selectedNodeId()) {
+			xmlStore.selectNode(hit.node.id);
+			// Selecting re-renders this view synchronously (the store's
+			// "change"), which rebuilds every entry in this._panners — the
+			// `hit` picked above is now a stale copy. Dragging that one
+			// moved nothing on screen and only snapped the speaker to the
+			// pointer on release. Re-resolve it so the drag starts at once.
+			hit = this._panners.find((p) => p.node.id === hit.node.id) || hit;
+		}
 		try {
 			this._canvas.setPointerCapture(e.pointerId);
 		} catch {}
