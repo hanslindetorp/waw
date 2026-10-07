@@ -59,6 +59,7 @@ function pruneUndefined(obj) {
 function displayLabel(node) {
 	if (node.attributes.label) return node.attributes.label;
 	if (node.attributes.id) return node.attributes.id;
+	if (node.attributes.class) return node.attributes.class;
 	return node.tagName;
 }
 
@@ -336,9 +337,32 @@ template.innerHTML = `
 			width: 100%;
 			flex: 0 0 auto;
 		}
+		/* Full content width (no shrinking): .mixer-body is the one scroll
+		   container, and the master strip below pins itself to its right edge
+		   over whatever channels don't fit — per Hans (2026-10-09). */
 		.channels-scroll {
-			flex: 1 1 auto;
-			min-width: 0;
+			flex: 0 0 auto;
+		}
+		.master-host {
+			position: sticky;
+			right: 0;
+			z-index: 3;
+			flex: 0 0 auto;
+			margin-left: auto;
+			display: flex;
+			align-items: stretch;
+			background: #3c4650;
+			box-shadow: -6px 0 8px rgba(0, 0, 0, 0.25);
+		}
+		.channel-strip.master-strip {
+			cursor: default;
+			border-right: none;
+			border-left: 1px solid #2b313a;
+			background: linear-gradient(180deg, #46505b, #3c4650);
+		}
+		.master-output-row {
+			padding: 0 0.2rem;
+			box-sizing: border-box;
 		}
 		.channels {
 			display: flex;
@@ -1218,6 +1242,7 @@ template.innerHTML = `
 			<div class="channels-scroll">
 				<div class="channels"></div>
 			</div>
+			<div class="master-host"></div>
 		</div>
 		<div class="bottom-row">
 			<div class="row-labels-spacer">
@@ -1251,6 +1276,8 @@ export class WaMixerView extends HTMLElement {
 		this._mixerRoot = this.shadowRoot.querySelector(".mixer");
 		this._channels = this.shadowRoot.querySelector(".channels");
 		this._channelsScroll = this.shadowRoot.querySelector(".channels-scroll");
+		this._masterHost = this.shadowRoot.querySelector(".master-host");
+		this._rowLabels = this.shadowRoot.querySelector(".row-labels");
 		this._mixerBody = this.shadowRoot.querySelector(".mixer-body");
 		this._eqLabel = this.shadowRoot.querySelector(".eq-label");
 		this._insLabel = this.shadowRoot.querySelector(".ins-label");
@@ -1508,8 +1535,10 @@ export class WaMixerView extends HTMLElement {
 	// player-store.js), never assumed to persist beyond that.
 	_connectMeters(mixerNode) {
 		this._disconnectMeters();
-		mixerNode.children
-			.filter((c) => (c.tagName === "Chain" || c.tagName === "GainNode") && c.attributes.id)
+		// The <Mixer> itself too: its live .output carries the summed signal
+		// the master strip's VU meter reads.
+		[mixerNode, ...mixerNode.children]
+			.filter((c) => (c.tagName === "Mixer" || c.tagName === "Chain" || c.tagName === "GainNode") && c.attributes.id)
 			.forEach((chain) => {
 				let liveObj;
 				try {
@@ -1548,7 +1577,7 @@ export class WaMixerView extends HTMLElement {
 	_attachMeterElements() {
 		if (this._meterState.size === 0) return;
 		this._meterState.forEach((entry, chainId) => {
-			const vuMeter = this._channels.querySelector(`.vu-meter[data-chain-id="${CSS.escape(chainId)}"]`);
+			const vuMeter = this.shadowRoot.querySelector(`.vu-meter[data-chain-id="${CSS.escape(chainId)}"]`);
 			entry.vuFillEl = vuMeter ? vuMeter.querySelector(".vu-fill") : null;
 		});
 	}
@@ -1771,19 +1800,23 @@ export class WaMixerView extends HTMLElement {
 			return;
 		}
 		area.style.display = "";
-		const scrollRect = this._channelsScroll.getBoundingClientRect();
-		const visible = buttons.filter((el) => {
-			const r = el.getBoundingClientRect();
-			return r.right > scrollRect.left + 1 && r.left < scrollRect.right - 1;
-		});
-		const refButtons = visible.length ? visible : buttons;
-		const firstRect = refButtons[0].getBoundingClientRect();
-		const lastRect = refButtons[refButtons.length - 1].getBoundingClientRect();
+		// Spans the first to the last of the regular channels (the master
+		// strip has no Solo, so it never counts), wherever they currently
+		// are — including scrolled out of view — so the handle's position
+		// always lines up with the channel it actually means. Per Hans
+		// (2026-10-09): an earlier version only covered the channels
+		// currently visible, which broke that. What lies outside the visible
+		// channel area (under the pinned row-labels, or behind the pinned
+		// master strip) is clipped away instead.
+		const firstRect = buttons[0].getBoundingClientRect();
+		const lastRect = buttons[buttons.length - 1].getBoundingClientRect();
 		const areaRect = area.getBoundingClientRect();
 		const firstCenter = (firstRect.left + firstRect.right) / 2;
 		const lastCenter = (lastRect.left + lastRect.right) / 2;
-		const left = Math.max(0, firstCenter - areaRect.left);
+		const left = firstCenter - areaRect.left;
 		const right = Math.max(left, lastCenter - areaRect.left);
+		const masterLeft = this._masterHost.getBoundingClientRect().left;
+		area.style.clipPath = `inset(-50px ${Math.max(0, areaRect.right - masterLeft)}px -50px 0)`;
 		// The handle's 0%/100% resolve against the track's *padding* box,
 		// i.e. 1px inside its own left/right border either side — shifting
 		// left by that 1px and widening by 2px keeps the handle's actual
@@ -1964,6 +1997,8 @@ export class WaMixerView extends HTMLElement {
 			this._channels.appendChild(this._buildChannelStrip(child, index, totalCount, sectionHeights));
 		});
 		this._channels.appendChild(this._buildAddChannelStrip(mixerNode));
+		this._masterHost.innerHTML = "";
+		this._masterHost.appendChild(this._buildMasterStrip(mixerNode, sectionHeights));
 
 		const soloRaw = mixerNode.attributes.solo;
 		const soloValue = soloRaw !== undefined ? parseFloat(soloRaw) : undefined;
@@ -2009,7 +2044,7 @@ export class WaMixerView extends HTMLElement {
 		const showMiniSliders = totalCount >= 2;
 		this._miniSliders.style.display = showMiniSliders ? "" : "none";
 		this._miniSliders.classList.toggle("solo-inactive", !hasSolo);
-		this._channels.querySelectorAll(".mini-sliders-row-spacer").forEach((el) => {
+		this.shadowRoot.querySelectorAll(".channel-strip .mini-sliders-row-spacer").forEach((el) => {
 			el.style.display = showMiniSliders ? "" : "none";
 		});
 
@@ -2320,6 +2355,89 @@ export class WaMixerView extends HTMLElement {
 			if (e.target.closest("button, select, input, .knob, .fader-handle, .insert-slot")) return;
 			xmlStore.selectNode(child.id);
 		});
+	}
+
+	// The master strip, pinned to the right edge (see .master-host): the
+	// <Mixer>'s own volume (its `gain`) and `output`, labelled with the
+	// Mixer's label/id/class — per Hans (2026-10-09). Same section/row
+	// footprint as every channel strip so the fader and label line up.
+	_buildMasterStrip(mixerNode, sectionHeights) {
+		const strip = document.createElement("div");
+		strip.className = "channel-strip master-strip";
+		strip.addEventListener("click", (e) => e.stopPropagation());
+		strip.appendChild(this._buildSectionSpacers(sectionHeights));
+
+		const bottomGroup = document.createElement("div");
+		bottomGroup.className = "bottom-group";
+
+		const onSoloSpacer = document.createElement("div");
+		onSoloSpacer.style.height = `${ON_SOLO_ROW_HEIGHT}px`;
+		onSoloSpacer.style.width = "100%";
+		bottomGroup.appendChild(onSoloSpacer);
+		bottomGroup.appendChild(this._buildMiniSlidersRowSpacer());
+
+		bottomGroup.appendChild(this._buildMasterOutputRow(mixerNode));
+
+		const faderRow = document.createElement("div");
+		faderRow.className = "fader-row-wrap";
+		faderRow.style.height = `${FADER_ROW_HEIGHT}px`;
+		faderRow.appendChild(this._buildFader(mixerNode, mixerNode.id));
+		bottomGroup.appendChild(faderRow);
+
+		bottomGroup.appendChild(this._buildChannelLabel(mixerNode));
+
+		strip.appendChild(bottomGroup);
+		return strip;
+	}
+
+	// Text field + connect button writing the <Mixer>'s own `output` — the
+	// same routing picker as the Inspector's output field (empty value
+	// removes the attribute).
+	_buildMasterOutputRow(mixerNode) {
+		const row = document.createElement("div");
+		row.className = "pan-row master-output-row";
+		row.style.height = `${PAN_ROW_HEIGHT}px`;
+
+		const busRow = document.createElement("div");
+		busRow.className = "send-bus-row";
+
+		const input = document.createElement("input");
+		input.className = "send-bus-input";
+		input.type = "text";
+		input.placeholder = "output";
+		input.value = mixerNode.attributes.output || "";
+		input.title = "Master output (routing target selector)";
+		const writeOutput = (value) => {
+			const nodeNow = ops.findNodeById(xmlStore.root, mixerNode.id);
+			if (!nodeNow) return;
+			const attrs = { ...nodeNow.attributes };
+			if (value) attrs.output = value;
+			else delete attrs.output;
+			xmlStore.updateAttributes(nodeNow.id, attrs);
+		};
+		input.addEventListener("change", () => writeOutput(input.value.trim()));
+		busRow.appendChild(input);
+
+		const pickBtn = document.createElement("button");
+		pickBtn.type = "button";
+		pickBtn.className = "send-bus-pick-btn";
+		pickBtn.textContent = "🔌";
+		pickBtn.title = `Pick a target from available ${complementNoun("output")}`;
+		pickBtn.addEventListener("click", () => {
+			const nodeNow = ops.findNodeById(xmlStore.root, mixerNode.id);
+			if (!nodeNow) return;
+			const tree = buildRoutingTree(xmlStore.schema, xmlStore.root, "output", nodeNow.id);
+			const rect = pickBtn.getBoundingClientRect();
+			openIoPicker(tree, rect).then((picked) => {
+				if (!picked) return;
+				input.value = picked;
+				writeOutput(picked);
+			});
+		});
+		busRow.appendChild(pickBtn);
+
+		row.appendChild(busRow);
+		return row;
 	}
 
 	// The channel-label row, shared by all three channel-strip shapes

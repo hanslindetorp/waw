@@ -32,10 +32,13 @@ export function buildRoutingTree(schema, root, forAttrName, excludeInternalId) {
 	// not the rest of the document — per Hans (2026-10-08).
 	if (forAttrName === "output" || forAttrName === "bus") {
 		const path = findPath(root, excludeInternalId);
-		const mixer = path && [...path].reverse().find((n) => n.tagName === "Mixer");
+		// slice(0, -1): the edited node itself never counts as "its" Mixer —
+		// a <Mixer>'s own output (the master strip's) routes outside it.
+		const mixer = path && path.slice(0, -1).reverse().find((n) => n.tagName === "Mixer");
 		if (mixer) return buildMixerChannelTree(mixer, new Set(path.map((n) => n.id)));
 	}
-	return buildNode(root, schema, wantAttr, excludeInternalId);
+	const ancestorIds = new Set((findPath(root, excludeInternalId) || []).slice(0, -1).map((n) => n.id));
+	return buildNode(root, schema, wantAttr, excludeInternalId, ancestorIds);
 }
 
 // Ancestor chain root -> node (inclusive), or null if not found.
@@ -49,32 +52,36 @@ function findPath(root, id) {
 	return null;
 }
 
-// Never offers the edited element itself or any container it sits in
-// (e.g. its own parent <Chain>) — routing into yourself is a loop.
+// Anything that would route audio into a loop is left out entirely, not just
+// greyed: the edited element itself and any container it sits in (e.g. its
+// own parent <Chain>) — per Hans (2026-10-09).
 function buildMixerChannelTree(mixer, excludedIds) {
 	const channels = mixer.children
-		.filter((c) => c.tagName === "Chain" && c.attributes.id)
-		.map((c) => ({ tagName: c.tagName, id: c.attributes.id, selectable: !excludedIds.has(c.id), children: [] }));
+		.filter((c) => c.tagName === "Chain" && c.attributes.id && !excludedIds.has(c.id))
+		.map((c) => ({ tagName: c.tagName, id: c.attributes.id, selectable: true, children: [] }));
 	if (channels.length === 0) return null;
 	return { tagName: mixer.tagName, id: mixer.attributes.id || null, selectable: false, children: channels };
 }
 
-function buildNode(node, schema, wantAttr, excludeInternalId) {
+// The edited element and everything inside it are dropped from the tree
+// (routing into yourself, or a <Mixer>'s output into one of its own channels,
+// would be a loop). Its ancestors are never selectable either, and only show
+// up at all when they hold some other valid target (the usual pruning rule).
+function buildNode(node, schema, wantAttr, excludeInternalId, ancestorIds) {
+	if (node.id === excludeInternalId) return null;
 	const schemaEl = schema.elements?.[node.tagName];
 	const supportsAttr = !!schemaEl?.allowedAttributes?.some((a) => a.name === wantAttr);
 	const id = node.attributes.id || null;
-	const isQualifyingTarget = supportsAttr && !!id;
+	const isQualifyingTarget = supportsAttr && !!id && !ancestorIds.has(node.id);
 
-	const children = node.children.map((child) => buildNode(child, schema, wantAttr, excludeInternalId)).filter(Boolean);
+	const children = node.children.map((child) => buildNode(child, schema, wantAttr, excludeInternalId, ancestorIds)).filter(Boolean);
 
 	if (!isQualifyingTarget && children.length === 0) return null;
 
 	return {
 		tagName: node.tagName,
 		id,
-		// Never offer an element as a target for its own attribute — routing
-		// something to itself is never meaningful.
-		selectable: isQualifyingTarget && node.id !== excludeInternalId,
+		selectable: isQualifyingTarget,
 		children
 	};
 }
