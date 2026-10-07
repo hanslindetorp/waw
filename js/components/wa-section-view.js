@@ -484,7 +484,7 @@ template.innerHTML = `
 			bottom: 0;
 			left: 0;
 			width: 0%;
-			background: linear-gradient(90deg, #2d5a8a, #3a6ea8);
+			background: linear-gradient(90deg, #2c7a3b, #3fae52);
 			pointer-events: none;
 		}
 		/* The gain position's own handle — a round knob overlapping the
