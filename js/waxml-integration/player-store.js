@@ -162,20 +162,22 @@ class PlayerStore extends EventTarget {
 		this._reloadInFlight = false;
 	}
 
-	// Per Hans (2026-09-01, refined 2026-09-10): waxml.js's sectionStart only
-	// ends up set correctly when trig() is called with a *class* selector,
-	// not an [id='...'] one — so the PLAY/STOP field auto-follows the most
-	// recently selected element's own class ("." prefixed). No longer falls
-	// back to "#id" when there's no class (2026-09-10): a freshly created
-	// <Command> auto-selects itself and has no class of its own, so that
-	// fallback used to populate the field with "#Cmd-N" — meaning a second
-	// "+" click created a Command that triggered the *first* Command instead
-	// of whatever was actually meant. Selecting a <Command type="trig">
-	// itself is special-cased to show *its own* `value` instead (what it
-	// actually trig()s) — informative, and never that self-referencing
-	// "#Cmd-N" shape. Runs on every xmlStore change, not just a fresh
-	// selection, so editing the currently-armed element's own class/value
-	// updates it too.
+	// The PLAY/STOP field auto-follows whatever element was most recently
+	// selected (in the XML editor or by clicking in a preview): its first
+	// class ("." prefixed) in the first place, otherwise its id ("#"
+	// prefixed) — per Hans (2026-10-08). History: waxml.js's sectionStart
+	// only ended up set correctly with a *class* selector (2026-09-01), and
+	// the id fallback was dropped on 2026-09-10 because a freshly created
+	// <Command> auto-selects itself, has no class, and used to fill the
+	// field with "#Cmd-N" — so a second "+" click created a Command that
+	// triggered the *first* Command instead of whatever was meant. The id
+	// fallback is back for everything *except* <Command>, which keeps that
+	// exclusion: a <Command type="trig"> shows its own `value` instead (what
+	// it actually trig()s), and a Command with no class and no value leaves
+	// the field alone. Runs on every xmlStore change — including
+	// re-selecting the already selected element, which overwrites a
+	// hand-typed selector — so editing the currently-armed element's own
+	// class/id/value updates it too.
 	_maybeUpdateTriggerSelectorFromSelection() {
 		const node = xmlStore.getSelectedNode();
 		if (!node) return;
@@ -184,8 +186,9 @@ class PlayerStore extends EventTarget {
 			selector = node.attributes.value;
 		} else {
 			const firstClass = firstClassToken(node);
-			if (!firstClass) return;
-			selector = `.${firstClass}`;
+			if (firstClass) selector = `.${firstClass}`;
+			else if (node.attributes.id && node.tagName !== "Command") selector = `#${node.attributes.id}`;
+			else return;
 		}
 		if (selector === this.triggerSelector) return;
 		this.setTriggerSelector(selector, node.tagName === "Section" ? node.id : null);
