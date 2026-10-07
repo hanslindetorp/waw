@@ -17,20 +17,6 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
-  <xs:simpleType name="volume">
-    <xs:annotation>
-      <xs:documentation>Overall volume level. Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
-    </xs:annotation>
-    <xs:union memberTypes="volumeValue mathExpression"/>
-  </xs:simpleType>
-
-  <xs:simpleType name="volumeValue">
-    <xs:restriction base="xs:decimal">
-      <xs:minInclusive value="0"/>
-      <xs:maxInclusive value="1"/>
-    </xs:restriction>
-  </xs:simpleType>
-
 
   <xs:simpleType name="mathExpression">
     <xs:annotation>
@@ -46,6 +32,19 @@
       <xs:documentation>Gain/volume level. Three accepted forms: a unitless ratio in the range 0-1; a decibel value suffixed with "dB" (e.g. "-40dB") - this form works standalone, no variable required; or a mathematical expression (see mathExpression).</xs:documentation>
     </xs:annotation>
     <xs:union memberTypes="gainValue gainDecibel mathExpression"/>
+  </xs:simpleType>
+
+  <!-- gain for <Layer> and <Stinger> (the music engine): same as "gain"
+       minus mathExpression. The variable system ($name, expressions) isn't
+       properly implemented for the music engine yet — a "$var" gain throws
+       in waxml.js's Bus constructor (non-finite AudioParam value). Per Hans
+       (2026-10-06): disallowed until waxml.js is rebuilt from the ground up;
+       then widen this back to plain "gain". -->
+  <xs:simpleType name="musicGain">
+    <xs:annotation>
+      <xs:documentation>Gain/volume level for music-engine elements (Layer, Stinger). Two accepted forms: a unitless ratio in the range 0-1, or a decibel value suffixed with "dB" (e.g. "-6dB"). Variables and math expressions are not supported here yet.</xs:documentation>
+    </xs:annotation>
+    <xs:union memberTypes="gainValue gainDecibel"/>
   </xs:simpleType>
 
   <xs:simpleType name="gainValue">
@@ -1663,21 +1662,6 @@
       
       <!-- WAXML objects -->
 
-      <!--
-      Synth and Voice are commented out for now (per request 2026 - Hans).
-      To reinstate: uncomment this element and give Voice its own local
-      element declaration (it was previously a bare, attribute-less child).
-
-      <xs:element name="Synth">
-        <xs:complexType>
-          <xs:choice>
-            <xs:element name="Voice" minOccurs="1" maxOccurs="unbounded"></xs:element>
-          </xs:choice>
-          <xs:attributeGroup ref="waxml"/>
-        </xs:complexType>
-      </xs:element>
-      -->
-
       <xs:element name="ObjectBasedAudio">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
@@ -1810,7 +1794,6 @@
     <xs:attribute name="outputBus" type="outputBus"/>
     <xs:attribute name="pan" type="pan"/>
     
-    <xs:attribute name="volume" type="volume"/>
     <xs:attribute name="normalize" type="normalize"/>
     <xs:attribute name="loop" type="loop"/>
 
@@ -1938,7 +1921,6 @@
     <xs:attribute name="outputBus" type="outputBus"/>
     <xs:attribute name="pan" type="pan"/>
 
-    <xs:attribute name="volume" type="volume"/>
     <xs:attribute name="normalize" type="normalize"/>
     <xs:attribute name="loop" type="loop"/>
 
@@ -2179,7 +2161,7 @@
     <xs:attribute name="retrig" type="retrigMode"/>
     <xs:attribute name="blockRetrig" type="retrigMode"/>
     <xs:attribute name="fadeTime" type="fadeTime"/>
-    <xs:attribute name="gain" type="gain"/>
+    <xs:attribute name="gain" type="musicGain"/>
     <xs:attribute name="mute" type="mute"/>
   </xs:complexType>
 
@@ -2208,7 +2190,7 @@
     <!-- "loopActive" commented out - old/unused attribute, per Hans
          (2026-09-14). -->
     <!-- <xs:attribute name="loopActive" type="loopActive"/> -->
-    <xs:attribute name="gain" type="gain"/>
+    <xs:attribute name="gain" type="musicGain"/>
     <xs:attribute name="mute" type="mute"/>
   </xs:complexType>
 

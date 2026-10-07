@@ -1,7 +1,6 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { testPattern } from "../xml-editor/attribute-controls.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
-import { parseGainAttributeToDb, isDbNativeGain, dbToLinearRatio } from "../waxml-integration/gain-units.js";
 import { getAttributeCurve } from "../xml-editor/attribute-curves.js";
 import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
 import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribute-inheritance.js";
@@ -76,8 +75,11 @@ function escapeRegExp(str) {
 
 function applyLiveAttributeNudge(node, attrName, rawValue) {
 	if (attrName === "gain") {
-		const db = parseGainAttributeToDb(node.tagName, rawValue);
-		applyLiveProperty(node.attributes.id, "gain", isDbNativeGain(node.tagName) ? db : dbToLinearRatio(db));
+		// Raw attribute string straight to waxml.js, which owns the unit
+		// conversion (see wa-mixer-view.js's applyLiveGainDb). Non-numeric
+		// forms ("$var", math expressions) are left to the XML.
+		if (!/^\s*-?\d+(\.\d+)?\s*(dB)?\s*$/i.test(String(rawValue))) return;
+		applyLiveProperty(node.attributes.id, "gain", String(rawValue));
 		return;
 	}
 	const num = parseFloat(rawValue);

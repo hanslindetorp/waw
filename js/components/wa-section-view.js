@@ -3280,8 +3280,8 @@ export class WaSectionView extends HTMLElement {
 			// (gain-units.js), so the drag feels like a normal mixer volume
 			// rather than a linear 0-1 ratio that crams nearly the whole
 			// audible range into the last few pixels. Per Hans (2026-10-04).
-			// xml-store.js's _buildLiveNudge converts the dB string back to a
-			// linear value for the live setVolume() call.
+			// xml-store.js's _buildLiveNudge passes the same dB string to the
+			// live .set("gain", ...) call; waxml.js does the conversion.
 			const commitFromEvent = (moveEvt) => {
 				const usable = rect.width - HANDLE_INSET * 2;
 				const position = Math.max(0, Math.min(1, (moveEvt.clientX - rect.left - HANDLE_INSET) / usable));

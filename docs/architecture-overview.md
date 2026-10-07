@@ -204,13 +204,19 @@ avbryter det andra:
    redan låter"-sidokanal. Delad mellan `wa-mixer-view.js` och
    `wa-node-inspector.js`.
 
-2. **`gain-units.js`** (`linearRatioToDb`) — `gain`-attributet är i XML
-   alltid en linjär amplitud-ratio 0–1 (1 = 0dB, 0 = -∞dB), men
-   `BiquadFilterNode.gain` i Web Audio är dB-nativt medan `GainNode.gain`
-   (och `Send`) är linjärt — konverteringen är `20·log10(ratio)`, **inte**
-   `10·log10` (den senare är för power-ratio, inte amplitud). 0.5 linjärt
-   = -6.02dB, inte -3dB. All dB-matte i appen (Mixerns rattar, Inspectorns
-   live-nudge) går genom den här enda formeln så de aldrig kan divergera.
+2. **`gain-units.js`** — bara för *visning*. `gain`-attributet i XML är
+   antingen en linjär amplitud-ratio 0–1, en `"XdB"`-sträng (amplitud-dB,
+   `10^(dB/20)`, alltså −6 dB ≈ 0.5) eller — bara för
+   `BiquadFilterNode`, vars Web Audio-param redan är dB-nativt — ett bart
+   dB-tal. **`waxml.js` äger all enhetsomräkning** (beslutat med Hans
+   2026-10-04), så ett projekt låter likadant inbäddat utan appen: appen
+   skickar aldrig ett omräknat tal till motorn, utan *samma sträng* som
+   skrivs i XML:en (`formatGainAttribute`) — via `applyLiveProperty` eller
+   `xmlStore`s live-nudge. `gain-units.js` konverterar bara för UI:t
+   (faderposition ↔ dB, "−6.0 dB"-etiketter). `volume` finns inte längre
+   som attribut — bara `gain`. På `<Layer>`/`<Stinger>` är `gain` smalare
+   (`musicGain`: ratio eller dB, inga `$var`-uttryck) tills variabelsystemet
+   fungerar för musicEngine.
 
 3. **`_isLocalEdit`-guard-mönstret** — det stora, återkommande knepet i
    hela kodbasen. Varje panel bygger om sig själv *helt* (`innerHTML = ""`
@@ -255,8 +261,9 @@ avbryter det andra:
    **allowlist**, inte en denylist (`XmlStore.LIVE_NUDGE_ALLOWED_ATTRS`:
    `changeOnNext`, `cuePoint`, `randomOffset`, `upbeat`, `active`,
    `fadeTime`, `tags`, `blockRetrig`, `release`, `pan`, `filter`, `delay`,
-   plus `gain` — konverterad dB↔linjärt via `gain-units.js` och skickad
-   som `.set("volume", ...)`) — per Hans (2026-09-09): ett tidigare
+   plus `gain` — skickad som rå attributsträng via `.set("gain", ...)`;
+   `waxml.js` äger all enhetsomräkning, appen konverterar aldrig åt
+   motorn, bara för visning i `gain-units.js`) — per Hans (2026-09-09): ett tidigare
    denylist-baserat försök missade tyst `length` (ingen case för det i
    `waxml.js`s egen `.set()`-switch), så designen vändes om: allt som
    inte är känt säkert tvingar i stället fram en full ombyggnad

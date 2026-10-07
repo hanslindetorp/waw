@@ -15,6 +15,7 @@ class AmbientAudio {
         this._ctx = obj._ctx;
 		this._parentAudioObj = obj;
         this.cnt = 0;
+        this._nodeType = obj._nodeType;
 
         this._params = this.initParams(params);
 
@@ -197,6 +198,7 @@ class AmbientAudio {
   
 
     set gain(val){
+        if(typeof val == "string") val = WebAudioUtils.typeFixParam("gain", val, this._nodeType);
         this._params.gain = val;
         this.output.gain.setTargetAtTime(val, 0, this.getParameter("transitionTime"));
     }
@@ -1411,7 +1413,7 @@ class AudioObject extends EventTarget{
     }
 
     fadeIn(fadeTime = 0.001){
-      this.fade(this.parameters.gain || 1, fadeTime);
+      this.fade(this.parameters.gain ?? 1, fadeTime);
     }
 
     fadeOut(fadeTime = 0.001){
@@ -1556,6 +1558,7 @@ class AudioObject extends EventTarget{
 
 
   	set gain(val){
+      if(typeof val == "string") val = WebAudioUtils.typeFixParam("gain", val, this._nodeType);
       let audioNode = this._nodeType == "send" ? this._bus : this._node;
 	  	this.setTargetAtTime("gain", val, 0, 0.001, true, audioNode);
       //console.log(this._nodeType + ".gain = " + val);
@@ -2889,7 +2892,7 @@ class Connector {
 			this.connect(xml);
 			setTimeout(() => {
 				if(xml.obj && xml.obj._node && xml.obj._params){
-					xml.obj.fade(xml.obj._params.gain || 1, 0.5);
+					xml.obj.fade(xml.obj._params.gain ?? 1, 0.5);
 				}
 			}, 1000);
 		}
@@ -8883,6 +8886,7 @@ class ObjectBasedAudio extends EventTarget{
         this._params = params;
         this._ctx = obj._ctx;
 		this._parentAudioObj = obj;
+        this._nodeType = obj._nodeType;
 
         this.input = new GainNode(this._ctx);
 
@@ -8963,7 +8967,8 @@ class ObjectBasedAudio extends EventTarget{
     }
 
     fadeIn(time){
-        this.fade(1, time);
+        let gain = this._params.gain ?? 1;
+        this.fade(gain, time);
     }
 
     fadeOut(time){
@@ -9212,6 +9217,7 @@ class ObjectBasedAudio extends EventTarget{
     }
 
     set gain(val){
+        if(typeof val == "string") val = WebAudioUtils.typeFixParam("gain", val, this._nodeType);
         this._params.gain = val;
         this.output.gain.setTargetAtTime(val, this._ctx.currentTime, this.getParameter("transitionTime"));
     }
@@ -9809,7 +9815,7 @@ class Parser {
 
 		// if this node is internal
 		let parentNode = xmlNode.parentNode;
-		let params = WebAudioUtils.attributesToObject(xmlNode.attributes);
+		let params = WebAudioUtils.attributesToObject(xmlNode.attributes, nodeName);
 
 		// check if any parameter needs to be replaced with a Variable object
 
@@ -10083,7 +10089,8 @@ class Parser {
 
 
 	createObject(xmlNode){
-		let params = WebAudioUtils.attributesToObject(xmlNode.attributes);
+		let nodeName = xmlNode.nodeName.toLowerCase();
+		let params = WebAudioUtils.attributesToObject(xmlNode.attributes, nodeName);
 		let obj;
 		switch(xmlNode.nodeName.toLowerCase()){
 			case "envelope":
@@ -10508,7 +10515,7 @@ class Synth{
 	// }
 
 	set gain(val){
-  	this.setTargetAtTime("gain", val);
+  		this.setTargetAtTime("gain", val);
 	}
 
 	get gain(){
@@ -10897,10 +10904,6 @@ class Variable extends EventTarget {
 					let newDerivative2 = newDerivative1 - this._derivative;
 					let newDerivative3 = newDerivative2 - this._derivative2;
 
-					if(this.name == "volume"){
-						// console.log(this.derivativeValues.length);
-					}
-					
 
 					// let lastAVG = this._derivative;
 					// let newAVG = this.setDerivative(newDerivative);
@@ -13692,7 +13695,7 @@ WebAudioUtils.rxp = rxp;
 WebAudioUtils.rxpVal = rxpVal;
 WebAudioUtils.timeWindow = 10;
 
-WebAudioUtils.typeFixParam = (param, value) => {
+WebAudioUtils.typeFixParam = (param, value, nodeName) => {
 
 	//param = param.toLowerCase();
 	let arr;
@@ -13728,13 +13731,16 @@ WebAudioUtils.typeFixParam = (param, value) => {
 	switch(param){
 
 		case "volume":
+			param = "gain";
 		case "gain":
 		case "convolutionGain":
 		if(typeof value == "string"){
-			if(value.includes("dB") || value.includes("db")){
-				value = WebAudioUtils.dbToPower(value);
+			if(nodeName == "biquadfilternode"){
+			value = parseFloat(value);              // redan dB i Web Audio
+			} else if(value.toLowerCase().includes("db")){
+			value = WebAudioUtils.dbToGain(value);
 			} else {
-				value = parseFloat(value);
+			value = parseFloat(value);
 			}
 		}
 		break;
@@ -13910,7 +13916,7 @@ WebAudioUtils.convert = (x=1, conv) => {
 	}
 }
 
-WebAudioUtils.attributesToObject = attributes => {
+WebAudioUtils.attributesToObject = (attributes, nodeName) => {
 
 	var obj = {};
 
@@ -13924,7 +13930,7 @@ WebAudioUtils.attributesToObject = attributes => {
 		if(param == "sync-points"){
 			console.log(param);
 		}
-		let value = WebAudioUtils.typeFixParam(param, attribute.value);
+		let value = WebAudioUtils.typeFixParam(param, attribute.value, nodeName);
 		obj[param] = value;
 	});
 
@@ -13939,7 +13945,7 @@ WebAudioUtils.attributesToObject = attributes => {
 
 	// 	  	param = WebAudioUtils.caseFixParameter(param);
 
-	// 		let value = WebAudioUtils.typeFixParam(param, attributes[i].value);
+	// 		let value = WebAudioUtils.typeFixParam(param, attributes[i].value, nodeName);
 	// 		obj[param] = value;
 	// 	}
 
@@ -14117,9 +14123,8 @@ WebAudioUtils.playbackRateToCent = val => {
 	return Math.log2(val) * 1200;
 }
 
-WebAudioUtils.dbToPower = value => {
-	return Math.pow(2, parseFloat(value) / 3);
-}
+WebAudioUtils.dbToGain = value => Math.pow(10, parseFloat(value) / 20);
+WebAudioUtils.dbToPower = WebAudioUtils.dbToGain; // gammalt namn, används av convert="dB->power"
 
 WebAudioUtils.powerTodB = (power=Number.MIN_VALUE, referencePower=1) => {
 	return 10 * Math.log10(power / referencePower);
@@ -16282,7 +16287,7 @@ class Music extends EventTarget {
 			this.output.connect(destination);
 	
 			this.muteGain.gain.value = o.mute == 1 ? 0 : 1;
-			this.output.gain.value = (typeof o.gain == "number") ? o.gain : 1;
+			this.input.gain.value = (typeof o.gain == "number") ? o.gain : 1;
 	
 			return this;
 		}
@@ -16372,14 +16377,16 @@ class Music extends EventTarget {
 	
 	
 	
-		Bus.prototype.volume = function(vol){
+		Bus.prototype.gain = function(vol){
 			if(typeof vol == "undefined"){
 				return this.input.gain.value;
 			} else {
+				this.input.gain.cancelScheduledValues(audioContext.currentTime);
+
 				this.input.gain.linearRampToValueAtTime(vol, audioContext.currentTime + 0.001);
 			}
 		}
-		Bus.prototype.setVolume = Bus.prototype.volume;
+		Bus.prototype.setGain = Bus.prototype.gain;
 	
 	
 	
@@ -16626,7 +16633,7 @@ class Music extends EventTarget {
 			// why "this"?
 			this.parameters = this.initParameters(o);
 			
-			myInstance.volume = params.volume || 1;
+			myInstance.gain = params.gain ?? 1;
 			myInstance.parameters.tempo = params.tempo || 120;
 			myInstance.parameters.timeSign = params.timeSign || "4/4";
 			myInstance.parameters.timeSign = getTimeSign(myInstance.parameters.timeSign);
@@ -16642,7 +16649,7 @@ class Music extends EventTarget {
 			myInstance.parameters = this.initParameters(params);
 			myInstance.parameters.onLoadComplete = params.onLoadComplete; // varför kopieras inte denna funktion i initParameters??
 			myInstance.parameters.destination = iMus.master.output;
-			myInstance.parameters.volume = myInstance.volume;
+			myInstance.parameters.gain = myInstance.gain;
 	
 	
 			myInstance.master = new Bus(this.parameters);
@@ -16795,7 +16802,7 @@ class Music extends EventTarget {
 							if(!track.active && track.parameters.fadeTime){
 								// set volume to 0 if not active but in fade mode
 								// to play silently until track recieves a play() command
-								// track.bus.setVolume(0, true); -- already controlled by newTrack.setVolume()
+								// track.bus.setGain(0, true); -- already controlled by newTrack.setGain()
 								track.fadeOut();
 							}
 	
@@ -17057,7 +17064,6 @@ class Music extends EventTarget {
 				this.id = o.index;
 				this.idString = o.id || "";
 	
-				this.volume = o.volume || 1;
 				if(typeof o.upbeat === "undefined"){
 					this.upbeat = myInstance.upbeat;
 				}else{
@@ -17156,8 +17162,12 @@ class Music extends EventTarget {
 					params.loopEnd = params.loopEnd || this.parameters.loopEnd;
 	
 	
-					params.volume = (typeof params.volume == "number") ? params.volume : this.parameters.volume;
-	
+					params.gain = params.gain ?? 1;
+					if(typeof params.gain == "string") {
+						params.gain = iMusicHelpers.typeFixParam("gain", value);
+					}
+
+
 					var bus;
 	
 					/*
@@ -17177,6 +17187,7 @@ class Music extends EventTarget {
 					if(params.output){
 						bus.connect(params.output);
 					}
+					params.bus = bus;
 	
 	
 					var parts = this.createParts(urls, params, bus, this);
@@ -17192,7 +17203,7 @@ class Music extends EventTarget {
 						if(params.fadeTime){
 							// This line does not seem to be needed any more. And it creates a conflict for tracks 
 							// with both fadeTime and follow-variable set.
-							// newTrack.setVolume(0, true); // true == dontStoreInParameters
+							// newTrack.setGain(0, true); // true == dontStoreInParameters
 							// console.log("fade out crossFaded track")
 						}
 	
@@ -17584,7 +17595,8 @@ class Music extends EventTarget {
 					let state = track.getFilterState(defaultInstance.selectFilter) != false;
 					
 					if(track.parameters.fadeTime){
-						track.fade(state ? 1 : 0, 0, 0);
+						let gain = track.parameters.gain ?? 1;
+						track.fade(state ? gain : 0, 0, 0);
 					}
 				});
 			}
@@ -17877,8 +17889,9 @@ class Music extends EventTarget {
 	
 	
 				this.bus = o.bus || myInstance.getBus(this.id);
-				this.volume = typeof o.volume === "number" ? o.volume : 1;
-				this.bus.output.gain.value = this.volume;
+				
+				params.gain = o.gain ?? 1;
+				this.bus.input.gain.value = params.gain;
 	
 				this.loopID;
 				this.loopActive = typeof o.loopActive === "number" ? o.loopActive : 1;
@@ -18023,7 +18036,8 @@ class Music extends EventTarget {
 						// }
 						nextLegalBreak.timeLeft = nextLegalBreakTimeLeft || nextLegalBreak.timeLeft;
 						//var timeToLegalBreak = nextLegalBreak.time - audioContext.currentTime;
-						this.fade(1, nextLegalBreak.timeLeft, nextLegalBreak.fadeTime);
+						let val = this.parameters.gain ?? 1;
+						this.fade(val, nextLegalBreak.timeLeft, nextLegalBreak.fadeTime);
 					}
 	
 					
@@ -18241,8 +18255,8 @@ class Music extends EventTarget {
 			Track.prototype.setActive = setActive;
 			Track.prototype.createParts = createParts;
 			Track.prototype.getTime = getTime;
-			Track.prototype.setVolume = setVolume;
-			Track.prototype.getVolume = getVolume;
+			Track.prototype.setGain = setGain;
+			Track.prototype.getGain = getGain;
 			Track.prototype.setMuteState = setMuteState;
 			Track.prototype.getMuteState = getMuteState;
 
@@ -18443,8 +18457,7 @@ class Music extends EventTarget {
 				this.parentObj = section || defaultInstance;
 				var beatDuration = this.parentObj.getBeatDuration();
 				o.syncTo = getTimeSign(o.syncTo || o.quantize || this.parentObj.parameters.quantize || myInstance.parameters.quantize, this.parentObj.parameters.timeSign);
-	
-				this.volume = o.volume || 1;
+					
 	
 				// a terrible solution where urls CAN be an Array with Command objects
 				// is passed to JSON.parse which is illegal. Terrible.
@@ -18452,6 +18465,8 @@ class Music extends EventTarget {
 				o.urls = undefined;
 	
 				this.parameters = this.initParameters(o, myInstance.parameters);
+
+				this.parameters.gain = o.gain ?? 1;
 	
 				o.urls = urls;
 	
@@ -19062,8 +19077,8 @@ class Music extends EventTarget {
 			Motif.prototype.getAbsolutePosition = getAbsolutePosition;
 	
 			Motif.prototype.setActive = setActive;
-			Motif.prototype.setVolume = setVolume;
-			Motif.prototype.getVolume = getVolume;
+			Motif.prototype.setGain = setGain;
+			Motif.prototype.getGain = getGain;
 
 			Motif.prototype.setMuteState = setMuteState;
 			Motif.prototype.getMuteState = getMuteState;
@@ -19144,8 +19159,8 @@ class Music extends EventTarget {
 			}
 	
 	
-			SFX.prototype.setVolume = setVolume;
-			SFX.prototype.getVolume = getVolume;
+			SFX.prototype.setGain = setGain;
+			SFX.prototype.getGain = getGain;
 			SFX.prototype.get = get;
 	
 	
@@ -19270,20 +19285,21 @@ class Music extends EventTarget {
 	
 	
 	
-		function setVolume(val, dontStore){
+		function setGain(val, dontStore){
 	
 			if(!this.bus){return}
+			this.bus.input.gain.cancelScheduledValues(audioContext.currentTime);
 			this.bus.input.gain.linearRampToValueAtTime(val, audioContext.currentTime + 0.001);
 	
 			if(!this.parameters || dontStore){return}
-			this.parameters.volume = val;
+			this.parameters.gain = val;
 		}
 	
 	
-		function getVolume(){
+		function getGain(){
 	
 			if(!this.bus){return -1}
-			return this.bus.output.gain.value;
+			return this.bus.input.gain.value;
 		}
 
 		function setMuteState(val){
@@ -20117,7 +20133,7 @@ class Music extends EventTarget {
 	
 	
 		var defaultParams = {};
-		defaultParams.volume = 1;
+		defaultParams.gain = 1;
 		defaultParams.pan = 0.5;
 		defaultParams.tempo = 120;
 		defaultParams.audioPath = "";
@@ -20145,7 +20161,7 @@ class Music extends EventTarget {
 		function addDefaultParameters(params){
 	
 	
-			params.volume = params.volume || defaultParams.volume;
+			params.gain = params.gain ?? defaultParams.gain;
 			params.pan = typeof params.pan === "number" ? params.pan : defaultParams.pan;
 			params.tempo = params.tempo || defaultParams.tempo;
 			params.timeSign = getTimeSign(params.timeSign || defaultParams.timeSign);
@@ -20176,7 +20192,7 @@ class Music extends EventTarget {
 	
 		function fade(val, delay, duration, callBack){
 	
-			var gainNode = this.bus.output;
+			var gainNode = this.bus.input;
 			if(this.fadeCallbackID){clearTimeout(this.fadeCallbackID);}
 	
 			var myObj = this;
@@ -20195,11 +20211,9 @@ class Music extends EventTarget {
 			var fadeStartTime = Math.max(audioContext.currentTime, fadeEndTime-duration);
 			gainNode.gain.cancelScheduledValues(fadeStartTime);
 	
-			if(this.parameters){
-				var defaultVal = this.parameters.volume;
-			}
+			var defaultVal = this.parameters ? this.parameters.gain ?? 1 : 1;
 			// user either defined value, stored value or 1
-			val = (typeof val === "undefined") ? (defaultVal || 1) : val;
+			val = (typeof val === "undefined") ? defaultVal : val;
 			val = Math.max(val, 0);
 	
 			gainNode.gain.setTargetAtTime(val, fadeStartTime, duration);
@@ -20235,8 +20249,8 @@ class Music extends EventTarget {
 		}
 	
 		function fadeIn(delay, duration){
-	
-			this.fade(1, delay, duration);
+			let val = this.parameters ? this.parameters.gain ?? 1 : 1;
+			this.fade(val, delay, duration);
 		}
 	
 		function fadeOut(delay, duration){
@@ -20291,10 +20305,10 @@ class Music extends EventTarget {
 			switch(param){
 	
 				case "volume":
+					param = "gain";
 				case "gain":
-				if(this.setVolume){
-					this.setVolume(value);
-				}
+				if(typeof value == "string") value = iMusicHelpers.typeFixParam("gain", value);
+				if(this.setGain) this.setGain(value);
 				break;
 	
 				case "timeSign":
@@ -22596,22 +22610,22 @@ class Selection{
         return this;
     }
 
-    setVolume(arg1, arg2){
+    setGain(arg1, arg2){
 
 
         this.objects.forEach(obj => {
-            if(!obj.setVolume){return}
-            return obj.setVolume(arg1, arg2);
+            if(!obj.setGain){return}
+            return obj.setGain(arg1, arg2);
         });
         return this;
     }
 
-    getVolume(){
+    getGain(){
 
         var vol = -1;
         this.objects.forEach(obj => {
-            if(!obj.getVolume){return -1}
-            vol = Math.max(vol, obj.getVolume());
+            if(!obj.getGain){return -1}
+            vol = Math.max(vol, obj.getGain());
         });
         return vol;
     }
@@ -23994,8 +24008,8 @@ iMusicHelpers.typeFixParam = (param, value) => {
 
         case "volume":
         case "gain":
-        if(value.includes("dB")){
-            value = Math.pow(2, Number(value.split("dB")[0]) / 3);
+        if(value.includes("dB") || value.includes("db")){
+            value = Math.pow(10, parseFloat(value) / 20);
         } else {
             value = Number(value);
         }

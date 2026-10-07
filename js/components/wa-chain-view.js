@@ -6,7 +6,6 @@ import { formatValue } from "../utils/number-format.js";
 import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
-	dbToLinearRatio,
 	isDbNativeGain,
 	gainDbRangeForTag
 } from "../waxml-integration/gain-units.js";
@@ -39,7 +38,7 @@ import "./wa-panner-view.js";
 // Only the 5 node types Hans asked for, plus two simple bonus ones
 // (StereoPannerNode, DelayNode — "du får gärna testa att skapa fler enkla
 // vyer... på samma tema"), get a dedicated interactive card.
-// WAXML-specific children (<Var>, <Send>, <Mixer>, <Synth>, ...) and every
+// WAXML-specific children (<Var>, <Send>, <Mixer>, ...) and every
 // other native node without a card yet fall back to a plain label card —
 // "Lämna de element som är WAXML-specifika."
 //
@@ -1106,8 +1105,7 @@ export class WaChainView extends HTMLElement {
 			(db) => {
 				applyVisual(db);
 				renderChip(`${formatValue(db, 100)} dB`);
-				const isLinear = !isDbNativeGain(node.tagName);
-				if (node.attributes.id) applyLiveProperty(node.attributes.id, "gain", isLinear ? dbToLinearRatio(db) : db);
+				if (node.attributes.id) applyLiveProperty(node.attributes.id, "gain", formatGainAttribute(node.tagName, db));
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, gain: formatGainAttribute(node.tagName, db) });
 			},
@@ -1254,7 +1252,7 @@ export class WaChainView extends HTMLElement {
 				this._commitAttributes(node.id, patch);
 				if (nodeNow.attributes.id) {
 					applyLiveProperty(nodeNow.attributes.id, "frequency", state.freq);
-					if (mode === "gain") applyLiveProperty(nodeNow.attributes.id, "gain", state.gainDb);
+					if (mode === "gain") applyLiveProperty(nodeNow.attributes.id, "gain", formatGainAttribute(node.tagName, state.gainDb));
 					else if (mode === "q") applyLiveProperty(nodeNow.attributes.id, "Q", state.Q);
 				}
 			};

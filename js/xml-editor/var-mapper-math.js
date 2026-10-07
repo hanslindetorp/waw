@@ -115,7 +115,7 @@ function midiNoteToFrequency(note) {
 	return 440 * Math.pow(2, (note - 69) / 12);
 }
 function dbToPower(value) {
-	return Math.pow(2, parseFloat(value) / 3);
+	return Math.pow(10, parseFloat(value) / 20); // amplitude dB, same as waxml.js's dbToGain
 }
 
 // Same JS-expression support as Mapper.convert's eval() fallback, but via

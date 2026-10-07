@@ -33,24 +33,13 @@ import "./wa-panner-view.js";
 // <Mixer> only ever appears at the document root or nested inside another
 // Mixer/Chain (schema doesn't allow it inside <Section>/<Composition>).
 
-// Mixer-specific floor on top of gain-units.js's own dB<->linear math:
-// below the fader's own -60dB convention-for-silence, snap to exactly 0
-// rather than the tiny-but-nonzero value the raw log-taper math would
-// otherwise give (Math.pow(10, -60/20) = 0.001, not 0) — matches the fader
-// track's own "all the way down = true silence" semantics.
-function dbToLinear(db) {
-	if (!(db > FADER_MIN_DB)) return 0;
-	return Math.pow(10, db / 20);
-}
-
-// gain is special-cased: GainNode.gain is a linear multiplier, but
-// BiquadFilterNode.gain (and Send, which routes through its own bus) is
-// native dB already in Web Audio — same nuance as formatGainAttribute's own
-// XML string form (gain-units.js), just resolved against the live
-// AudioParam's own unit instead of the schema's flexible "0-1 or XdB"
-// attribute grammar.
-function applyLiveGainDb(nodeId, db, isLinearGainNode) {
-	applyLiveProperty(nodeId, "gain", isLinearGainNode ? dbToLinear(db) : db);
+// Live gain nudges send the same attribute string that gets written to the
+// XML (formatGainAttribute: "-6dB" for GainNode/Send, a bare dB number for
+// BiquadFilterNode) — waxml.js owns the unit conversion, so live and
+// on-load behave identically (decided with Hans, 2026-10-04). The app only
+// converts for display (fader position <-> dB), never for the engine.
+function applyLiveGainDb(node, db) {
+	applyLiveProperty(node.attributes.id, "gain", formatGainAttribute(node.tagName, db));
 }
 
 function readPan(node) {
@@ -75,7 +64,7 @@ function displayLabel(node) {
 
 // <Mixer> children that carry no audio signal of their own, so never get a
 // channel strip — every other tag the schema's shared "waxml" choice group
-// allows there (Chain, GainNode, every native *Node, Synth,
+// allows there (Chain, GainNode, every native *Node,
 // ObjectBasedAudio, AmbientAudio, Snapshot, Noise, Wam, a nested Mixer,
 // Include, ...) is a real audio-producing/-processing node and still gets
 // one, even outside a <Chain> (see _buildChannelStrip's own "any other
@@ -2301,7 +2290,7 @@ export class WaMixerView extends HTMLElement {
 			if (!nodeNow) return;
 			const nowOn = parseFloat(nodeNow.attributes.gain) !== 0;
 			const newGain = nowOn ? "0" : "1";
-			applyLiveProperty(nodeNow.attributes.id, "gain", parseFloat(newGain)); // GainNode.gain is already linear
+			applyLiveProperty(nodeNow.attributes.id, "gain", newGain);
 			xmlStore.updateAttributes(nodeNow.id, { ...nodeNow.attributes, gain: newGain });
 		});
 		return btn;
@@ -2848,7 +2837,7 @@ export class WaMixerView extends HTMLElement {
 			(db) => {
 				applyVisual(db);
 				knob.title = `${db.toFixed(1)} dB`;
-				applyLiveGainDb(node.attributes.id, db, false); // BiquadFilterNode.gain is native dB
+				applyLiveGainDb(node, db);
 				const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 				// BiquadFilterNode.gain is native dB in Web Audio, so its XML
 				// attribute stays a bare number (unit implied) — everything
@@ -3185,7 +3174,7 @@ export class WaMixerView extends HTMLElement {
 
 		const resetToDefault = () => {
 			applyVisual(0);
-			applyLiveGainDb(gainNode.attributes.id, 0, true);
+			applyLiveGainDb(gainNode, 0);
 			const nodeNow = ops.findNodeById(xmlStore.root, gainNode.id);
 			if (nodeNow) this._commitAttributes(gainNode.id, { ...nodeNow.attributes, gain: formatGainAttribute(gainNode.tagName, 0) });
 			handle.title = "Volume";
@@ -3210,7 +3199,7 @@ export class WaMixerView extends HTMLElement {
 				const committedDb = faderPositionToDb(t);
 				applyVisual(committedDb);
 				handle.title = Number.isFinite(committedDb) ? `${committedDb.toFixed(1)} dB` : "-∞ dB";
-				applyLiveGainDb(gainNode.attributes.id, committedDb, true); // GainNode.gain is linear
+				applyLiveGainDb(gainNode, committedDb);
 				const nodeNow = ops.findNodeById(xmlStore.root, gainNode.id);
 				if (nodeNow) this._commitAttributes(gainNode.id, { ...nodeNow.attributes, gain: formatGainAttribute(gainNode.tagName, committedDb) });
 			};
@@ -3336,7 +3325,7 @@ export class WaMixerView extends HTMLElement {
 				(db) => {
 					applyVisual(db);
 					knob.title = `${db.toFixed(1)} dB`;
-					applyLiveGainDb(send.attributes.id, db, true); // Send routes through a GainNode-based bus, linear like GainNode
+					applyLiveGainDb(send, db);
 					const nodeNow = ops.findNodeById(xmlStore.root, send.id);
 					if (nodeNow) this._commitAttributes(send.id, { ...nodeNow.attributes, gain: formatGainAttribute(send.tagName, db) });
 				},

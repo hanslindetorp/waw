@@ -1,6 +1,5 @@
 import * as ops from "./xml-tree-ops.js";
 import { isVariableControlled } from "./variable-references.js";
-import { parseGainAttributeToDb, dbToLinearRatio } from "../waxml-integration/gain-units.js";
 
 const EMPTY_XML = '<?xml version="1.0" encoding="UTF-8"?>';
 
@@ -486,7 +485,7 @@ class XmlStore extends EventTarget {
 	// instead of risking that switch's `default:` catch-all silently
 	// misapplying the value to some unrelated bus parameter.
 	static LIVE_NUDGE_ALLOWED_ATTRS = new Set([
-		"gain", // aliased to "volume" below — see _buildLiveNudge
+		"gain", // raw string, waxml.js converts — see _buildLiveNudge
 		// loopEnd deliberately removed (2026-09-10, per Hans): waxml.js's
 		// Track constructor only resolves an *inherited* loopEnd (from its
 		// Section/Composition, when the Layer has none of its own) once, at
@@ -580,16 +579,14 @@ class XmlStore extends EventTarget {
 			// via the generic switch would hit that switch's `default:` case
 			// instead, since it has no "mute" case of its own.
 			if (name === "mute") continue;
-			// waxml.js's generic .set(param, value) expects "volume" (a plain
-			// linear float), while the XML `gain` attribute is written as a
-			// 0-1 ratio or an "XdB" string (see waxml.xsd's `gain` union type)
-			// — reuse the same dB<->linear conversion wa-mixer-view.js's own
-			// live gain nudge already relies on.
-			if (name === "gain") {
-				changed.volume = dbToLinearRatio(parseGainAttributeToDb(node.tagName, value));
-			} else {
-				changed[name] = value;
-			}
+			// `gain` goes to waxml.js as the raw attribute string ("-6dB",
+			// "0.5"): waxml.js owns all unit conversion, so a live nudge
+			// means exactly what the same attribute means on load (decided
+			// with Hans, 2026-10-04). A value waxml can't parse as a number
+			// or dB string (a "$var" reference, a math expression) is not
+			// nudged — the XML stays authoritative, same as the Inspector.
+			if (name === "gain" && !/^\s*-?\d+(\.\d+)?\s*(dB)?\s*$/i.test(String(value))) continue;
+			changed[name] = value;
 		}
 		return Object.keys(changed).length ? { elementId: node.attributes.id, changed } : null;
 	}
