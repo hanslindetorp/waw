@@ -1087,6 +1087,8 @@ template.innerHTML = `
 		   or PannerNode child (see _buildPanRow). */
 		.panner-3d-toggle {
 			flex: 0 0 auto;
+			/* Kept clear of the pan knob next to it — per Hans (2026-10-08). */
+			margin-left: 10px;
 			width: 20px;
 			height: 16px;
 			border-radius: 4px;
@@ -1108,14 +1110,21 @@ template.innerHTML = `
 			border-color: var(--waw-accent, #4fa3ff);
 			color: #06131f;
 		}
+		/* A square with a grid (replacing the old round thumbnail) — per
+		   Hans (2026-10-08), matching the square X/Z view it opens. */
 		.panner-thumb-wrap {
 			position: relative;
 			width: 26px;
 			height: 26px;
-			border-radius: 50%;
+			border-radius: 3px;
 			overflow: hidden;
-			border: 1px solid #0b0c0d;
-			background: #111315;
+			border: 1px solid #3a3e43;
+			background-color: #111315;
+			background-image:
+				linear-gradient(to right, #2a2d31 1px, transparent 1px),
+				linear-gradient(to bottom, #2a2d31 1px, transparent 1px);
+			background-size: 8px 8px;
+			background-position: center center;
 			cursor: pointer;
 			flex: 0 0 auto;
 		}
@@ -2571,8 +2580,16 @@ export class WaMixerView extends HTMLElement {
 			e.stopPropagation();
 			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 			if (!nodeNow) return;
-			if (isPannerActive) this._switchToStereoPanner(nodeNow);
-			else this._switchToPannerNode(nodeNow);
+			if (isPannerActive) {
+				this._switchToStereoPanner(nodeNow);
+				return;
+			}
+			// Switching on 3D goes straight to the X/Y/Z pan window — per
+			// Hans (2026-10-08). (Turning it off again is still this same
+			// button; the grid thumbnail it leaves behind reopens the window.)
+			this._switchToPannerNode(nodeNow);
+			const pannerNow = ops.findNodeById(xmlStore.root, nodeNow.id);
+			if (pannerNow) this._openPannerPopup(pannerNow);
 		});
 		return btn;
 	}

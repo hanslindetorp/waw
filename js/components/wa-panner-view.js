@@ -2,7 +2,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
 import { playerStore } from "../waxml-integration/player-store.js";
-import { DEFAULT_ZOOM_RADIUS, zoomIn, zoomOut, gridUnitForRadius, squaresFromCenterToEdge, radiusToFitAll, worldToCanvas, canvasToWorld, clampToRadius } from "../xml-editor/panner-math.js";
+import { DEFAULT_ZOOM_RADIUS, zoomIn, zoomOut, gridUnitForRadius, radiusToFitAll, worldToCanvas, canvasToWorld, clampToRadius } from "../xml-editor/panner-math.js";
 
 // A top-down (X/Z plane) 3D-panning "radar" — one <PannerNode>'s position,
 // PLUS every sibling <PannerNode> (direct or nested inside a sibling's own
@@ -55,10 +55,12 @@ const LABEL_H = 20; // room for the "N squares to edge" readout above the circle
 const CIRCLE_CX = CANVAS_W / 2;
 const CIRCLE_CY = LABEL_H + (CANVAS_H - LABEL_H) / 2;
 const CIRCLE_PX_RADIUS = (CANVAS_H - LABEL_H) / 2 - 6;
-const SIDE_W = 36; // the Y-slider's own column — wide enough for "pos Y" and a 3-digit max-value label without overflowing
+// The square's own top edge and side length — the Y slider's track below is
+// sized/placed to match them exactly (per Hans, 2026-10-08).
+const SQUARE_TOP = CIRCLE_CY - CIRCLE_PX_RADIUS;
+const SQUARE_SIDE = CIRCLE_PX_RADIUS * 2;
+const SIDE_W = 36; // the Y-slider's own column — wide enough for a 3-digit max-value label without overflowing
 const SPEAKER_HIT_RADIUS = 14;
-const LISTENER_PX_MIN = 9;
-const LISTENER_PX_MAX = 16;
 const SPEAKER_BADGE_PX = 9; // the speaker icon's own circular badge radius
 
 const template = document.createElement("template");
@@ -82,6 +84,19 @@ template.innerHTML = `
 			touch-action: none;
 			cursor: default;
 		}
+		/* Live position readout, just left of the zoom buttons — one decimal,
+		   updated while dragging (per Hans, 2026-10-08). Plain text, never
+		   editable. */
+		.readout {
+			display: flex;
+			gap: 8px;
+			white-space: nowrap;
+			font: 10px monospace;
+			color: var(--waw-muted, #8a8a8a);
+		}
+		.rd-val {
+			color: var(--waw-fg, #e8e8e8);
+		}
 		.side {
 			display: flex;
 			flex-direction: column;
@@ -89,17 +104,19 @@ template.innerHTML = `
 			width: ${SIDE_W}px;
 		}
 		.slider-max-label {
-			height: ${LABEL_H}px;
+			height: ${SQUARE_TOP}px;
+			box-sizing: border-box;
 			display: flex;
 			align-items: flex-end;
-			padding-bottom: 8px;
+			padding-bottom: ${SQUARE_TOP - LABEL_H + 8}px; /* baseline level with the "N squares" readout above the square */
 			font: 10px monospace;
 			color: #8a8a8a;
 		}
 		.slider {
 			position: relative;
 			width: 14px;
-			height: ${CANVAS_H - LABEL_H}px;
+			height: ${SQUARE_SIDE}px;
+			box-sizing: border-box; /* the 1px border must not make it taller than the square */
 			background: #16181a;
 			border: 1px solid var(--waw-border, #2f2f2f);
 			border-radius: 7px;
@@ -125,17 +142,16 @@ template.innerHTML = `
 			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 			transform: translateY(-50%);
 		}
-		.slider-label {
-			text-align: center;
-			font-size: 0.62rem;
-			color: var(--waw-muted, #8a8a8a);
-			margin-top: 0.2rem;
-		}
 		.zoom-row {
 			display: flex;
-			justify-content: flex-end;
+			justify-content: space-between;
+			align-items: center;
 			gap: 0.3rem;
 			margin-top: 0.3rem;
+		}
+		.zoom-btns {
+			display: flex;
+			gap: 0.3rem;
 		}
 		.zoom-btn {
 			width: 22px;
@@ -163,12 +179,18 @@ template.innerHTML = `
 				<div class="slider-fill"></div>
 				<div class="slider-thumb"></div>
 			</div>
-			<div class="slider-label">pos Y</div>
 		</div>
 	</div>
 	<div class="zoom-row">
-		<button class="zoom-btn zoom-out" type="button" title="Zoom out">−</button>
-		<button class="zoom-btn zoom-in" type="button" title="Zoom in">+</button>
+		<div class="readout">
+			<span class="rd"><span class="rd-name">X:</span> <span class="rd-val rd-x">0.0</span></span>
+			<span class="rd"><span class="rd-name">Y:</span> <span class="rd-val rd-y">0.0</span></span>
+			<span class="rd"><span class="rd-name">Z:</span> <span class="rd-val rd-z">0.0</span></span>
+		</div>
+		<div class="zoom-btns">
+			<button class="zoom-btn zoom-out" type="button" title="Zoom out">−</button>
+			<button class="zoom-btn zoom-in" type="button" title="Zoom in">+</button>
+		</div>
 	</div>
 `;
 
@@ -182,7 +204,9 @@ export class WaPannerView extends HTMLElement {
 		this._slider = this.shadowRoot.querySelector(".slider");
 		this._sliderThumb = this.shadowRoot.querySelector(".slider-thumb");
 		this._sliderFill = this.shadowRoot.querySelector(".slider-fill");
-		this._sliderMaxLabel = this.shadowRoot.querySelector(".slider-max-label");
+		this._readoutX = this.shadowRoot.querySelector(".rd-x");
+		this._readoutY = this.shadowRoot.querySelector(".rd-y");
+		this._readoutZ = this.shadowRoot.querySelector(".rd-z");
 
 		this._primaryNodeId = null;
 		this._panners = []; // [{ node, x, y, z }] — local render/drag state, refreshed every render
@@ -266,9 +290,26 @@ export class WaPannerView extends HTMLElement {
 		return this._zoomRadius ?? DEFAULT_ZOOM_RADIUS;
 	}
 
+	// Zooming in can leave a speaker outside the square, or Y beyond the
+	// slider's ends — those values are pulled to the nearest limit that is
+	// still valid at the new zoom (and written to the document), per Hans
+	// (2026-10-08).
 	_setZoom(radius) {
 		this._zoomRadius = radius;
 		if (this._groupKeyCache) explicitZoomByGroup.set(this._groupKeyCache, radius);
+		const clampAxis = (v) => Math.max(-radius, Math.min(radius, v));
+		for (const p of this._panners) {
+			const next = { x: clampAxis(p.x), y: clampAxis(p.y), z: clampAxis(p.z) };
+			if (next.x === p.x && next.y === p.y && next.z === p.z) continue;
+			const patch = {};
+			if (next.x !== p.x) patch.positionX = String(round3(next.x));
+			if (next.y !== p.y) patch.positionY = String(round3(next.y));
+			if (next.z !== p.z) patch.positionZ = String(round3(next.z));
+			Object.assign(p, next);
+			const id = p.node.attributes.id;
+			if (id) for (const [attr, v] of Object.entries(patch)) applyLiveProperty(id, attr, parseFloat(v));
+			this._commitAttrs(p.node, patch);
+		}
 		this._drawScene();
 		this._updateSlider();
 	}
@@ -296,7 +337,8 @@ export class WaPannerView extends HTMLElement {
 			node,
 			x: parseFloat(node.attributes.positionX) || 0,
 			y: parseFloat(node.attributes.positionY) || 0,
-			z: parseFloat(node.attributes.positionZ) || -1
+			// -1 only when the attribute is absent/unparseable — a real 0 must stay 0.
+			z: Number.isFinite(parseFloat(node.attributes.positionZ)) ? parseFloat(node.attributes.positionZ) : -1
 		}));
 
 		this._groupKeyCache = this._groupKey(primary);
@@ -316,8 +358,30 @@ export class WaPannerView extends HTMLElement {
 		return xmlStore.selectedNodeId;
 	}
 
+	// The speaker the readout and the Y slider currently work on: the one
+	// selected in the document if it's part of this group (clicking a
+	// speaker selects it), otherwise this view's own primary node.
+	_activePanner() {
+		const selectedId = this._selectedNodeId();
+		return this._panners.find((p) => p.node.id === selectedId) || this._panners.find((p) => p.node.id === this._primaryNodeId) || null;
+	}
+
+	// posX/posY/posZ under the square, one decimal, from the same local
+	// drag state the canvas draws from — so it moves in real time.
+	_updateReadout() {
+		const p = this._activePanner();
+		const fmt = (v) => {
+			const r = Math.round(v * 10) / 10;
+			return (r === 0 ? 0 : r).toFixed(1);
+		};
+		this._readoutX.textContent = p ? fmt(p.x) : "-";
+		this._readoutY.textContent = p ? fmt(p.y) : "-";
+		this._readoutZ.textContent = p ? fmt(p.z) : "-";
+	}
+
 	// ── Canvas ───────────────────────────────────────────────────────────
 	_drawScene() {
+		this._updateReadout();
 		const ctx = this._ctx;
 		const w = CANVAS_W,
 			h = CANVAS_H;
@@ -325,25 +389,13 @@ export class WaPannerView extends HTMLElement {
 		const zoom = this._currentZoom();
 		const unit = gridUnitForRadius(zoom);
 
-		// Label — square count from center to the circle's own top edge.
-		// Drawn straight on the canvas, never a DOM chip: per Hans
-		// (2026-09-30 correction on the Var Convert graph), a readout here
-		// must never look editable, and this one genuinely isn't.
-		ctx.fillStyle = "#8a8a8a";
-		ctx.font = "10px monospace";
-		ctx.textAlign = "center";
-		ctx.fillText(String(squaresFromCenterToEdge(zoom, unit)), CIRCLE_CX, LABEL_H - 8);
-
-		// Clip to the circle so the grid's own corners are cut off by its
-		// edge — per Hans: "hörnen av denna kvadrat klipps av av cirkelns
-		// kant."
-		ctx.save();
-		ctx.beginPath();
-		ctx.arc(CIRCLE_CX, CIRCLE_CY, CIRCLE_PX_RADIUS, 0, Math.PI * 2);
-		ctx.clip();
+		// A square (side = the old circle's diameter), per Hans (2026-10-08).
+		const side = CIRCLE_PX_RADIUS * 2;
+		const left = CIRCLE_CX - CIRCLE_PX_RADIUS;
+		const top = CIRCLE_CY - CIRCLE_PX_RADIUS;
 
 		ctx.fillStyle = "#111315";
-		ctx.fillRect(CIRCLE_CX - CIRCLE_PX_RADIUS, CIRCLE_CY - CIRCLE_PX_RADIUS, CIRCLE_PX_RADIUS * 2, CIRCLE_PX_RADIUS * 2);
+		ctx.fillRect(left, top, side, side);
 
 		ctx.strokeStyle = "#2a2d31";
 		ctx.lineWidth = 1;
@@ -363,71 +415,49 @@ export class WaPannerView extends HTMLElement {
 		// Center cross-hairs, a touch brighter than the rest of the grid.
 		ctx.strokeStyle = "#3a3e43";
 		ctx.beginPath();
-		ctx.moveTo(CIRCLE_CX - CIRCLE_PX_RADIUS, CIRCLE_CY);
-		ctx.lineTo(CIRCLE_CX + CIRCLE_PX_RADIUS, CIRCLE_CY);
-		ctx.moveTo(CIRCLE_CX, CIRCLE_CY - CIRCLE_PX_RADIUS);
-		ctx.lineTo(CIRCLE_CX, CIRCLE_CY + CIRCLE_PX_RADIUS);
+		ctx.moveTo(left, CIRCLE_CY);
+		ctx.lineTo(left + side, CIRCLE_CY);
+		ctx.moveTo(CIRCLE_CX, top);
+		ctx.lineTo(CIRCLE_CX, top + side);
 		ctx.stroke();
 
-		ctx.restore();
 		ctx.strokeStyle = "#3a3e43";
 		ctx.lineWidth = 1;
-		ctx.beginPath();
-		ctx.arc(CIRCLE_CX, CIRCLE_CY, CIRCLE_PX_RADIUS, 0, Math.PI * 2);
-		ctx.stroke();
+		ctx.strokeRect(left + 0.5, top + 0.5, side - 1, side - 1);
 
-		// Listener — fixed at center for now (see the class comment). Shrinks
-		// as the zoom radius grows, floored so it never gets too small to
-		// register as a click/drag target once that lands — per Hans:
-		// "inte nödvändigtvis helt skalenligt... annars blir det ett
-		// praktiskt problem." Drawn as a cute round face (per Hans's own
-		// reference image, 2026-10-04, replacing the earlier "head from
-		// above" attempt entirely): a circular head with two ears poking out
-		// the sides, a little tuft on top, two dot eyes and a small
-		// double-arc smile underneath them.
-		const r = Math.max(LISTENER_PX_MIN, Math.min(LISTENER_PX_MAX, CIRCLE_PX_RADIUS / zoom));
+		// Listener — fixed at center for now (see the class comment). Drawn
+		// top-down: a round head with a nose pointing "up" (away, -Z) and a
+		// pair of headphone cups on the sides. Per Hans (2026-10-08): nose
+		// and headphones a bit bigger, no eyes or brows, and the whole figure
+		// the same size as a speaker badge — so a fixed size now (it used to
+		// shrink/grow with the zoom).
+		const r = SPEAKER_BADGE_PX * 0.58;
 		ctx.fillStyle = "#ffffff";
 		ctx.strokeStyle = "#0c0c0c";
-		ctx.lineWidth = Math.max(1, r * 0.12);
+		ctx.lineWidth = 1;
 
-		// Ears — drawn BEFORE the head so only their outer curve pokes out
-		// past its edge, same "avoid a same-color blob" reasoning the
-		// earlier design used.
-		const earR = r * 0.32;
-		const earCx = r * 0.92;
-		const earCy = CIRCLE_CY + r * 0.05;
+		// Headphone cups — drawn BEFORE the head so only their outer curve
+		// pokes out past its edge.
+		const cupRx = r * 0.62;
+		const cupRy = r * 0.85;
+		const cupCx = r * 1.12;
 		ctx.beginPath();
-		ctx.ellipse(CIRCLE_CX - earCx, earCy, earR, earR * 1.3, 0, 0, Math.PI * 2);
-		ctx.ellipse(CIRCLE_CX + earCx, earCy, earR, earR * 1.3, 0, 0, Math.PI * 2);
+		ctx.ellipse(CIRCLE_CX - cupCx, CIRCLE_CY, cupRx, cupRy, 0, 0, Math.PI * 2);
+		ctx.ellipse(CIRCLE_CX + cupCx, CIRCLE_CY, cupRx, cupRy, 0, 0, Math.PI * 2);
 		ctx.fill();
 		ctx.stroke();
 
-		// Head + a small wavy tuft on top center.
+		// Head
 		ctx.beginPath();
 		ctx.arc(CIRCLE_CX, CIRCLE_CY, r, 0, Math.PI * 2);
 		ctx.fill();
 		ctx.stroke();
-		ctx.beginPath();
-		ctx.moveTo(CIRCLE_CX - r * 0.14, CIRCLE_CY - r * 0.94);
-		ctx.quadraticCurveTo(CIRCLE_CX, CIRCLE_CY - r * 1.35, CIRCLE_CX + r * 0.14, CIRCLE_CY - r * 0.94);
-		ctx.fill();
-		ctx.stroke();
 
-		// Face — two dot eyes, and a small smile-arc under each (matching
-		// the reference icon's own two separate curved marks).
-		const eyeY = CIRCLE_CY - r * 0.05;
-		const eyeDx = r * 0.32;
-		ctx.fillStyle = "#0c0c0c";
+		// Nose — a small rounded point on top.
 		ctx.beginPath();
-		ctx.ellipse(CIRCLE_CX - eyeDx, eyeY, r * 0.1, r * 0.13, 0, 0, Math.PI * 2);
-		ctx.ellipse(CIRCLE_CX + eyeDx, eyeY, r * 0.1, r * 0.13, 0, 0, Math.PI * 2);
+		ctx.moveTo(CIRCLE_CX - r * 0.42, CIRCLE_CY - r * 0.85);
+		ctx.quadraticCurveTo(CIRCLE_CX, CIRCLE_CY - r * 2.1, CIRCLE_CX + r * 0.42, CIRCLE_CY - r * 0.85);
 		ctx.fill();
-		ctx.lineWidth = Math.max(1, r * 0.1);
-		ctx.beginPath();
-		ctx.arc(CIRCLE_CX - eyeDx, eyeY + r * 0.35, r * 0.18, Math.PI * 0.15, Math.PI * 0.85);
-		ctx.stroke();
-		ctx.beginPath();
-		ctx.arc(CIRCLE_CX + eyeDx, eyeY + r * 0.35, r * 0.18, Math.PI * 0.15, Math.PI * 0.85);
 		ctx.stroke();
 
 		// Speakers — every sibling PannerNode, the "owning" one (this card's
@@ -441,7 +471,7 @@ export class WaPannerView extends HTMLElement {
 		const selectedId = this._selectedNodeId();
 		const soloSource = this._panners.length === 1;
 		this._panners.forEach((p) => {
-			if (Math.hypot(p.x, p.z) > zoom) return;
+			if (Math.max(Math.abs(p.x), Math.abs(p.z)) > zoom) return;
 			const isSelected = p.node.id === selectedId || (soloSource && p.node.id === this._primaryNodeId);
 			const { px, py } = worldToCanvas(p.x, p.z, zoom, CIRCLE_CX, CIRCLE_CY, CIRCLE_PX_RADIUS);
 			drawSpeakerBadge(ctx, px, py, isSelected);
@@ -460,14 +490,14 @@ export class WaPannerView extends HTMLElement {
 	}
 
 	_updateSlider() {
+		this._updateReadout();
 		const zoom = this._currentZoom();
 		// The slider's own range tracks the circle's zoom — per Hans
 		// (2026-10-04): "posY-slidern ska påverkas av zoomknapparna och ha en
 		// label ovanför som indikerar mx-värdet." (a plain unitless number,
 		// same as positionY itself, not a grid-square count — Y isn't
 		// gridded, so the raw zoom radius IS its reachable max.)
-		this._sliderMaxLabel.textContent = String(zoom);
-		const primaryY = this._panners.find((p) => p.node.id === this._primaryNodeId)?.y ?? 0;
+		const primaryY = this._activePanner()?.y ?? 0;
 		// 0 = track bottom (Y = -zoom), 1 = track top (Y = +zoom) — screen-up
 		// is positive Y, matching how a real fader/slider reads.
 		const t = Math.max(0, Math.min(1, (primaryY + zoom) / (2 * zoom)));
@@ -514,7 +544,7 @@ export class WaPannerView extends HTMLElement {
 	}
 
 	_onSliderPointerDown(e) {
-		const primary = this._panners.find((p) => p.node.id === this._primaryNodeId);
+		const primary = this._activePanner();
 		if (!primary) return;
 		e.preventDefault();
 		try {

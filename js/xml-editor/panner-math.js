@@ -67,9 +67,12 @@ export function squaresFromCenterToEdge(radius, unit) {
 // 10") — only zooms OUT further than that floor when a source genuinely
 // needs the room.
 export function radiusToFitAll(positions) {
+	// The view is a square (half-side = zoom radius), so "fits" means the
+	// largest of |x|, |z| and (when given) |y|, which has to stay within the
+	// Y slider's own range too — not the straight-line distance (Hans, 2026-10-08).
 	let maxDist = 0;
 	for (const p of positions) {
-		const d = Math.hypot(p.x, p.z);
+		const d = Math.max(Math.abs(p.x), Math.abs(p.z), Math.abs(p.y || 0));
 		if (d > maxDist) maxDist = d;
 	}
 	const withHeadroom = Math.max(maxDist * 1.15, DEFAULT_ZOOM_RADIUS);
@@ -95,12 +98,13 @@ export function canvasToWorld(px, py, zoomRadius, cx, cy, pxRadius) {
 	return { x: (px - cx) / scale, z: (py - cy) / scale };
 }
 
-// Clamps a world-space point to inside (or exactly on) the circle of
-// `zoomRadius` — per Hans (2026-10-04): "Den ska gå att flytta runt inom
-// cirkeln."
+// Clamps a world-space point to inside (or exactly on) the square of
+// half-side `zoomRadius` — per Hans (2026-10-04): "Den ska gå att flytta
+// runt inom cirkeln." The cirkel became a square 2026-10-08, so each axis is
+// clamped on its own.
 export function clampToRadius(x, z, zoomRadius) {
-	const d = Math.hypot(x, z);
-	if (d <= zoomRadius || d === 0) return { x, z };
-	const t = zoomRadius / d;
-	return { x: x * t, z: z * t };
+	return {
+		x: Math.max(-zoomRadius, Math.min(zoomRadius, x)),
+		z: Math.max(-zoomRadius, Math.min(zoomRadius, z))
+	};
 }

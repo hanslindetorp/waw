@@ -27,7 +27,36 @@ export function complementNoun(forAttrName) {
 export function buildRoutingTree(schema, root, forAttrName, excludeInternalId) {
 	const wantAttr = COMPLEMENT_ATTR[forAttrName];
 	if (!root || !wantAttr || !schema) return null;
+	// An element living inside a <Mixer> can only route to that Mixer's own
+	// channels — its direct <Chain> children, not anything inside them, and
+	// not the rest of the document — per Hans (2026-10-08).
+	if (forAttrName === "output" || forAttrName === "bus") {
+		const path = findPath(root, excludeInternalId);
+		const mixer = path && [...path].reverse().find((n) => n.tagName === "Mixer");
+		if (mixer) return buildMixerChannelTree(mixer, new Set(path.map((n) => n.id)));
+	}
 	return buildNode(root, schema, wantAttr, excludeInternalId);
+}
+
+// Ancestor chain root -> node (inclusive), or null if not found.
+function findPath(root, id) {
+	if (!id) return null;
+	if (root.id === id) return [root];
+	for (const child of root.children) {
+		const sub = findPath(child, id);
+		if (sub) return [root, ...sub];
+	}
+	return null;
+}
+
+// Never offers the edited element itself or any container it sits in
+// (e.g. its own parent <Chain>) — routing into yourself is a loop.
+function buildMixerChannelTree(mixer, excludedIds) {
+	const channels = mixer.children
+		.filter((c) => c.tagName === "Chain" && c.attributes.id)
+		.map((c) => ({ tagName: c.tagName, id: c.attributes.id, selectable: !excludedIds.has(c.id), children: [] }));
+	if (channels.length === 0) return null;
+	return { tagName: mixer.tagName, id: mixer.attributes.id || null, selectable: false, children: channels };
 }
 
 function buildNode(node, schema, wantAttr, excludeInternalId) {
