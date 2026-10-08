@@ -10,6 +10,10 @@ import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
 import { openIoPicker } from "./wa-io-picker.js";
 import { confirmDialog } from "./wa-confirm-dialog.js";
 import { showNotice } from "./wa-notice-dialog.js";
+import { lacksAudioInput } from "../xml-editor/chain-rules.js";
+import { vfs } from "../vfs/VFS.js";
+import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
+import { isPreviewableAudioFile } from "./wa-file-preview.js";
 import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
@@ -98,10 +102,19 @@ function displayLabel(node) {
 // Include is NOT excluded (per Hans, 2026-09-21, correcting an earlier
 // guess) — it pulls in another whole WAXML document as content, acting as
 // a sub-master with a real audio output of its own.
+// What a channel's mute GainNode's id ends with (chain id + this), so the
+// strip finds it by id and not by its place in the chain — see _classifyChain.
+const MUTE_ID_SUFFIX = "-mute";
+
 const MIXER_NO_SIGNAL_TAGS = new Set(["Var", "Send", "Envelope", "Snapshot", "AnalyserNode"]);
 
 function hasAudioSignal(node) {
 	return !MIXER_NO_SIGNAL_TAGS.has(node.tagName);
+}
+
+// What fills a strip's Insert section: WAM plugins and impulse responses.
+function isInsertNode(node) {
+	return node.tagName === "Wam" || node.tagName === "ConvolverNode";
 }
 
 // Fader taper (dbToFaderPosition/faderPositionToDb) lives in gain-units.js
@@ -161,6 +174,11 @@ const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full ran
 // the next filter's gain knob the moment anything renders half a pixel
 // taller than expected).
 const FILTER_ROW_HEIGHT = 104;
+// The row at the top of a strip showing its sound-generating element
+// (OscillatorNode, AudioBufferSourceNode, ...) — present on every strip
+// (and the master) as soon as any channel has one, so the Filter sections
+// still start at the same height everywhere.
+const SOURCE_ROW_HEIGHT = 28;
 // Insert/Send are sized to their *actual* content (no fixed minimum) — an
 // empty channel's Insert section is just tall enough for the "+" row, per
 // Hans — computed from these measured per-row heights rather than reserving
@@ -200,6 +218,10 @@ function sendSectionHeightFor(sendCount) {
 const PAN_ROW_HEIGHT = 40;
 const FADER_ROW_HEIGHT = FADER_TRACK_HEIGHT + 20;
 const CAMERA_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>`;
+// Source-row icons: a sine for an OscillatorNode, sound-wave bars for sample
+// based generators (AudioBufferSourceNode, AmbientAudio, ...).
+const SINE_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12c2.5-8 5.5-8 8 0s5.500 8 8 0 3-5 4-4"/></svg>`;
+const WAVE_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 10v4M7 7v10M11 4v16M15 8v8M19 6v12M22 11v2"/></svg>`;
 const SNAPSHOT_ITEM_W = 86; // a snapshot cell: as wide as the master strip's content
 const SNAPSHOT_ITEM_H = 22;
 const SNAPSHOT_GAP = 3;
@@ -408,6 +430,40 @@ template.innerHTML = `
 			background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.08));
 			box-sizing: border-box;
 			cursor: pointer;
+		}
+		/* An audio file being dragged over a strip: the zone it would land in
+		   (see _wireStripFileDrop) is outlined. */
+		.channel-strip[data-drop-zone="source"] .source-section,
+		.channel-strip[data-drop-zone="source"] .filter-section,
+		.channel-strip[data-drop-zone="insert"] .insert-section {
+			outline: 2px dashed var(--waw-accent, #4fa3ff);
+			outline-offset: -2px;
+			background: rgba(79, 163, 255, 0.12);
+		}
+		.source-section {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 4px;
+			width: 100%;
+			flex: 0 0 auto;
+			box-sizing: border-box;
+		}
+		.source-icon {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			width: 24px;
+			height: 22px;
+			padding: 0;
+			background: rgba(79, 163, 255, 0.14);
+			border: 1px solid rgba(79, 163, 255, 0.5);
+			border-radius: 4px;
+			color: var(--waw-accent, #4fa3ff);
+			cursor: pointer;
+		}
+		.source-icon:hover {
+			background: rgba(79, 163, 255, 0.28);
 		}
 		.channel-strip.selected {
 			box-shadow: inset 0 0 0 2px var(--waw-accent, #4fa3ff);
@@ -1364,6 +1420,7 @@ template.innerHTML = `
 	<div class="mixer">
 		<div class="mixer-body">
 			<div class="row-labels">
+				<div class="row-label source-label"></div>
 				<div class="row-label eq-label">Filter</div>
 				<div class="row-label-divider"></div>
 				<div class="row-label ins-label">Insert</div>
@@ -1426,6 +1483,7 @@ export class WaMixerView extends HTMLElement {
 		this._masterHost = this.shadowRoot.querySelector(".master-host");
 		this._rowLabels = this.shadowRoot.querySelector(".row-labels");
 		this._mixerBody = this.shadowRoot.querySelector(".mixer-body");
+		this._sourceLabel = this.shadowRoot.querySelector(".source-label");
 		this._eqLabel = this.shadowRoot.querySelector(".eq-label");
 		this._insLabel = this.shadowRoot.querySelector(".ins-label");
 		this._sendLabel = this.shadowRoot.querySelector(".send-label");
@@ -2141,13 +2199,17 @@ export class WaMixerView extends HTMLElement {
 		// sitting empty below Send.
 		const chainChildren = mixerNode.children.filter((c) => c.tagName === "Chain");
 		const maxFilterCount = Math.max(1, ...chainChildren.map((c) => c.children.filter((cc) => cc.tagName === "BiquadFilterNode").length));
-		const maxInsertCount = Math.max(0, ...chainChildren.map((c) => c.children.filter((cc) => cc.tagName === "Wam").length));
+		const maxInsertCount = Math.max(0, ...chainChildren.map((c) => c.children.filter(isInsertNode).length));
+		const hasSource = chainChildren.some((c) => c.children.some((cc) => lacksAudioInput(xmlStore.schema, cc.tagName)));
+		const sourceHeight = hasSource ? SOURCE_ROW_HEIGHT : 0;
 		const maxSendCount = Math.max(0, ...chainChildren.map((c) => c.children.filter((cc) => cc.tagName === "Send").length));
 		const filterSectionHeight = maxFilterCount * FILTER_ROW_HEIGHT + ADD_FILTER_ROW_HEIGHT;
 		const insertSectionHeight = insertSectionHeightFor(maxInsertCount);
 		const sendSectionHeight = sendSectionHeightFor(maxSendCount);
-		const sectionHeights = { filter: filterSectionHeight, insert: insertSectionHeight, send: sendSectionHeight };
+		const sectionHeights = { source: sourceHeight, filter: filterSectionHeight, insert: insertSectionHeight, send: sendSectionHeight };
 
+		this._sourceLabel.style.height = `${sourceHeight}px`;
+		this._sourceLabel.textContent = hasSource ? "Source" : "";
 		this._eqLabel.style.height = `${filterSectionHeight}px`;
 		this._insLabel.style.height = `${insertSectionHeight}px`;
 		this._sendLabel.style.height = `${sendSectionHeight}px`;
@@ -2344,7 +2406,7 @@ export class WaMixerView extends HTMLElement {
 		if (!mixerNow) return;
 		this._ensureMixerDefaults(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
-		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first in the signal chain, per Hans
+		this._addMuteGain(chain); // always first in the signal chain when the strip is created, per Hans
 		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf", frequency: "4000" });
 		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking", frequency: "400" });
 		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "lowshelf", frequency: "150" });
@@ -2352,12 +2414,20 @@ export class WaMixerView extends HTMLElement {
 		xmlStore.insertNewChild(chain.id, "GainNode", {});
 	}
 
+	// The channel's mute GainNode, identified from here on by its id (the
+	// chain's own id + MUTE_ID_SUFFIX) rather than by position — see
+	// _classifyChain.
+	_addMuteGain(chain) {
+		const chainId = chain.attributes.id;
+		xmlStore.insertNewChild(chain.id, "GainNode", chainId ? { id: `${chainId}${MUTE_ID_SUFFIX}` } : {});
+	}
+
 	_addChannelPanVolVU(mixerNode) {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
 		this._ensureMixerDefaults(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
-		xmlStore.insertNewChild(chain.id, "GainNode", {}); // mute — always first, per Hans (same as Full Channel Strip)
+		this._addMuteGain(chain); // same as Full Channel Strip
 		xmlStore.insertNewChild(chain.id, "StereoPannerNode", {});
 		xmlStore.insertNewChild(chain.id, "GainNode", {});
 	}
@@ -2385,6 +2455,12 @@ export class WaMixerView extends HTMLElement {
 			if (hideDividers) d.style.visibility = "hidden";
 			return d;
 		};
+		if (sectionHeights.source > 0) {
+			const sourceSpacer = document.createElement("div");
+			sourceSpacer.className = "source-section";
+			sourceSpacer.style.height = `${sectionHeights.source}px`;
+			frag.appendChild(sourceSpacer);
+		}
 		const filterSpacer = document.createElement("div");
 		filterSpacer.className = "filter-section";
 		filterSpacer.style.height = `${sectionHeights.filter}px`;
@@ -3095,6 +3171,12 @@ export class WaMixerView extends HTMLElement {
 
 		const roles = this._classifyChain(child);
 
+		let sourceSection = null;
+		if (sectionHeights.source > 0) {
+			sourceSection = this._buildSourceSection(child, sectionHeights.source);
+			strip.appendChild(sourceSection);
+		}
+
 		const filterSection = document.createElement("div");
 		filterSection.className = "filter-section";
 		filterSection.style.height = `${sectionHeights.filter}px`;
@@ -3103,7 +3185,9 @@ export class WaMixerView extends HTMLElement {
 		strip.appendChild(filterSection);
 
 		strip.appendChild(this._buildDivider());
-		strip.appendChild(this._buildInsertSection(child, roles, sectionHeights.insert));
+		const insertSection = this._buildInsertSection(child, roles, sectionHeights.insert);
+		strip.appendChild(insertSection);
+		this._wireStripFileDrop(strip, child, filterSection, insertSection);
 		strip.appendChild(this._buildDivider());
 		strip.appendChild(this._buildSendsSection(child, roles, sectionHeights.send));
 
@@ -3142,6 +3226,92 @@ export class WaMixerView extends HTMLElement {
 		return strip;
 	}
 
+	// The row above Filter showing the channel's sound-generating element(s)
+	// as a small icon (see lacksAudioInput) — a click selects the element.
+	_buildSourceSection(chain, height) {
+		const section = document.createElement("div");
+		section.className = "source-section";
+		section.style.height = `${height}px`;
+		chain.children
+			.filter((c) => lacksAudioInput(xmlStore.schema, c.tagName))
+			.forEach((generator) => {
+				const btn = document.createElement("button");
+				btn.type = "button";
+				btn.className = "source-icon";
+				btn.innerHTML = generator.tagName === "OscillatorNode" ? SINE_ICON : WAVE_ICON;
+				btn.title = `${generator.tagName} — ${displayLabel(generator)}`;
+				btn.addEventListener("click", (e) => {
+					e.stopPropagation();
+					xmlStore.selectNode(generator.id);
+				});
+				section.appendChild(btn);
+			});
+		return section;
+	}
+
+	// An audio file dropped on a channel strip: on or above the Filter
+	// section it becomes an AudioBufferSourceNode first in the strip's
+	// <Chain>; inside the Insert area it becomes a <ConvolverNode> with that
+	// file as its src (per Hans, 2026-10-09). Anywhere below, nothing happens.
+	_wireStripFileDrop(strip, chain, filterSection, insertSection) {
+		const zoneAt = (y) => {
+			if (y <= filterSection.getBoundingClientRect().bottom) return "source";
+			if (y <= insertSection.getBoundingClientRect().bottom) return "insert";
+			return null;
+		};
+		const carriesAudio = (dt) => {
+			const types = [...dt.types];
+			if (types.includes("Files")) return true;
+			if (!types.includes(VFS_FILE_DRAG_TYPE)) return false;
+			const node = vfs.getNode(vfsDragState.fileIds?.[0] ?? vfsDragState.fileId);
+			return !node || isPreviewableAudioFile(node);
+		};
+		const clear = () => delete strip.dataset.dropZone;
+		strip.addEventListener("dragover", (e) => {
+			if (!carriesAudio(e.dataTransfer)) return;
+			const zone = zoneAt(e.clientY);
+			if (!zone) {
+				clear();
+				e.dataTransfer.dropEffect = "none";
+				return;
+			}
+			e.preventDefault();
+			e.stopPropagation();
+			e.dataTransfer.dropEffect = "copy";
+			strip.dataset.dropZone = zone;
+		});
+		strip.addEventListener("dragleave", (e) => {
+			if (!strip.contains(e.relatedTarget)) clear();
+		});
+		strip.addEventListener("drop", (e) => {
+			if (!carriesAudio(e.dataTransfer)) return;
+			const zone = zoneAt(e.clientY);
+			clear();
+			if (!zone) return;
+			e.preventDefault();
+			e.stopPropagation();
+			let exportPath = null;
+			const dropped = e.dataTransfer.files?.[0];
+			if (dropped && ![...e.dataTransfer.types].includes(VFS_FILE_DRAG_TYPE)) {
+				if (!isPreviewableAudioFile({ type: "file", name: dropped.name })) return;
+				exportPath = vfs.getExportPath(vfs.uploadFile(undefined, dropped).id);
+			} else {
+				const fileNode = vfs.getNode(getDraggedFileIds(e.dataTransfer)[0]);
+				if (!isPreviewableAudioFile(fileNode)) return;
+				exportPath = vfs.getExportPath(fileNode.id);
+			}
+			const chainNow = ops.findNodeById(xmlStore.root, chain.id);
+			if (!chainNow) return;
+			// select:false — the Mixer stays as it is, the new element isn't
+			// pulled into the selection.
+			if (zone === "source") {
+				xmlStore.insertNewChild(chainNow.id, "AudioBufferSourceNode", { src: exportPath }, 0, { select: false });
+			} else {
+				xmlStore.insertNewChild(chainNow.id, "ConvolverNode", { src: exportPath }, this._insertPositionAfterEq(chainNow, this._classifyChain(chainNow)), { select: false });
+			}
+		});
+	}
+
 	_buildDivider() {
 		const div = document.createElement("div");
 		div.className = "section-divider";
@@ -3155,19 +3325,23 @@ export class WaMixerView extends HTMLElement {
 	// the volume GainNode in the XML — "pre" (before it) is the default
 	// landing spot for a new Send; toggling "post" moves it after.
 	//
-	// A "Full Channel Strip" now has TWO GainNodes: a mute node first in the
-	// chain, and the volume/fader node further down. There's no tag-level
-	// way to tell them apart, so this uses position: the volume node is
-	// whichever GainNode comes LAST; the mute node is the first child ONLY
-	// if it's a GainNode distinct from the volume one. That keeps this
-	// backward-compatible with older docs/the "Pan, Volume, VU" type, which
-	// only ever have a single GainNode (correctly classified as volume,
-	// never mute).
+	// A "Full Channel Strip" has TWO GainNodes: a mute node and the
+	// volume/fader node. The mute one is created first in the chain with an
+	// id ending in "-mute" (see MUTE_ID_SUFFIX) and is found by that id from
+	// then on, not by where it sits — an AudioBufferSourceNode dropped in
+	// front of it must not take the mute button away (per Hans, 2026-10-09).
+	// The volume node is the last GainNode that isn't the mute one. Strips
+	// without a marked node (older docs, or a duplicated channel, whose
+	// copies get fresh ids) fall back to "the first GainNode, if there's
+	// more than one"; a chain with a single GainNode (the "Pan, Volume, VU"
+	// type) has only a volume node, never a mute.
 	_classifyChain(chainNode) {
 		const children = chainNode.children;
 		const gainNodes = children.filter((c) => c.tagName === "GainNode");
-		const gainNode = gainNodes.length ? gainNodes[gainNodes.length - 1] : null;
-		const muteGainNode = children[0] && children[0].tagName === "GainNode" && children[0] !== gainNode ? children[0] : null;
+		const marked = gainNodes.find((c) => (c.attributes.id || "").endsWith(MUTE_ID_SUFFIX));
+		const muteGainNode = marked ?? (gainNodes.length > 1 ? gainNodes[0] : null);
+		const volumeCandidates = gainNodes.filter((c) => c !== muteGainNode);
+		const gainNode = volumeCandidates.length ? volumeCandidates[volumeCandidates.length - 1] : null;
 		const gainIdx = gainNode ? children.indexOf(gainNode) : -1;
 		const sends = children.filter((c) => c.tagName === "Send");
 		return {
@@ -3177,6 +3351,7 @@ export class WaMixerView extends HTMLElement {
 			gainNode,
 			muteGainNode,
 			wams: children.filter((c) => c.tagName === "Wam"),
+			inserts: children.filter(isInsertNode),
 			preSends: gainIdx === -1 ? sends : sends.filter((s) => children.indexOf(s) < gainIdx),
 			postSends: gainIdx === -1 ? [] : sends.filter((s) => children.indexOf(s) > gainIdx)
 		};
@@ -3919,7 +4094,7 @@ export class WaMixerView extends HTMLElement {
 		const section = document.createElement("div");
 		section.className = "insert-section";
 		section.style.height = `${height}px`;
-		roles.wams.forEach((wam) => section.appendChild(this._buildInsertSlot(wam, chainNode)));
+		roles.inserts.forEach((insert) => section.appendChild(this._buildInsertSlot(insert, chainNode)));
 		section.appendChild(this._buildAddInsertSlot(chainNode, roles));
 		return section;
 	}
@@ -3937,8 +4112,16 @@ export class WaMixerView extends HTMLElement {
 
 		const label = document.createElement("span");
 		label.className = "insert-slot-label";
-		label.textContent = wam.attributes.label || (wam.attributes.src ? wam.attributes.src.split("/").pop() : "WAM");
+		label.textContent = wam.attributes.label || (wam.attributes.src ? wam.attributes.src.split("/").pop() : wam.tagName === "ConvolverNode" ? "Convolver" : "WAM");
 		slot.appendChild(label);
+
+		// A <ConvolverNode> (an impulse response — a reverb, say) shares this
+		// section with the WAM inserts: no plugin thumbnail or stack window,
+		// just selectable.
+		if (wam.tagName === "ConvolverNode") {
+			slot.addEventListener("click", () => xmlStore.selectNode(wam.id));
+			return slot;
+		}
 
 		getInsertEffects()
 			.then((effects) => effects.find((e) => e.pluginSrc === wam.attributes.src))
@@ -3980,7 +4163,7 @@ export class WaMixerView extends HTMLElement {
 	// Where a new insert/pre-send lands: right after the EQ filters and any
 	// existing inserts, before StereoPannerNode/GainNode/pre-sends.
 	_insertPositionAfterEq(chainNode, roles) {
-		const lastEqOrInsert = [...roles.filters, ...roles.wams].filter(Boolean).pop();
+		const lastEqOrInsert = [...roles.filters, ...roles.inserts].filter(Boolean).pop();
 		if (!lastEqOrInsert) return 0;
 		return chainNode.children.findIndex((c) => c.id === lastEqOrInsert.id) + 1;
 	}

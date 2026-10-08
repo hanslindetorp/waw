@@ -1,5 +1,6 @@
 import * as ops from "./xml-tree-ops.js";
 import { isVariableControlled } from "./variable-references.js";
+import { findChainOrderProblems } from "./chain-rules.js";
 
 const EMPTY_XML = '<?xml version="1.0" encoding="UTF-8"?>';
 
@@ -24,6 +25,7 @@ class XmlStore extends EventTarget {
 		this.lineMap = new Map();
 		this._idCounters = new Map(); // tagName -> highest "TagName-N" used so far this project (see ops.backfillElementIds)
 		this._activeFadeTimeNoticeShown = false; // see _applyActiveFadeTimeWorkaround — once per whole app session, not per project
+		this._reportedChainProblems = new Set(); // see _warnAboutChainOrder
 	}
 
 	// Call when genuinely starting a different project (a new default
@@ -774,6 +776,22 @@ class XmlStore extends EventTarget {
 
 	_emit(structural = true, extra = {}) {
 		this.dispatchEvent(new CustomEvent("change", { detail: { structural, ...extra } }));
+		if (structural) this._warnAboutChainOrder();
+	}
+
+	// An element with no audio input has to be first in its <Chain> (see
+	// chain-rules.js). However one ends up elsewhere — a drag in the tree, a
+	// duplicate, a paste, hand-typed XML — a "notice" lists what's wrong, once:
+	// only problems not already reported are announced, so an unrelated edit
+	// to a document that still has one doesn't repeat the warning, and
+	// fixing it re-arms it. Per Hans (2026-10-09).
+	_warnAboutChainOrder() {
+		const problems = this.schema ? findChainOrderProblems(this.schema, this.root) : [];
+		const current = new Set(problems.map((p) => p.key));
+		const fresh = problems.filter((p) => !this._reportedChainProblems.has(p.key));
+		this._reportedChainProblems = current;
+		if (fresh.length === 0) return;
+		this.dispatchEvent(new CustomEvent("notice", { detail: { message: fresh.map((p) => p.message).join("\n\n") } }));
 	}
 }
 

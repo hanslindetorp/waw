@@ -84,6 +84,11 @@ const ANALYSER_DEFAULT_SMOOTHING = 0;
 // chip as before.
 const ANALYSER_DEFAULT_MIN_DB = -60;
 
+// Anything a drag should belong to rather than start moving the card — see
+// _wireCardReorder.
+const CARD_INTERACTIVE_SELECTOR =
+	"canvas, .knob, select, input, textarea, button, a, wa-panner-view, .param-chip, .param-chip-input, .mode-toggle, [contenteditable]";
+const CHAIN_CARD_DRAG_TYPE = "application/x-waw-chain-card";
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range, same feel as wa-mixer-view.js
 
 function readNum(node, attrName, fallback) {
@@ -196,18 +201,21 @@ function biquadCenterResponseInverse(type, targetDb) {
 // --- DynamicsCompressorNode graph pixel<->value mapping ---
 const COMP_DB_MIN = -60,
 	COMP_DB_MAX = 0;
+// The dB range is drawn inside a margin so the 0 dB end of the curve and its
+// handle aren't cut in half by the canvas edge.
+const COMP_PAD = 9;
 function compDbToXPixel(w, db) {
-	return ((db - COMP_DB_MIN) / (COMP_DB_MAX - COMP_DB_MIN)) * w;
+	return COMP_PAD + ((db - COMP_DB_MIN) / (COMP_DB_MAX - COMP_DB_MIN)) * (w - 2 * COMP_PAD);
 }
 function compXPixelToDb(w, px) {
-	return COMP_DB_MIN + (px / w) * (COMP_DB_MAX - COMP_DB_MIN);
+	return COMP_DB_MIN + ((px - COMP_PAD) / (w - 2 * COMP_PAD)) * (COMP_DB_MAX - COMP_DB_MIN);
 }
 function compDbToYPixel(h, db) {
 	const t = (db - COMP_DB_MIN) / (COMP_DB_MAX - COMP_DB_MIN);
-	return h - Math.max(0, Math.min(1, t)) * h;
+	return h - COMP_PAD - Math.max(0, Math.min(1, t)) * (h - 2 * COMP_PAD);
 }
 function compYPixelToDb(h, py) {
-	const t = 1 - py / h;
+	const t = (h - COMP_PAD - py) / (h - 2 * COMP_PAD);
 	return COMP_DB_MIN + t * (COMP_DB_MAX - COMP_DB_MIN);
 }
 
@@ -283,6 +291,15 @@ template.innerHTML = `
 		.node-card.selected {
 			border-color: var(--waw-accent, #4fa3ff);
 			box-shadow: 0 0 0 1px var(--waw-accent, #4fa3ff);
+		}
+		.node-card.dragging {
+			opacity: 0.45;
+		}
+		.node-card.drop-before {
+			box-shadow: 0 -3px 0 0 var(--waw-accent, #4fa3ff);
+		}
+		.node-card.drop-after {
+			box-shadow: 0 3px 0 0 var(--waw-accent, #4fa3ff);
 		}
 		.node-card-header {
 			display: flex;
@@ -679,11 +696,11 @@ export class WaChainView extends HTMLElement {
 	// when it has no Chain parent.
 	_resolveRenderList(node) {
 		if (!node) return null;
-		if (node.tagName === "Chain") return { children: node.children, highlightId: null };
+		if (node.tagName === "Chain") return { children: node.children, highlightId: null, chainId: node.id };
 		if (!NODE_BUILDERS[node.tagName]) return null;
 		const chainAncestor = this._findAncestorChain(node);
-		if (chainAncestor) return { children: chainAncestor.children, highlightId: node.id };
-		return { children: [node], highlightId: node.id };
+		if (chainAncestor) return { children: chainAncestor.children, highlightId: node.id, chainId: chainAncestor.id };
+		return { children: [node], highlightId: node.id, chainId: null };
 	}
 
 	_findAncestorChain(node) {
@@ -744,6 +761,7 @@ export class WaChainView extends HTMLElement {
 				const builder = NODE_BUILDERS[child.tagName];
 				const card = builder ? builder(this, child) : this._buildGenericCard(child);
 				if (child.id === resolved.highlightId) card.classList.add("selected");
+				if (resolved.chainId) this._wireCardReorder(card, child, resolved.chainId);
 				this._stackEl.appendChild(card);
 			});
 			this._stackEl.appendChild(this._buildArrow());
@@ -754,6 +772,69 @@ export class WaChainView extends HTMLElement {
 				this._render();
 			}
 		}
+	}
+
+	// Cards are dragged above/below each other to reorder the chain (per
+	// Hans, 2026-10-09): the whole card is the handle, except wherever the
+	// pointer lands on something interactive (a knob, graph, field, select,
+	// button, value chip), where a drag belongs to that control. `draggable`
+	// is decided on each pointerdown, before the browser decides whether a
+	// drag starts.
+	_wireCardReorder(card, child, chainId) {
+		card.addEventListener(
+			"pointerdown",
+			(e) => {
+				card.draggable = !e.target.closest(CARD_INTERACTIVE_SELECTOR);
+			},
+			true
+		);
+		card.addEventListener("dragstart", (e) => {
+			e.dataTransfer.effectAllowed = "move";
+			e.dataTransfer.setData(CHAIN_CARD_DRAG_TYPE, child.id);
+			this._dragCardId = child.id;
+			card.classList.add("dragging");
+		});
+		card.addEventListener("dragend", () => {
+			this._dragCardId = null;
+			this._clearCardDropIndicators();
+			card.classList.remove("dragging");
+			card.draggable = false;
+		});
+		const positionFor = (e) => {
+			const rect = card.getBoundingClientRect();
+			return e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+		};
+		card.addEventListener("dragover", (e) => {
+			if (!this._dragCardId || this._dragCardId === child.id) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "move";
+			this._clearCardDropIndicators();
+			card.classList.add(`drop-${positionFor(e)}`);
+		});
+		card.addEventListener("dragleave", (e) => {
+			if (!card.contains(e.relatedTarget)) card.classList.remove("drop-before", "drop-after");
+		});
+		card.addEventListener("drop", (e) => {
+			const draggedId = this._dragCardId;
+			if (!draggedId || draggedId === child.id) return;
+			e.preventDefault();
+			const position = positionFor(e);
+			this._dragCardId = null;
+			this._clearCardDropIndicators();
+			const chain = findNodeById(xmlStore.root, chainId);
+			if (!chain) return;
+			const targetIdx = chain.children.findIndex((c) => c.id === child.id);
+			const draggedIdx = chain.children.findIndex((c) => c.id === draggedId);
+			if (targetIdx === -1 || draggedIdx === -1) return;
+			let insertIdx = position === "before" ? targetIdx : targetIdx + 1;
+			if (draggedIdx < targetIdx) insertIdx -= 1;
+			if (insertIdx === draggedIdx) return;
+			xmlStore.reparentNode(draggedId, chainId, insertIdx);
+		});
+	}
+
+	_clearCardDropIndicators() {
+		this._stackEl.querySelectorAll(".drop-before, .drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after"));
 	}
 
 	_buildArrow() {
@@ -860,15 +941,22 @@ export class WaChainView extends HTMLElement {
 		return { wrap, knob, dial };
 	}
 
+	// The ring is centred on the knob itself: .knob-wrap is as wide as its
+	// widest child (a value chip is wider than the knob), so the ring is
+	// centred on the wrap's middle (left: 50%), not pinned to its left edge
+	// — and sized from the knob's real outer diameter, its 2px border
+	// included (the knob is content-box).
 	_buildKnobTicks(sizePx, count = 11) {
 		const wrap = document.createElement("div");
 		wrap.className = "knob-ticks";
-		const outerSize = sizePx + 10;
+		const knobOuter = sizePx + 4;
+		const outerSize = knobOuter + 10;
 		wrap.style.width = `${outerSize}px`;
 		wrap.style.height = `${outerSize}px`;
-		wrap.style.left = `-5px`;
+		wrap.style.left = "50%";
+		wrap.style.marginLeft = `${-outerSize / 2}px`;
 		wrap.style.top = `-5px`;
-		const radius = sizePx / 2 + 3;
+		const radius = knobOuter / 2 + 3;
 		const center = outerSize / 2;
 		for (let i = 0; i < count; i++) {
 			const angleDeg = -135 + (i / (count - 1)) * 270;
@@ -1501,8 +1589,8 @@ export class WaChainView extends HTMLElement {
 		ctx.lineWidth = 1;
 		ctx.setLineDash([3, 3]);
 		ctx.beginPath();
-		ctx.moveTo(0, h);
-		ctx.lineTo(w, 0);
+		ctx.moveTo(compDbToXPixel(w, COMP_DB_MIN), compDbToYPixel(h, COMP_DB_MIN));
+		ctx.lineTo(compDbToXPixel(w, COMP_DB_MAX), compDbToYPixel(h, COMP_DB_MAX));
 		ctx.stroke();
 		ctx.setLineDash([]);
 

@@ -321,6 +321,18 @@ export class WaPreview extends HTMLElement {
 			return;
 		}
 
+		// A <Chain> picked in the XML tree (an explicit "open" — every tree
+		// click) shows its own Chain preview even inside a <Mixer>. Picking
+		// the same Chain by clicking its channel strip in the mixer view is a
+		// plain select (no `open`), which falls through to the carve-out below
+		// and leaves the Mixer on screen — per Hans (2026-10-09).
+		if (node.tagName === "Chain" && e?.detail?.open === true) {
+			this._showState("chain");
+			this._lastNodeId = node.id;
+			this._lastResolvedUrl = null;
+			return;
+		}
+
 		// Same idea as the Section carve-out above, for a Mixer's own
 		// descendants — see isDescendantOfTag.
 		if (this._activeState === "mixer" && isDescendantOfTag(node, "Mixer")) {

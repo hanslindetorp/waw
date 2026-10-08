@@ -36,6 +36,7 @@ template.innerHTML = `
 		}
 		.message {
 			margin: 0;
+			white-space: pre-line;
 		}
 		.actions {
 			display: flex;

@@ -1,6 +1,7 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { getSchemaSrcAttributeName } from "../xml-editor/src-attribute.js";
+import { lacksAudioInput } from "../xml-editor/chain-rules.js";
 import { vfs } from "../vfs/VFS.js";
 import { VFS_FILE_DRAG_TYPE, getDraggedFileIds } from "../vfs/drag-types.js";
 
@@ -1088,6 +1089,9 @@ export class WaXmlTree extends HTMLElement {
 		// hovered node's parent's allowed children.
 		const siblingInsertionAllowedChildren = isRoot ? allowedChildren : parentAllowedChildren || [];
 		const canInsertFileNode = !schema || siblingInsertionAllowedChildren.includes(FILE_DROP_TAG);
+		// A file dropped ON a <Chain> (its own row, which has no src to set)
+		// becomes a new AudioBufferSourceNode first in that chain.
+		const canDropIntoChain = node.tagName === "Chain" && (!schema || allowedChildren.includes(FILE_DROP_TAG));
 
 		const indentPx = BASE_PADDING_PX + depth * INDENT_PX;
 		const nameCell = document.createElement("div");
@@ -1149,7 +1153,7 @@ export class WaXmlTree extends HTMLElement {
 		if (isCutMarked) cells.forEach((c) => c.classList.add("cut-marked"));
 		cells.forEach((c) => c.addEventListener("click", (e) => this._handleRowClick(e, node)));
 
-		this._wireDragEvents(cells, node, { isRoot, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, fileHint });
+		this._wireDragEvents(cells, node, { isRoot, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, canDropIntoChain, fileHint });
 
 		return { elementCell: nameCell, attrCells, contentWrap, indentPx };
 	}
@@ -1373,7 +1377,7 @@ export class WaXmlTree extends HTMLElement {
 	// Drag/drop/hover feedback applies to all of them so the whole row acts as
 	// one drop target, even though they're separate grid items with no
 	// wrapping element.
-	_wireDragEvents(cells, node, { isRoot, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, fileHint }) {
+	_wireDragEvents(cells, node, { isRoot, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, canDropIntoChain, fileHint }) {
 		const primaryCell = cells[0];
 		primaryCell.draggable = !isRoot;
 
@@ -1405,7 +1409,7 @@ export class WaXmlTree extends HTMLElement {
 			if (isOsFileDrag) {
 				// Legacy behaviour (spec avsnitt 6.2): OS files can only set src on
 				// the hovered element, never insert a new node between elements.
-				if (canAcceptFile) {
+				if (canAcceptFile || canDropIntoChain) {
 					e.dataTransfer.dropEffect = "copy";
 					cells.forEach((c) => c.classList.add("file-drop-hover"));
 					fileHint.hidden = false;
@@ -1424,7 +1428,7 @@ export class WaXmlTree extends HTMLElement {
 				const rect = primaryCell.getBoundingClientRect();
 				const y = e.clientY - rect.top;
 				const position = y < rect.height * 0.25 ? "before" : y > rect.height * 0.75 ? "after" : "inside";
-				const allowed = position === "inside" ? canAcceptFile : canInsertFileNode;
+				const allowed = position === "inside" ? canAcceptFile || canDropIntoChain : canInsertFileNode;
 
 				cells.forEach((c) => c.classList.toggle("file-drop-hover", position === "inside" && allowed));
 				fileHint.hidden = !(position === "inside" && allowed);
@@ -1474,8 +1478,8 @@ export class WaXmlTree extends HTMLElement {
 			fileHint.hidden = true;
 
 			if (isOsFileDrag || (e.dataTransfer.files.length > 0 && !this._dragState.draggedNodeId && !isVfsFileDrag)) {
-				if (canAcceptFile && e.dataTransfer.files.length > 0) {
-					this._handleOsFileDrop(node, effectiveSrcAttrName, e.dataTransfer.files[0]);
+				if ((canAcceptFile || canDropIntoChain) && e.dataTransfer.files.length > 0) {
+					this._handleOsFileDrop(node, effectiveSrcAttrName, e.dataTransfer.files[0], canAcceptFile);
 				}
 				this._clearDropIndicators();
 				return;
@@ -1488,7 +1492,7 @@ export class WaXmlTree extends HTMLElement {
 				const fileNodeId = getDraggedFileIds(e.dataTransfer)[0];
 				const position = this._dragState.dropPosition;
 				if (position) {
-					this._handleVfsFileDrop(node, fileNodeId, position, canAcceptFile, effectiveSrcAttrName, canInsertFileNode);
+					this._handleVfsFileDrop(node, fileNodeId, position, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, canDropIntoChain);
 				}
 				this._clearDropIndicators();
 				this._dragState = { draggedNodeId: null, dropTargetId: null, dropPosition: null };
@@ -1512,9 +1516,13 @@ export class WaXmlTree extends HTMLElement {
 	// A file dragged straight from the OS (not from wa-file-manager) is
 	// uploaded into the VFS first, so it shows up in the file manager too and
 	// gets a real, resolvable export path instead of just a bare filename.
-	_handleOsFileDrop(node, effectiveSrcAttrName, file) {
+	_handleOsFileDrop(node, effectiveSrcAttrName, file, canAcceptFile) {
 		const fileNode = vfs.uploadFile(undefined, file);
 		const exportPath = vfs.getExportPath(fileNode.id);
+		if (!canAcceptFile) {
+			xmlStore.insertNewChild(node.id, FILE_DROP_TAG, { src: exportPath }, 0);
+			return;
+		}
 		xmlStore.updateAttributes(node.id, { ...node.attributes, [effectiveSrcAttrName]: exportPath });
 	}
 
@@ -1526,13 +1534,18 @@ export class WaXmlTree extends HTMLElement {
 	// drop on a <Segment> box in the Section preview (wa-section-view.js),
 	// which adds a new <Option> instead — here in the tree it's always a
 	// plain src set, same as any other element, per Hans (2026-09-03).
-	_handleVfsFileDrop(targetNode, fileNodeId, position, canAcceptFile, effectiveSrcAttrName, canInsertFileNode) {
+	_handleVfsFileDrop(targetNode, fileNodeId, position, canAcceptFile, effectiveSrcAttrName, canInsertFileNode, canDropIntoChain) {
 		const fileNode = vfs.getNode(fileNodeId);
 		if (!fileNode || fileNode.type !== "file") return;
 		const exportPath = vfs.getExportPath(fileNode.id);
 
 		if (position === "inside") {
-			if (!canAcceptFile) return;
+			if (!canAcceptFile) {
+				// On a <Chain>: the new source goes first in it — an element
+				// with no audio input only works there (see chain-rules.js).
+				if (canDropIntoChain) xmlStore.insertNewChild(targetNode.id, FILE_DROP_TAG, { src: exportPath }, 0);
+				return;
+			}
 			xmlStore.updateAttributes(targetNode.id, { ...targetNode.attributes, [effectiveSrcAttrName]: exportPath });
 			return;
 		}
@@ -1551,7 +1564,9 @@ export class WaXmlTree extends HTMLElement {
 		const parent = ops.findNodeById(root, parentId);
 		if (!parent) return;
 		const targetIdx = parent.children.findIndex((c) => c.id === targetNode.id);
-		const insertIdx = position === "before" ? targetIdx : targetIdx + 1;
+		// Dropped between a <Chain>'s own elements: still goes first, same
+		// reason as above.
+		const insertIdx = parent.tagName === "Chain" && lacksAudioInput(xmlStore.schema, FILE_DROP_TAG) ? 0 : position === "before" ? targetIdx : targetIdx + 1;
 		xmlStore.insertNewChild(parentId, FILE_DROP_TAG, { src: exportPath }, insertIdx);
 	}
 
