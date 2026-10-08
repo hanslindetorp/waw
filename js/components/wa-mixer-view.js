@@ -275,8 +275,35 @@ function getBiquadTypeOptions() {
 // back to a plain midrange frequency.
 const FILTER_TYPE_DEFAULT_FREQUENCY = { highshelf: 4000, peaking: 400, lowshelf: 150 };
 
+// Every element the Mixer view creates gets a label saying what it is for
+// (shown in the XML editor and in the Chain preview's card headers), per Hans
+// (2026-10-09). A filter's follows its type — see _buildFilterTypeSelect.
+const FILTER_TYPE_LABELS = {
+	lowpass: "Low pass",
+	highpass: "High pass",
+	bandpass: "Band pass",
+	lowshelf: "Low shelf",
+	highshelf: "High shelf",
+	peaking: "Peaking",
+	notch: "Notch",
+	allpass: "All pass"
+};
+const MUTE_LABEL = "Mute";
+const VOLUME_LABEL = "Volume";
+const PAN_LABEL = "Pan";
+const SEND_LABEL = "Send";
+
+function filterLabel(type) {
+	return FILTER_TYPE_LABELS[type] ?? "Filter";
+}
+
+// "sounds/long hall.wav" -> "long hall"
+function labelFromPath(path) {
+	return String(path).split("/").pop().replace(/\.[^.]+$/, "");
+}
+
 function defaultFilterAttributes(type) {
-	return { type, gain: "0", Q: "0", frequency: String(FILTER_TYPE_DEFAULT_FREQUENCY[type] ?? 300) };
+	return { type, label: filterLabel(type), gain: "0", Q: "0", frequency: String(FILTER_TYPE_DEFAULT_FREQUENCY[type] ?? 300) };
 }
 
 const template = document.createElement("template");
@@ -464,6 +491,19 @@ template.innerHTML = `
 		}
 		.source-icon:hover {
 			background: rgba(79, 163, 255, 0.28);
+		}
+		/* Parts of a strip that can be selected on their own (a filter, a send,
+		   the pan, the volume, ...): faint outline on hover so they are
+		   findable, a solid one when selected. Anything not covered by a part
+		   still selects the whole strip. */
+		.part:hover {
+			outline: 1px solid rgba(79, 163, 255, 0.4);
+			outline-offset: -1px;
+		}
+		.part.part-selected {
+			outline: 2px solid var(--waw-accent, #4fa3ff);
+			outline-offset: -2px;
+			background-color: rgba(79, 163, 255, 0.16);
 		}
 		.channel-strip.selected {
 			box-shadow: inset 0 0 0 2px var(--waw-accent, #4fa3ff);
@@ -1885,6 +1925,11 @@ export class WaMixerView extends HTMLElement {
 	// matching MIXER_CONTEXT_TAGS carve-out).
 	_onStoreChange() {
 		if (this._isLocalEdit) return;
+		const sig = this._selectionSig();
+		if (sig !== this._lastSelectionSig) {
+			if (!this._ownSelect) this._soloSelected = false;
+			this._lastSelectionSig = sig;
+		}
 		const selected = xmlStore.getSelectedNode();
 		if (selected && selected.tagName === "Mixer") {
 			this._activeMixerId = selected.id;
@@ -1930,6 +1975,12 @@ export class WaMixerView extends HTMLElement {
 		this.shadowRoot.querySelectorAll(".channel-strip[data-node-id], .snapshot-item[data-node-id]").forEach((el) => {
 			el.classList.toggle("selected", this._isNodeSelected(el.dataset.nodeId));
 		});
+		this.shadowRoot.querySelectorAll("[data-part-id]").forEach((el) => {
+			el.classList.toggle("part-selected", this._isNodeSelected(el.dataset.partId));
+		});
+		this.shadowRoot.querySelectorAll("[data-part-solo]").forEach((el) => {
+			el.classList.toggle("part-selected", !!this._soloSelected);
+		});
 	}
 
 	// Backspace/Delete removes whatever's currently selected, as long as it's
@@ -1951,12 +2002,27 @@ export class WaMixerView extends HTMLElement {
 		if (!selectedId || !this._activeMixerId) return;
 		const mixerNode = ops.findNodeById(xmlStore.root, this._activeMixerId);
 		if (!mixerNode) return;
+		// A selected Solo takes the <Mixer>'s `solo` attribute with it — the
+		// Mixer itself stays.
+		const removeSolo = this._soloSelected && mixerNode.attributes.solo !== undefined;
+		if (this._soloSelected) {
+			e.preventDefault();
+			this._soloSelected = false;
+			if (removeSolo) {
+				const attrs = { ...mixerNode.attributes };
+				delete attrs.solo;
+				xmlStore.updateAttributes(mixerNode.id, attrs);
+			}
+		}
 		// Everything selected inside this Mixer — one strip or several — goes
 		// in one gesture, per Hans (2026-10-09). The Mixer itself never does
 		// via this key, and nodes of a multi-selection outside it are left
 		// alone (only acts when the primary selection belongs to this Mixer).
 		const inThisMixer = (n) => !!n && n.id !== mixerNode.id && this._isDescendantOf(n, mixerNode);
-		if (!inThisMixer(ops.findNodeById(xmlStore.root, selectedId))) return;
+		if (!inThisMixer(ops.findNodeById(xmlStore.root, selectedId))) {
+			this._updateSelectionHighlight();
+			return;
+		}
 		const ids = xmlStore.selectedNodeIds.size ? [...xmlStore.selectedNodeIds] : [selectedId];
 		const nodes = ids.map((id) => ops.findNodeById(xmlStore.root, id)).filter(inThisMixer);
 		// A node inside another selected node goes with it; removing both
@@ -2407,11 +2473,11 @@ export class WaMixerView extends HTMLElement {
 		this._ensureMixerDefaults(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
 		this._addMuteGain(chain); // always first in the signal chain when the strip is created, per Hans
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf", frequency: "4000" });
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking", frequency: "400" });
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "lowshelf", frequency: "150" });
-		xmlStore.insertNewChild(chain.id, "StereoPannerNode", {});
-		xmlStore.insertNewChild(chain.id, "GainNode", {});
+		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf", label: filterLabel("highshelf"), frequency: "4000" });
+		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking", label: filterLabel("peaking"), frequency: "400" });
+		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "lowshelf", label: filterLabel("lowshelf"), frequency: "150" });
+		xmlStore.insertNewChild(chain.id, "StereoPannerNode", { label: PAN_LABEL });
+		xmlStore.insertNewChild(chain.id, "GainNode", { label: VOLUME_LABEL });
 	}
 
 	// The channel's mute GainNode, identified from here on by its id (the
@@ -2419,7 +2485,7 @@ export class WaMixerView extends HTMLElement {
 	// _classifyChain.
 	_addMuteGain(chain) {
 		const chainId = chain.attributes.id;
-		xmlStore.insertNewChild(chain.id, "GainNode", chainId ? { id: `${chainId}${MUTE_ID_SUFFIX}` } : {});
+		xmlStore.insertNewChild(chain.id, "GainNode", chainId ? { id: `${chainId}${MUTE_ID_SUFFIX}`, label: MUTE_LABEL } : { label: MUTE_LABEL });
 	}
 
 	_addChannelPanVolVU(mixerNode) {
@@ -2428,8 +2494,8 @@ export class WaMixerView extends HTMLElement {
 		this._ensureMixerDefaults(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
 		this._addMuteGain(chain); // same as Full Channel Strip
-		xmlStore.insertNewChild(chain.id, "StereoPannerNode", {});
-		xmlStore.insertNewChild(chain.id, "GainNode", {});
+		xmlStore.insertNewChild(chain.id, "StereoPannerNode", { label: PAN_LABEL });
+		xmlStore.insertNewChild(chain.id, "GainNode", { label: VOLUME_LABEL });
 	}
 
 	_addChannelVU(mixerNode) {
@@ -2495,7 +2561,9 @@ export class WaMixerView extends HTMLElement {
 	_buildSoloButton(child, index, totalCount) {
 		const btn = document.createElement("button");
 		btn.type = "button";
-		btn.className = "solo-btn";
+		btn.className = "solo-btn part";
+		btn.dataset.partSolo = "";
+		if (this._soloSelected) btn.classList.add("part-selected");
 		btn.title = `Solo: ${displayLabel(child)}`;
 		btn.dataset.channelIndex = String(index);
 		const lamp = document.createElement("span");
@@ -2573,6 +2641,7 @@ export class WaMixerView extends HTMLElement {
 		const btn = document.createElement("button");
 		btn.type = "button";
 		btn.className = "on-btn";
+		this._markPart(btn, muteGainNode);
 		const lamp = document.createElement("span");
 		lamp.className = "lamp";
 		btn.appendChild(lamp);
@@ -2602,6 +2671,84 @@ export class WaMixerView extends HTMLElement {
 	// always this strip's own business, control or not.
 	_wireStripSelect(strip, child) {
 		strip.addEventListener("click", (e) => this._onStripClick(e, child.id));
+		if (child.tagName !== "Chain") return;
+		// Alt-click on anything belonging to a part selects the part instead of
+		// operating it — that is how a button, knob or fader (which act on a
+		// plain click/drag) are selected. Capture phase, so it runs before the
+		// control's own listeners; the pointerdown is swallowed too so a knob
+		// or fader doesn't start dragging.
+		strip.addEventListener(
+			"pointerdown",
+			(e) => {
+				if (e.altKey && e.target.closest?.("[data-part-id], [data-part-solo]")) e.stopPropagation();
+			},
+			true
+		);
+		strip.addEventListener(
+			"click",
+			(e) => {
+				if (!e.altKey) return;
+				const part = e.target.closest?.("[data-part-id], [data-part-solo]");
+				if (!part) return;
+				e.preventDefault();
+				e.stopPropagation();
+				this._selectPart(part, e);
+			},
+			true
+		);
+	}
+
+	// Marks a strip element as the selectable face of an XML node (see
+	// _selectPart); shows as selected when the node is.
+	_markPart(el, node) {
+		if (!node) return el;
+		el.dataset.partId = node.id;
+		el.classList.add("part");
+		if (this._isNodeSelected(node.id)) el.classList.add("part-selected");
+		return el;
+	}
+
+	// Runs a selection change made from inside this view. `clearSolo` drops
+	// the Solo pseudo-selection with it; anything else changing the selection
+	// from outside clears it too (see _onStoreChange).
+	_withOwnSelect(fn, clearSolo = true) {
+		this._ownSelect = true;
+		if (clearSolo) this._soloSelected = false;
+		try {
+			fn();
+		} finally {
+			this._ownSelect = false;
+		}
+		this._lastSelectionSig = this._selectionSig();
+		this._updateSelectionHighlight();
+	}
+
+	_selectionSig() {
+		return `${xmlStore.selectedNodeId}|${[...xmlStore.selectedNodeIds].sort().join(",")}`;
+	}
+
+	// Plain: select just this part. Cmd/Ctrl: toggle it in or out of the
+	// selection. "Solo" isn't an element but the <Mixer>'s own `solo`
+	// attribute (one position for the whole Mixer), so it is a pseudo-part held
+	// in this view: selecting it also selects the <Mixer> in the XML editor,
+	// and Backspace removes the attribute.
+	_selectPart(el, e) {
+		const toggle = e.metaKey || e.ctrlKey;
+		if (el.dataset.partSolo !== undefined) {
+			if (toggle) {
+				this._soloSelected = !this._soloSelected;
+				this._updateSelectionHighlight();
+			} else {
+				this._withOwnSelect(() => xmlStore.selectNode(this._activeMixerId), true);
+				this._soloSelected = true;
+				this._updateSelectionHighlight();
+			}
+			return;
+		}
+		const id = el.dataset.partId;
+		if (toggle) this._withOwnSelect(() => xmlStore.toggleNodeSelection(id), false);
+		else this._withOwnSelect(() => xmlStore.selectNode(id));
+		this._selectionAnchorId = null;
 	}
 
 	// Cmd/Ctrl-click toggles a strip in or out of the selection, Shift-click
@@ -2611,9 +2758,16 @@ export class WaMixerView extends HTMLElement {
 	// the same set. Per Hans (2026-10-09).
 	_onStripClick(e, id) {
 		e.stopPropagation();
-		if (e.target.closest("button, select, input, .knob, .fader-handle, .insert-slot")) return;
+		const control = e.target.closest("button, select, input, .knob, .fader-handle, .insert-slot.empty");
+		if (control && !control.hasAttribute("data-part-surface")) return;
+		// A click on a part's own surface selects that part, not the strip.
+		const part = e.target.closest("[data-part-id]");
+		if (part) {
+			this._selectPart(part, e);
+			return;
+		}
 		if (e.metaKey || e.ctrlKey) {
-			xmlStore.toggleNodeSelection(id);
+			this._withOwnSelect(() => xmlStore.toggleNodeSelection(id), false);
 			this._selectionAnchorId = id;
 			return;
 		}
@@ -2622,12 +2776,12 @@ export class WaMixerView extends HTMLElement {
 			const a = ids.indexOf(this._selectionAnchorId);
 			const b = ids.indexOf(id);
 			if (a >= 0 && b >= 0) {
-				xmlStore.selectRange(ids.slice(Math.min(a, b), Math.max(a, b) + 1));
+				this._withOwnSelect(() => xmlStore.selectRange(ids.slice(Math.min(a, b), Math.max(a, b) + 1)));
 				return;
 			}
 		}
 		this._selectionAnchorId = id;
-		xmlStore.selectNode(id);
+		this._withOwnSelect(() => xmlStore.selectNode(id));
 	}
 
 	// The master strip, pinned to the right edge (see .master-host): the
@@ -2923,40 +3077,46 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	// A <Snapshot> holding one <Command type="set" selector="#id"
-	// variable="attr" value="..."> per attribute of every child of the
-	// selected <Chain>s — or of every channel, after asking, when none is
-	// selected. Snapshots always sit first in the <Mixer>, in creation
-	// order, ahead of the channels. Per Hans (2026-10-09). id/class/label
-	// are skipped: they name the element rather than describe a state a
-	// "set" could restore.
+	// variable="attr" value="..."> per attribute captured from the current
+	// selection: every child of a selected <Chain>, and just the selected
+	// element itself where only a part of a strip is selected (a filter, the
+	// volume, a send, ...) — plus the <Mixer>'s `solo` when Solo is selected.
+	// With nothing of that kind selected it asks, then captures every channel.
+	// Snapshots always sit first in the <Mixer>, in creation order, ahead of
+	// the channels. Per Hans (2026-10-09). id/class/label are skipped: they
+	// name the element rather than describe a state a "set" could restore.
 	async _createSnapshot(mixerNode) {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
 		const chains = mixerNow.children.filter((c) => c.tagName === "Chain");
 		if (!chains.length) return;
-		let targets = chains.filter((c) => this._isNodeSelected(c.id));
-		if (!targets.length) {
-			const ok = await confirmDialog("No mixer channel is selected - Do you want to create a snapshot for all channels?");
+		const captureIds = this._selectedCaptureIds(mixerNow, chains);
+		let captureSolo = !!this._soloSelected;
+		if (!captureIds.size && !captureSolo) {
+			const ok = await confirmDialog("No mixer channel or part of one is selected - Do you want to create a snapshot for all channels?");
 			if (!ok) return;
-			targets = chains;
+			chains.forEach((chain) => chain.children.forEach((c) => captureIds.add(c.id)));
 		}
 		// The document may have changed while the dialog was open.
 		const mixerFresh = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerFresh) return;
-		const targetIds = new Set(targets.map((c) => c.id));
 		const commands = [];
-		for (const chain of mixerFresh.children.filter((c) => c.tagName === "Chain" && targetIds.has(c.id))) {
-			for (const child of chain.children) {
-				const childId = child.attributes.id;
-				if (!childId) continue;
-				for (const [name, value] of Object.entries(child.attributes)) {
-					if (name === "id" || name === "class" || name === "label") continue;
-					commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${childId}`, variable: name, value: String(value) } });
-				}
+		const addCommands = (node) => {
+			const nodeId = node.attributes.id;
+			if (!nodeId) return;
+			for (const [name, value] of Object.entries(node.attributes)) {
+				if (name === "id" || name === "class" || name === "label") continue;
+				commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${nodeId}`, variable: name, value: String(value) } });
 			}
+		};
+		for (const chain of mixerFresh.children.filter((c) => c.tagName === "Chain")) {
+			chain.children.filter((c) => captureIds.has(c.id)).forEach(addCommands);
+		}
+		if (captureSolo && mixerFresh.attributes.solo !== undefined && mixerFresh.attributes.id) {
+			commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${mixerFresh.attributes.id}`, variable: "solo", value: String(mixerFresh.attributes.solo) } });
 		}
 		if (!commands.length) {
-			showNotice("There are no attributes to capture in the selected channels.");
+			showNotice("There are no attributes to capture in the selection.");
 			return;
 		}
 		let lastSnapshotIndex = -1;
@@ -2964,6 +3124,23 @@ export class WaMixerView extends HTMLElement {
 			if (c.tagName === "Snapshot") lastSnapshotIndex = i;
 		});
 		xmlStore.insertNewElementWithChildren(mixerFresh.id, "Snapshot", {}, commands, lastSnapshotIndex + 1);
+	}
+
+	// The ids of the chain elements the selection covers: all children of a
+	// selected <Chain>, or the selected element itself when it sits directly
+	// in a <Chain> of this Mixer.
+	_selectedCaptureIds(mixerNode, chains) {
+		const ids = new Set();
+		const selected = new Set(xmlStore.selectedNodeIds);
+		if (xmlStore.selectedNodeId) selected.add(xmlStore.selectedNodeId);
+		for (const chain of chains) {
+			if (selected.has(chain.id)) {
+				chain.children.forEach((c) => ids.add(c.id));
+				continue;
+			}
+			chain.children.filter((c) => selected.has(c.id)).forEach((c) => ids.add(c.id));
+		}
+		return ids;
 	}
 
 	// Text field + connect button writing the <Mixer>'s own `output` — the
@@ -3200,6 +3377,7 @@ export class WaMixerView extends HTMLElement {
 		const panRow = document.createElement("div");
 		panRow.className = "pan-row";
 		panRow.style.height = `${PAN_ROW_HEIGHT}px`;
+		this._markPart(panRow, roles.stereoPanner || roles.pannerNode);
 		// A "3D" toggle only ever shows up alongside one of these two — per
 		// Hans (2026-10-04): "När en kanal med <StereoPannerNode> skapas ska
 		// det visas en liten knapp." A channel with neither (e.g. a VU-only
@@ -3217,6 +3395,7 @@ export class WaMixerView extends HTMLElement {
 		faderRow.className = "fader-row-wrap";
 		faderRow.style.height = `${FADER_ROW_HEIGHT}px`;
 		faderRow.appendChild(this._buildFader(roles.gainNode, child.id));
+		this._markPart(faderRow, roles.gainNode);
 		bottomGroup.appendChild(faderRow);
 
 		bottomGroup.appendChild(this._buildChannelLabel(child));
@@ -3240,10 +3419,9 @@ export class WaMixerView extends HTMLElement {
 				btn.className = "source-icon";
 				btn.innerHTML = generator.tagName === "OscillatorNode" ? SINE_ICON : WAVE_ICON;
 				btn.title = `${generator.tagName} — ${displayLabel(generator)}`;
-				btn.addEventListener("click", (e) => {
-					e.stopPropagation();
-					xmlStore.selectNode(generator.id);
-				});
+				// A button, but its click is the strip's part selection.
+				btn.dataset.partSurface = "";
+				this._markPart(btn, generator);
 				section.appendChild(btn);
 			});
 		return section;
@@ -3305,9 +3483,9 @@ export class WaMixerView extends HTMLElement {
 			// select:false — the Mixer stays as it is, the new element isn't
 			// pulled into the selection.
 			if (zone === "source") {
-				xmlStore.insertNewChild(chainNow.id, "AudioBufferSourceNode", { src: exportPath }, 0, { select: false });
+				xmlStore.insertNewChild(chainNow.id, "AudioBufferSourceNode", { src: exportPath, label: labelFromPath(exportPath) }, 0, { select: false });
 			} else {
-				xmlStore.insertNewChild(chainNow.id, "ConvolverNode", { src: exportPath }, this._insertPositionAfterEq(chainNow, this._classifyChain(chainNow)), { select: false });
+				xmlStore.insertNewChild(chainNow.id, "ConvolverNode", { src: exportPath, label: labelFromPath(exportPath) }, this._insertPositionAfterEq(chainNow, this._classifyChain(chainNow)), { select: false });
 			}
 		});
 	}
@@ -3548,6 +3726,7 @@ export class WaMixerView extends HTMLElement {
 		const row = document.createElement("div");
 		row.className = "filter-row";
 		row.style.height = `${FILTER_ROW_HEIGHT}px`;
+		this._markPart(row, node);
 
 		const top = document.createElement("div");
 		top.className = "filter-row-top";
@@ -3658,7 +3837,11 @@ export class WaMixerView extends HTMLElement {
 		select.addEventListener("change", () => {
 			const nodeNow = ops.findNodeById(xmlStore.root, node.id);
 			if (!nodeNow) return;
-			xmlStore.updateAttributes(node.id, { ...nodeNow.attributes, type: select.value });
+			const attrs = { ...nodeNow.attributes, type: select.value };
+			// A label still saying what the old type was follows the new one;
+			// one the user wrote themselves stays.
+			if (attrs.label === filterLabel(nodeNow.attributes.type)) attrs.label = filterLabel(select.value);
+			xmlStore.updateAttributes(node.id, attrs);
 		});
 		select.addEventListener("pointerdown", (e) => e.stopPropagation());
 		return select;
@@ -4108,6 +4291,7 @@ export class WaMixerView extends HTMLElement {
 	_buildInsertSlot(wam, chainNode) {
 		const slot = document.createElement("div");
 		slot.className = "insert-slot filled";
+		this._markPart(slot, wam);
 		slot.title = wam.attributes.label || wam.attributes.src || "(no plugin selected yet)";
 
 		const label = document.createElement("span");
@@ -4116,12 +4300,9 @@ export class WaMixerView extends HTMLElement {
 		slot.appendChild(label);
 
 		// A <ConvolverNode> (an impulse response — a reverb, say) shares this
-		// section with the WAM inserts: no plugin thumbnail or stack window,
-		// just selectable.
-		if (wam.tagName === "ConvolverNode") {
-			slot.addEventListener("click", () => xmlStore.selectNode(wam.id));
-			return slot;
-		}
+		// section with the WAM inserts: no plugin thumbnail or stack window.
+		// Selecting a slot is the strip's part selection (_onStripClick).
+		if (wam.tagName === "ConvolverNode") return slot;
 
 		getInsertEffects()
 			.then((effects) => effects.find((e) => e.pluginSrc === wam.attributes.src))
@@ -4136,7 +4317,6 @@ export class WaMixerView extends HTMLElement {
 			})
 			.catch(() => {}); // catalog unavailable (offline, etc.) — plain text label is still fine
 
-		slot.addEventListener("click", () => xmlStore.selectNode(wam.id));
 		slot.addEventListener("dblclick", (e) => {
 			e.stopPropagation();
 			openWamStack(chainNode.id);
@@ -4183,6 +4363,7 @@ export class WaMixerView extends HTMLElement {
 	_buildSendRow(send, isPost, chainNode) {
 		const row = document.createElement("div");
 		row.className = "send-row";
+		this._markPart(row, send);
 
 		const { wrap: knobWrap, knob, dial } = this._buildKnobSkeleton("");
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, EQ_MIN_DB, EQ_MAX_DB);
@@ -4298,7 +4479,7 @@ export class WaMixerView extends HTMLElement {
 			const chainNow = ops.findNodeById(xmlStore.root, chainNode.id);
 			if (!chainNow) return;
 			const rolesNow = this._classifyChain(chainNow);
-			xmlStore.insertNewChild(chainNow.id, "Send", {}, this._insertPositionAfterEq(chainNow, rolesNow));
+			xmlStore.insertNewChild(chainNow.id, "Send", { label: SEND_LABEL }, this._insertPositionAfterEq(chainNow, rolesNow));
 		});
 		return slot;
 	}

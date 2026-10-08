@@ -7,8 +7,11 @@ import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
 	isDbNativeGain,
-	gainDbRangeForTag
+	gainDbRangeForTag,
+	dbToFaderPosition,
+	faderPositionToDb
 } from "../waxml-integration/gain-units.js";
+import { isEditableContext } from "../project/edit-history.js";
 import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
@@ -89,6 +92,8 @@ const ANALYSER_DEFAULT_MIN_DB = -60;
 const CARD_INTERACTIVE_SELECTOR =
 	"canvas, .knob, select, input, textarea, button, a, wa-panner-view, .param-chip, .param-chip-input, .mode-toggle, [contenteditable]";
 const CHAIN_CARD_DRAG_TYPE = "application/x-waw-chain-card";
+const GAIN_FADER_TRACK_HEIGHT = 130;
+const GAIN_FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range, same feel as wa-mixer-view.js
 
 function readNum(node, attrName, fallback) {
@@ -343,6 +348,12 @@ template.innerHTML = `
 			display: block;
 			touch-action: none;
 		}
+		/* The transfer curve is square (input dB vs output dB on the same
+		   scale), so its handles stay round. */
+		.compressor-card .node-graph {
+			height: auto;
+			aspect-ratio: 1 / 1;
+		}
 		.field-row-group {
 			display: flex;
 			flex-direction: column;
@@ -435,6 +446,76 @@ template.innerHTML = `
 		   dragging it would just fight waxml.js's own Watcher, so it's
 		   locked instead (same reasoning/visual language as
 		   wa-mixer-view.js's own .remote-controlled). */
+		/* Same red as the pan knob in the Mixer view. */
+		.knob.pan-knob {
+			background: radial-gradient(circle at 35% 30%, #d15a5a, #4a0f0f 72%);
+			border-color: #300a0a;
+			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.2), 0 0 0 1px #9c2c2c;
+		}
+		/* Vertical volume fader — the same look as the Mixer view's (a GainNode
+		   is its channel fader there). */
+		.fader-wrap {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			padding: 0.4rem 0 0.2rem;
+		}
+		.fader-track {
+			position: relative;
+			width: 10px;
+			background: #1c1f24;
+			border: 1px solid #0b0c0d;
+			border-radius: 3px;
+			box-shadow: inset 0 0 3px rgba(0, 0, 0, 0.8);
+			margin: 0 0.8rem;
+		}
+		.fader-tick {
+			position: absolute;
+			left: -3px;
+			width: 16px;
+			height: 1px;
+			background: #5a636d;
+		}
+		.fader-tick.zero {
+			background: #c9cfd4;
+		}
+		.fader-tick span {
+			position: absolute;
+			left: 18px;
+			top: -5px;
+			font-size: 0.55rem;
+			color: #aab2ba;
+			white-space: nowrap;
+		}
+		.fader-handle {
+			position: absolute;
+			left: 50%;
+			bottom: 0;
+			width: 32px;
+			height: 16px;
+			margin-left: -16px;
+			margin-bottom: -8px;
+			background: linear-gradient(180deg, #e3e7ea, #9aa2a9 45%, #6b7278 50%, #9aa2a9 55%, #e3e7ea);
+			border: 1px solid #26292d;
+			border-radius: 3px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+			cursor: ns-resize;
+			touch-action: none;
+		}
+		.fader-handle::after {
+			content: "";
+			position: absolute;
+			left: 0;
+			right: 0;
+			top: 50%;
+			height: 2px;
+			margin-top: -1px;
+			background: #c0392b;
+		}
+		.fader-handle.remote-controlled {
+			cursor: default;
+			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.6);
+		}
 		.knob.remote-controlled {
 			cursor: default;
 			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
@@ -569,6 +650,8 @@ export class WaChainView extends HTMLElement {
 		this._stackEl = this.shadowRoot.querySelector(".chain-stack");
 		this._isLocalEdit = false;
 		this._onStoreChange = this._onStoreChange.bind(this);
+		this._onKeyDown = this._onKeyDown.bind(this);
+		this._renderedChildIds = new Set();
 		// AnalyserNode cards: which display mode (waveform/fft) each node id
 		// is currently showing — an interface-only choice, never written to
 		// the XML document, persisted instead via getState()/applyState()
@@ -587,11 +670,13 @@ export class WaChainView extends HTMLElement {
 
 	connectedCallback() {
 		xmlStore.addEventListener("change", this._onStoreChange);
+		document.addEventListener("keydown", this._onKeyDown);
 		this._render();
 	}
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("change", this._onStoreChange);
+		document.removeEventListener("keydown", this._onKeyDown);
 		this._stopLiveLoop();
 	}
 
@@ -744,6 +829,7 @@ export class WaChainView extends HTMLElement {
 			// Re-populated as cards are built below.
 			this._activeAnalyserTicks = new Set();
 			this._activeRemoteControlTicks = new Set();
+			this._renderedChildIds = new Set();
 
 			if (!resolved) return;
 
@@ -756,11 +842,13 @@ export class WaChainView extends HTMLElement {
 			}
 
 			this._stackEl.appendChild(this._buildArrow());
+			this._renderedChildIds = new Set(resolved.children.map((c) => c.id));
 			resolved.children.forEach((child, i) => {
 				if (i > 0) this._stackEl.appendChild(this._buildArrow());
 				const builder = NODE_BUILDERS[child.tagName];
 				const card = builder ? builder(this, child) : this._buildGenericCard(child);
-				if (child.id === resolved.highlightId) card.classList.add("selected");
+				if (child.id === resolved.highlightId || xmlStore.selectedNodeIds.has(child.id)) card.classList.add("selected");
+				this._wireCardSelect(card, child);
 				if (resolved.chainId) this._wireCardReorder(card, child, resolved.chainId);
 				this._stackEl.appendChild(card);
 			});
@@ -837,6 +925,26 @@ export class WaChainView extends HTMLElement {
 		this._stackEl.querySelectorAll(".drop-before, .drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after"));
 	}
 
+	// A click anywhere on a card selects its element (Cmd/Ctrl-click toggles it
+	// in or out of a multi-selection), except on the card's own controls.
+	// Backspace/Delete then removes the selected cards — see _onKeyDown.
+	_wireCardSelect(card, child) {
+		card.addEventListener("click", (e) => {
+			if (e.target.closest(CARD_INTERACTIVE_SELECTOR)) return;
+			if (e.metaKey || e.ctrlKey) xmlStore.toggleNodeSelection(child.id);
+			else xmlStore.selectNode(child.id);
+		});
+	}
+
+	_onKeyDown(e) {
+		if (e.defaultPrevented || (e.key !== "Backspace" && e.key !== "Delete")) return;
+		if (!this.getClientRects().length || isEditableContext()) return;
+		const ids = new Set([...xmlStore.selectedNodeIds, xmlStore.selectedNodeId].filter((id) => id && this._renderedChildIds?.has(id)));
+		if (!ids.size) return;
+		e.preventDefault();
+		ids.forEach((id) => xmlStore.removeNode(id));
+	}
+
 	_buildArrow() {
 		const el = document.createElement("div");
 		el.className = "connector-arrow-wrap";
@@ -850,7 +958,6 @@ export class WaChainView extends HTMLElement {
 	_buildCardHeader(node) {
 		const header = document.createElement("div");
 		header.className = "node-card-header";
-		header.addEventListener("click", () => xmlStore.selectNode(node.id));
 
 		const title = document.createElement("span");
 		title.className = "node-card-title";
@@ -1150,22 +1257,45 @@ export class WaChainView extends HTMLElement {
 		ctx.stroke();
 	}
 
-	// --- GainNode: a single gray volume knob (same look as Mixer's filter knobs) ---
+	// --- GainNode: a vertical volume fader, the same as the Mixer's channel fader ---
 
 	_buildGainCard(node) {
 		const card = document.createElement("div");
 		card.className = "node-card gain-card";
 		card.appendChild(this._buildCardHeader(node));
 
-		const { wrap, knob, dial } = this._buildKnobSkeleton("gain", 40);
-		const range = gainDbRangeForTag(node.tagName);
-		const applyVisual = (db) => this._applyKnobRotation(dial, db, range.min, range.max);
+		const wrap = document.createElement("div");
+		wrap.className = "fader-wrap";
+		const track = document.createElement("div");
+		track.className = "fader-track";
+		track.style.height = `${GAIN_FADER_TRACK_HEIGHT}px`;
+		GAIN_FADER_TICKS_DB.forEach((db) => {
+			const tick = document.createElement("div");
+			tick.className = db === 0 ? "fader-tick zero" : "fader-tick";
+			tick.style.bottom = `${dbToFaderPosition(db) * 100}%`;
+			const tickLabel = document.createElement("span");
+			tickLabel.textContent = db > 0 ? `+${db}` : String(db);
+			tick.appendChild(tickLabel);
+			track.appendChild(tick);
+		});
+		const handle = document.createElement("div");
+		handle.className = "fader-handle";
+		handle.title = "Volume";
+		track.appendChild(handle);
+		wrap.appendChild(track);
 
 		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName: "gain" });
 		chip.classList.add("knob-value-label");
+		wrap.appendChild(chip);
+		card.appendChild(wrap);
+
+		const applyVisual = (db) => {
+			handle.style.bottom = `${dbToFaderPosition(db) * 100}%`;
+		};
+		const dbText = (db) => (Number.isFinite(db) ? `${formatValue(db, 100)} dB` : "-∞ dB");
 
 		if (isParamVarControlled(node, "gain")) {
-			knob.classList.add("remote-controlled");
+			handle.classList.add("remote-controlled");
 			chip.classList.add("var-controlled");
 			const isLinear = !isDbNativeGain(node.tagName);
 			const applyLive = () => {
@@ -1175,34 +1305,44 @@ export class WaChainView extends HTMLElement {
 			};
 			applyLive();
 			renderChip(node.attributes.gain);
-			wrap.appendChild(chip);
-			card.appendChild(this._singleKnobRow(wrap));
 			this._watchRemoteControlled(applyLive);
 			return card;
 		}
 
 		const startDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
 		applyVisual(startDb);
-		renderChip(`${formatValue(startDb, 100)} dB`);
+		renderChip(dbText(startDb));
 
-		this._wireVerticalDrag(
-			knob,
-			startDb,
-			range.min,
-			range.max,
-			(db) => {
-				applyVisual(db);
-				renderChip(`${formatValue(db, 100)} dB`);
-				if (node.attributes.id) applyLiveProperty(node.attributes.id, "gain", formatGainAttribute(node.tagName, db));
-				const nodeNow = findNodeById(xmlStore.root, node.id);
-				if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, gain: formatGainAttribute(node.tagName, db) });
-			},
-			null,
-			0
-		);
-
-		wrap.appendChild(chip);
-		card.appendChild(this._singleKnobRow(wrap));
+		const commitDb = (db) => {
+			applyVisual(db);
+			renderChip(dbText(db));
+			if (node.attributes.id) applyLiveProperty(node.attributes.id, "gain", formatGainAttribute(node.tagName, db));
+			const nodeNow = findNodeById(xmlStore.root, node.id);
+			if (nodeNow) this._commitAttributes(node.id, { ...nodeNow.attributes, gain: formatGainAttribute(node.tagName, db) });
+		};
+		handle.addEventListener("dblclick", (e) => {
+			e.stopPropagation();
+			commitDb(0);
+		});
+		handle.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const trackRect = track.getBoundingClientRect();
+			try {
+				handle.setPointerCapture(e.pointerId);
+			} catch {}
+			const onMove = (moveEvt) => {
+				const t = Math.max(0, Math.min(1, 1 - (moveEvt.clientY - trackRect.top) / trackRect.height));
+				commitDb(faderPositionToDb(t));
+			};
+			const onUp = () => {
+				handle.removeEventListener("pointermove", onMove);
+				handle.removeEventListener("pointerup", onUp);
+			};
+			handle.addEventListener("pointermove", onMove);
+			handle.addEventListener("pointerup", onUp);
+		});
 		return card;
 	}
 
@@ -1461,8 +1601,8 @@ export class WaChainView extends HTMLElement {
 
 		const canvas = document.createElement("canvas");
 		canvas.className = "node-graph";
-		canvas.width = 200;
-		canvas.height = 140;
+		canvas.width = 220;
+		canvas.height = 220;
 		card.appendChild(canvas);
 
 		const liveOrDefault = (attrName, fallback) => {
@@ -1767,7 +1907,9 @@ export class WaChainView extends HTMLElement {
 		const card = document.createElement("div");
 		card.className = "node-card panner-card";
 		card.appendChild(this._buildCardHeader(node));
-		card.appendChild(this._singleKnobRow(this._buildSimpleKnob(node, "pan", -1, 1, "pan", (v) => v.toFixed(2), 0)));
+		const panWrap = this._buildSimpleKnob(node, "pan", -1, 1, "pan", (v) => v.toFixed(2), 0);
+		panWrap.querySelector(".knob")?.classList.add("pan-knob");
+		card.appendChild(this._singleKnobRow(panWrap));
 		return card;
 	}
 
