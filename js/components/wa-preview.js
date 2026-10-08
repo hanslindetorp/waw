@@ -2,7 +2,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { findSrcAttribute, resolvePlayableUrl } from "../xml-editor/src-attribute.js";
 import { decodeAudioBuffer, drawWaveform } from "../xml-editor/waveform.js";
-import { WaxmlBridge } from "../waxml-integration/waxml-bridge.js";
+import { playerStore } from "../waxml-integration/player-store.js";
 import { vfs } from "../vfs/VFS.js";
 import { selection } from "../state/selection.js";
 import "./wa-section-view.js";
@@ -20,8 +20,6 @@ import { isPreviewableAudioFile } from "./wa-file-preview.js";
 // mixer view; other audio-bearing elements get a waveform + WAXML play/stop.
 // More element-specific views (WAM modules, ...) land in later steps per
 // docs/WAXML-Workstation-spec.md avsnitt 5.4/9.
-
-const bridge = new WaxmlBridge();
 
 // Composition/section-context tags aren't valid as a standalone
 // <audio><Tag .../></audio> wrapper (WAXML's Parser rejects them outside
@@ -171,8 +169,8 @@ template.innerHTML = `
 	<div class="state padded" data-state="audio">
 		<canvas class="waveform" width="600" height="100"></canvas>
 		<div class="waxml-controls">
-			<button class="btn-play" type="button">▶ Play via WAXML</button>
-			<button class="btn-stop" type="button">■ Stop</button>
+			<button class="btn-play" type="button" title="Play" aria-label="Play">▶</button>
+			<button class="btn-stop" type="button" title="Stop" aria-label="Stop">■</button>
 		</div>
 		<p class="hint status"></p>
 	</div>
@@ -204,8 +202,17 @@ export class WaPreview extends HTMLElement {
 	}
 
 	connectedCallback() {
-		this._playBtn.addEventListener("click", () => bridge.play());
-		this._stopBtn.addEventListener("click", () => bridge.stop());
+		// Trigs/stops the selected element by its own id in the already-loaded
+		// document (the global player keeps the whole graph loaded), rather
+		// than swapping in a one-element preview document of its own — that
+		// replaced what the player had loaded, so a trig on the preview's
+		// class matched nothing. Per Hans (2026-10-09).
+		this._playBtn.addEventListener("click", () => {
+			if (this._previewSelector) playerStore.trigShortcut(this._previewSelector);
+		});
+		this._stopBtn.addEventListener("click", () => {
+			if (this._previewSelector) playerStore.stopShortcut(this._previewSelector);
+		});
 		xmlStore.addEventListener("change", (e) => this._onStoreChange(e));
 		selection.addEventListener("change", (e) => this._onFileSelectionChange(e.detail.id));
 		this._onStoreChange();
@@ -370,24 +377,23 @@ export class WaPreview extends HTMLElement {
 	}
 
 	async _loadAudio(node, srcAttr, resolvedUrl, token) {
-		const playableStandalone = !COMPOSITION_CONTEXT_TAGS.has(node.tagName);
+		const selector = node.attributes.id ? `#${node.attributes.id}` : null;
+		const playableStandalone = !COMPOSITION_CONTEXT_TAGS.has(node.tagName) && !!selector;
+		this._previewSelector = playableStandalone ? selector : null;
 		this._playBtn.hidden = !playableStandalone;
 		this._stopBtn.hidden = !playableStandalone;
 
-		this._status.textContent = playableStandalone
-			? "Loading waveform…"
-			: `Select the parent <Section> to hear this in context.`;
-
-		if (playableStandalone) {
-			await bridge.loadNode(node, srcAttr.attrName, resolvedUrl);
-			if (token !== this._requestToken) return; // selection changed while awaiting
-		}
+		this._status.textContent = COMPOSITION_CONTEXT_TAGS.has(node.tagName)
+			? `Select the parent <Section> to hear this in context.`
+			: "Loading waveform…";
 
 		try {
-			const audioBuffer = await decodeAudioBuffer(resolvedUrl, bridge.audioContext);
+			// The engine's context only exists once the graph has loaded; an
+			// offline one decodes just as well for drawing a waveform.
+			const audioBuffer = await decodeAudioBuffer(resolvedUrl, playerStore.audioContext ?? new OfflineAudioContext(1, 1, 44100));
 			if (token !== this._requestToken) return;
 			drawWaveform(this._canvas, audioBuffer, "#4fa3ff");
-			if (playableStandalone) this._status.textContent = "";
+			if (!COMPOSITION_CONTEXT_TAGS.has(node.tagName)) this._status.textContent = "";
 		} catch {
 			if (token !== this._requestToken) return;
 			this._status.textContent = "Could not decode audio for waveform (playback may still work).";

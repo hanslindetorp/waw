@@ -74,7 +74,14 @@ function buildNode(node, schema, wantAttr, excludeInternalId, ancestorIds) {
 	const id = node.attributes.id || null;
 	const isQualifyingTarget = supportsAttr && !!id && !ancestorIds.has(node.id);
 
-	const children = node.children.map((child) => buildNode(child, schema, wantAttr, excludeInternalId, ancestorIds)).filter(Boolean);
+	// A <Chain> is offered as one target, never unfolded into the elements
+	// inside it — they'd bury the picker in irrelevant choices (per Hans,
+	// 2026-10-09). Only the chain the edited element itself sits in is
+	// opened, so its neighbours stay reachable.
+	const opensUp = node.tagName !== "Chain" || ancestorIds.has(node.id);
+	const children = opensUp
+		? node.children.map((child) => buildNode(child, schema, wantAttr, excludeInternalId, ancestorIds)).filter(Boolean)
+		: [];
 
 	if (!isQualifyingTarget && children.length === 0) return null;
 
