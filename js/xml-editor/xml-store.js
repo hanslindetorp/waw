@@ -245,6 +245,25 @@ class XmlStore extends EventTarget {
 		return child;
 	}
 
+	// Inserts a new element together with ready-made children in ONE edit
+	// (one sync, one undo step) — for creating something like a <Snapshot>
+	// with dozens of <Command>s, where a separate insertNewChild per child
+	// would rebuild and re-render everything dozens of times. childSpecs is
+	// [{ tagName, attributes }]. Never selects anything by default.
+	insertNewElementWithChildren(parentId, tagName, attributes, childSpecs, index, { select = false } = {}) {
+		if (!this.root) return null;
+		const node = ops.createXmlNode(tagName, parentId);
+		node.attributes = { ...attributes };
+		node.children = childSpecs.map((spec) => ({ ...ops.createXmlNode(spec.tagName, node.id), attributes: { ...spec.attributes } }));
+		this.root = ops.insertChild(this.root, parentId, node, index);
+		if (select) {
+			this.selectedNodeId = node.id;
+			this.selectedNodeIds = new Set([node.id]);
+		}
+		this._syncCode(true, { newNodeId: node.id });
+		return node;
+	}
+
 	// Creates a new root-level <Var>, in the same "grouped with every other
 	// root Var" spot wa-bottom-bar.js's own "+" button already used (right
 	// after the last existing root Var, else right after the last root
@@ -529,6 +548,27 @@ class XmlStore extends EventTarget {
 		const liveNudge = !structural ? this._buildLiveNudge(node, attributes) : null;
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
 		this._syncCode(structural, liveNudge ? { liveNudge } : {});
+	}
+
+	// Several nodes' attribute edits as ONE edit (one sync, one undo step) —
+	// e.g. recalling a <Snapshot>, which touches many elements at once.
+	// changes is [{ nodeId, attributes }] with each node's *full* new
+	// attribute set, same contract as updateAttributes. Returns whether the
+	// edit was structural (a full engine reload follows): when it isn't, the
+	// document changed but the live graph did not, and the caller has to
+	// push the new values into the live objects itself.
+	updateManyAttributes(changes) {
+		if (!this.root || !changes.length) return false;
+		let structural = false;
+		for (const { nodeId, attributes } of changes) {
+			const node = ops.findNodeById(this.root, nodeId);
+			if (!node) continue;
+			const attrs = this._applyActiveFadeTimeWorkaround(node, attributes);
+			if (this._attributeChangeNeedsRebuild(node, attrs)) structural = true;
+			this.root = ops.updateNodeAttributes(this.root, nodeId, attrs);
+		}
+		this._syncCode(structural);
+		return structural;
 	}
 
 	// waxml.js engine workaround (per Hans, 2026-09-22): a <Layer>'s `active`

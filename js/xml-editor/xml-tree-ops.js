@@ -300,6 +300,30 @@ export function firstSelector(node) {
 	return `#${node.attributes.id}`;
 }
 
+// Every node matching a comma-separated list of simple selectors — "#id",
+// ".class", "[id='x']" or a bare tag name — the forms a <Command selector="...">
+// uses. Not a full CSS engine on purpose: a <Snapshot> only ever needs these.
+export function findNodesBySelector(root, selector) {
+	const parts = String(selector || "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	const matchers = parts.map((part) => {
+		if (part.startsWith("#")) return (n) => n.attributes.id === part.slice(1);
+		if (part.startsWith(".")) return (n) => (n.attributes.class || "").split(/\s+/).includes(part.slice(1));
+		const attr = /^\[\s*id\s*=\s*["']?([^"'\]]+)["']?\s*\]$/.exec(part);
+		if (attr) return (n) => n.attributes.id === attr[1];
+		return (n) => n.tagName === part;
+	});
+	const found = [];
+	const walk = (n) => {
+		if (matchers.some((m) => m(n))) found.push(n);
+		n.children.forEach(walk);
+	};
+	if (root) walk(root);
+	return found;
+}
+
 export function findNodeById(root, id) {
 	if (root.id === id) return root;
 	for (const child of root.children) {

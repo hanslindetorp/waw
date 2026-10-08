@@ -8,9 +8,13 @@ import { openWamStack } from "./wa-wam-stack.js";
 import { getInsertEffects } from "../wam/wam-catalog.js";
 import { buildRoutingTree, complementNoun } from "../xml-editor/io-routing.js";
 import { openIoPicker } from "./wa-io-picker.js";
+import { confirmDialog } from "./wa-confirm-dialog.js";
+import { showNotice } from "./wa-notice-dialog.js";
 import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
+	isDbNativeGain,
+	dbToLinearRatio,
 	EQ_GAIN_MIN_DB as EQ_MIN_DB,
 	EQ_GAIN_MAX_DB as EQ_MAX_DB,
 	FADER_GAIN_MIN_DB as FADER_MIN_DB,
@@ -66,7 +70,7 @@ function displayLabel(node) {
 // <Mixer> children that carry no audio signal of their own, so never get a
 // channel strip — every other tag the schema's shared "waxml" choice group
 // allows there (Chain, GainNode, every native *Node,
-// ObjectBasedAudio, AmbientAudio, Snapshot, Noise, Wam, a nested Mixer,
+// ObjectBasedAudio, AmbientAudio, Noise, Wam, a nested Mixer,
 // Include, ...) is a real audio-producing/-processing node and still gets
 // one, even outside a <Chain> (see _buildChannelStrip's own "any other
 // element type" fallback branch). Per Hans (2026-09-21):
@@ -75,10 +79,26 @@ function displayLabel(node) {
 //     of its own — belongs inside a <Chain>, never a top-level channel.
 //   - Envelope: a control-rate automation curve driving a parameter over
 //     time, not itself an audio output.
+//   - Snapshot: a stored set of parameter values (a list of <Command>s),
+//     shown in the master strip rather than as a channel — per Hans
+//     (2026-10-09).
+//   - AnalyserNode: a measuring tap — it passes its input straight on but
+//     is no channel of its own; hidden per Hans (2026-10-09).
+// Audited 2026-10-09 against every element the schema lets a <Mixer> hold
+// (AnalyserNode, AudioBufferSourceNode, AudioWorkletNode, DelayNode,
+// MediaStreamAudioSourceNode, PannerNode, WaveShaperNode, OscillatorNode,
+// GainNode, BiquadFilterNode, StereoPannerNode, ConvolverNode,
+// DynamicsCompressorNode, ChannelMergerNode, ChannelSplitterNode, Var,
+// Envelope, Include, Send, Chain, Mixer, ObjectBasedAudio, AmbientAudio,
+// Snapshot, Noise, Wam): Var, Envelope, Send and Snapshot carry no audio
+// out at all, and AnalyserNode is only a tap. Every other one is a source or
+// a processor, so it keeps its strip.
+// A new tag the schema starts allowing here that carries no audio needs
+// adding to this set.
 // Include is NOT excluded (per Hans, 2026-09-21, correcting an earlier
 // guess) — it pulls in another whole WAXML document as content, acting as
 // a sub-master with a real audio output of its own.
-const MIXER_NO_SIGNAL_TAGS = new Set(["Var", "Send", "Envelope"]);
+const MIXER_NO_SIGNAL_TAGS = new Set(["Var", "Send", "Envelope", "Snapshot", "AnalyserNode"]);
 
 function hasAudioSignal(node) {
 	return !MIXER_NO_SIGNAL_TAGS.has(node.tagName);
@@ -179,6 +199,11 @@ function sendSectionHeightFor(sendCount) {
 // types.
 const PAN_ROW_HEIGHT = 40;
 const FADER_ROW_HEIGHT = FADER_TRACK_HEIGHT + 20;
+const CAMERA_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>`;
+const SNAPSHOT_ITEM_W = 86; // a snapshot cell: as wide as the master strip's content
+const SNAPSHOT_ITEM_H = 22;
+const SNAPSHOT_GAP = 3;
+const SNAPSHOT_EDGE_PX = 5; // a click this close to a snapshot's border marks it; further in, it triggers
 const THUMB_VIEW_SIDE = 168; // wa-panner-view's thumb-mode square (SQUARE_SIDE there)
 const ON_SOLO_ROW_HEIGHT = 28; // ON + Solo now share one row, side by side, per Hans
 const ROW_LABELS_WIDTH = 92; // wide enough to also host the blend/transitionTime mini-sliders + quantize select, per Hans
@@ -1188,6 +1213,82 @@ template.innerHTML = `
 			left: 0;
 			right: 0;
 		}
+		/* Snapshots: between the output field and the 3D thumbnail, in a
+		   grid that fills column by column, the camera button last (so it
+		   always sits right under the lowest snapshot). The master strip
+		   widens by a column when they don't fit vertically — see
+		   _layoutSnapshots. */
+		.master-snapshots {
+			position: absolute;
+			top: ${PAN_ROW_HEIGHT + 10}px;
+			left: 0;
+			right: 0;
+			bottom: 4px;
+			overflow: hidden;
+		}
+		.snapshot-grid {
+			display: grid;
+			grid-auto-flow: column;
+			grid-template-rows: repeat(var(--snapshot-rows, 1), ${SNAPSHOT_ITEM_H}px);
+			grid-auto-columns: ${SNAPSHOT_ITEM_W}px;
+			gap: ${SNAPSHOT_GAP}px;
+			justify-content: start;
+		}
+		.snapshot-item {
+			box-sizing: border-box;
+			height: ${SNAPSHOT_ITEM_H}px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0 0.3rem;
+			border: 1px solid #0b0c0d;
+			border-radius: 3px;
+			background: #1a1c1f;
+			color: #e8ecef;
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.6rem;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			cursor: pointer;
+		}
+		.snapshot-item:hover {
+			background: #22262b;
+		}
+		/* Marked: an ordinary blue frame. */
+		.snapshot-item.selected {
+			border-color: var(--waw-accent, #4fa3ff);
+			box-shadow: inset 0 0 0 1px var(--waw-accent, #4fa3ff);
+		}
+		@keyframes snapshot-trig-blink {
+			0% {
+				background: rgba(79, 163, 255, 0.85);
+			}
+			100% {
+				background: #1a1c1f;
+			}
+		}
+		.snapshot-item.blink {
+			animation: snapshot-trig-blink 0.35s ease-out;
+		}
+		.snapshot-camera-btn {
+			justify-self: center;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			width: 34px;
+			height: ${SNAPSHOT_ITEM_H}px;
+			padding: 0;
+			background: #24272c;
+			border: 1px solid #0b0c0d;
+			border-radius: 4px;
+			color: #cdd3d8;
+			cursor: pointer;
+		}
+		.snapshot-camera-btn:hover {
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
+		}
 		/* The three blank rows above the master fader (ON|Solo, mini sliders,
 		   pan) — the 3D thumbnail sits over them, right above the fader. */
 		.master-above-fader {
@@ -1195,14 +1296,17 @@ template.innerHTML = `
 			width: 100%;
 			flex: 0 0 auto;
 		}
+		/* Always the same size, however wide the strip grows for extra
+		   snapshot columns (it would otherwise grow tall and cover the
+		   snapshots above it) — centred in the strip. */
 		.master-above-fader .panner-thumb-wrap.large {
 			position: absolute;
-			left: 0;
-			right: 0;
+			left: 50%;
+			margin-left: -${SNAPSHOT_ITEM_W / 2}px;
 			bottom: 4px;
-			width: auto;
-			height: auto;
-			aspect-ratio: 1 / 1;
+			width: ${SNAPSHOT_ITEM_W}px;
+			height: ${SNAPSHOT_ITEM_W}px;
+			box-sizing: border-box;
 		}
 		.panner-popup-backdrop {
 			position: fixed;
@@ -1361,6 +1465,8 @@ export class WaMixerView extends HTMLElement {
 		this._meterState = new Map(); // chainId (internal tree id) -> {analyser, dataArray, vuFillEl, smoothedT}
 		this._meterRafId = null;
 		this._remoteControls = []; // per-frame tick()s for <Var>-controlled knobs — see _lockRemoteControlled
+		this._visualSetters = new Map(); // see _render
+		this._snapshotAnim = null; // the running snapshot transition, if any — see _triggerSnapshot
 		this._soloLocked = false; // set every _render() — guards _wireSoloSliderDrag's pointerdown, since that's wired once, not rebuilt per render
 		// 3D-panning toggle (see _buildPanRow/_switchToPannerNode/
 		// _switchToStereoPanner) — each Map is nodeId (the shared XML `id`
@@ -1747,9 +1853,16 @@ export class WaMixerView extends HTMLElement {
 		this._render(mixerNode);
 	}
 
+	// Whether a strip's node is part of the document's selection — the
+	// primary one or any of a multi-selection (shared with the XML editor,
+	// which highlights the same set).
+	_isNodeSelected(id) {
+		return xmlStore.selectedNodeId === id || xmlStore.selectedNodeIds.has(id);
+	}
+
 	_updateSelectionHighlight() {
-		this._channels.querySelectorAll(".channel-strip[data-node-id]").forEach((strip) => {
-			strip.classList.toggle("selected", strip.dataset.nodeId === xmlStore.selectedNodeId);
+		this.shadowRoot.querySelectorAll(".channel-strip[data-node-id], .snapshot-item[data-node-id]").forEach((el) => {
+			el.classList.toggle("selected", this._isNodeSelected(el.dataset.nodeId));
 		});
 	}
 
@@ -1772,11 +1885,19 @@ export class WaMixerView extends HTMLElement {
 		if (!selectedId || !this._activeMixerId) return;
 		const mixerNode = ops.findNodeById(xmlStore.root, this._activeMixerId);
 		if (!mixerNode) return;
-		if (selectedId === mixerNode.id) return; // never delete the Mixer itself via this key
-		const selectedNode = ops.findNodeById(xmlStore.root, selectedId);
-		if (!selectedNode || !this._isDescendantOf(selectedNode, mixerNode)) return;
+		// Everything selected inside this Mixer — one strip or several — goes
+		// in one gesture, per Hans (2026-10-09). The Mixer itself never does
+		// via this key, and nodes of a multi-selection outside it are left
+		// alone (only acts when the primary selection belongs to this Mixer).
+		const inThisMixer = (n) => !!n && n.id !== mixerNode.id && this._isDescendantOf(n, mixerNode);
+		if (!inThisMixer(ops.findNodeById(xmlStore.root, selectedId))) return;
+		const ids = xmlStore.selectedNodeIds.size ? [...xmlStore.selectedNodeIds] : [selectedId];
+		const nodes = ids.map((id) => ops.findNodeById(xmlStore.root, id)).filter(inThisMixer);
+		// A node inside another selected node goes with it; removing both
+		// would hit an id that no longer exists.
+		const topLevel = nodes.filter((n) => !nodes.some((other) => other.id !== n.id && ops.isDescendantOf(other, n.id)));
 		e.preventDefault();
-		xmlStore.removeNode(selectedId);
+		topLevel.forEach((n) => xmlStore.removeNode(n.id));
 	}
 
 	_isTextEditingTarget(e) {
@@ -1987,6 +2108,11 @@ export class WaMixerView extends HTMLElement {
 		// visual, since a rebuild here always makes stale entries pointing at
 		// detached elements otherwise.
 		this._remoteControls = [];
+		// (nodeId:attribute) -> function(value in the engine's own domain)
+		// that moves that control's picture to the value — filled in by the
+		// builders below, used by _triggerSnapshot to animate faders and knobs
+		// along a transitionTime curve. Rebuilt with every render.
+		this._visualSetters = new Map();
 
 		// Computed early (before the channel-strip loop below) since
 		// _buildSoloButton needs it too — a $var-controlled solo locks both
@@ -2391,11 +2517,33 @@ export class WaMixerView extends HTMLElement {
 	// either (see connectedCallback) — a click inside a channel strip is
 	// always this strip's own business, control or not.
 	_wireStripSelect(strip, child) {
-		strip.addEventListener("click", (e) => {
-			e.stopPropagation();
-			if (e.target.closest("button, select, input, .knob, .fader-handle, .insert-slot")) return;
-			xmlStore.selectNode(child.id);
-		});
+		strip.addEventListener("click", (e) => this._onStripClick(e, child.id));
+	}
+
+	// Cmd/Ctrl-click toggles a strip in or out of the selection, Shift-click
+	// selects every strip from the last clicked one to this one, a plain click
+	// selects just this one — all
+	// through xmlStore's own multi-selection, so the XML editor shows exactly
+	// the same set. Per Hans (2026-10-09).
+	_onStripClick(e, id) {
+		e.stopPropagation();
+		if (e.target.closest("button, select, input, .knob, .fader-handle, .insert-slot")) return;
+		if (e.metaKey || e.ctrlKey) {
+			xmlStore.toggleNodeSelection(id);
+			this._selectionAnchorId = id;
+			return;
+		}
+		if (e.shiftKey && this._selectionAnchorId) {
+			const ids = [...this.shadowRoot.querySelectorAll(".channel-strip[data-node-id]")].map((s) => s.dataset.nodeId);
+			const a = ids.indexOf(this._selectionAnchorId);
+			const b = ids.indexOf(id);
+			if (a >= 0 && b >= 0) {
+				xmlStore.selectRange(ids.slice(Math.min(a, b), Math.max(a, b) + 1));
+				return;
+			}
+		}
+		this._selectionAnchorId = id;
+		xmlStore.selectNode(id);
 	}
 
 	// The master strip, pinned to the right edge (see .master-host): the
@@ -2405,6 +2553,9 @@ export class WaMixerView extends HTMLElement {
 	_buildMasterStrip(mixerNode, sectionHeights) {
 		const strip = document.createElement("div");
 		strip.className = "channel-strip master-strip";
+		// Not selectable (per Hans, 2026-10-09 — it was confusing): a click
+		// here is the strip's own business and never reaches the Mixer
+		// background's click-to-select-<Mixer> handler either.
 		strip.addEventListener("click", (e) => e.stopPropagation());
 		// The EQ/insert/send area is blank (same height as the channels', and
 		// without their dividers); the output field sits at the very top of it.
@@ -2412,6 +2563,16 @@ export class WaMixerView extends HTMLElement {
 		top.className = "master-top";
 		top.appendChild(this._buildSectionSpacers(sectionHeights, true));
 		top.appendChild(this._buildMasterOutputRow(mixerNode));
+		// Snapshots (and the camera button that makes one) only make sense
+		// once the Mixer has at least one <Chain> to capture.
+		this._snapshotLayout = null;
+		this._snapshotResizeObserver?.disconnect();
+		if (mixerNode.children.some((c) => c.tagName === "Chain")) {
+			top.appendChild(this._buildSnapshotsArea(mixerNode, strip));
+			this._snapshotResizeObserver = new ResizeObserver(() => this._layoutSnapshots());
+			this._snapshotResizeObserver.observe(top);
+			requestAnimationFrame(() => this._layoutSnapshots());
+		}
 		strip.appendChild(top);
 
 		const bottomGroup = document.createElement("div");
@@ -2452,6 +2613,254 @@ export class WaMixerView extends HTMLElement {
 
 		strip.appendChild(bottomGroup);
 		return strip;
+	}
+
+	// --- snapshots ---
+
+	_buildSnapshotsArea(mixerNode, strip) {
+		const area = document.createElement("div");
+		area.className = "master-snapshots";
+
+		const grid = document.createElement("div");
+		grid.className = "snapshot-grid";
+		const snapshots = mixerNode.children.filter((c) => c.tagName === "Snapshot");
+		snapshots.forEach((snap) => {
+			const item = document.createElement("div");
+			item.className = "snapshot-item";
+			item.dataset.nodeId = snap.id;
+			item.textContent = displayLabel(snap);
+			item.title = `Snapshot ${displayLabel(snap)} (${snap.children.length} commands) — click the middle to trigger, the edge to select`;
+			if (this._isNodeSelected(snap.id)) item.classList.add("selected");
+			item.addEventListener("click", (e) => {
+				e.stopPropagation();
+				const r = item.getBoundingClientRect();
+				const inCenter =
+					e.clientX >= r.left + SNAPSHOT_EDGE_PX && e.clientX <= r.right - SNAPSHOT_EDGE_PX && e.clientY >= r.top + SNAPSHOT_EDGE_PX && e.clientY <= r.bottom - SNAPSHOT_EDGE_PX;
+				if (inCenter) this._triggerSnapshot(snap, item);
+				else xmlStore.selectNode(snap.id);
+			});
+			grid.appendChild(item);
+		});
+
+		const camera = document.createElement("button");
+		camera.type = "button";
+		camera.className = "snapshot-camera-btn";
+		camera.title = "Create a snapshot of the selected channels";
+		camera.innerHTML = CAMERA_ICON;
+		camera.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._createSnapshot(mixerNode);
+		});
+		grid.appendChild(camera);
+		area.appendChild(grid);
+
+		this._snapshotLayout = { strip, area, grid, count: snapshots.length + 1 };
+		return area;
+	}
+
+	// How many snapshot rows fit in the room the master strip has between
+	// the output field and the 3D thumbnail decides how many columns are
+	// needed (the camera counts as one more cell); the strip is widened by
+	// one column-width per extra column. Re-run whenever that room changes
+	// (see the ResizeObserver set up in _buildMasterStrip).
+	_layoutSnapshots() {
+		const l = this._snapshotLayout;
+		if (!l || !l.strip.isConnected) return;
+		const rows = Math.max(1, Math.floor((l.area.clientHeight + SNAPSHOT_GAP) / (SNAPSHOT_ITEM_H + SNAPSHOT_GAP)));
+		const cols = Math.ceil(l.count / rows);
+		l.grid.style.setProperty("--snapshot-rows", String(Math.min(rows, l.count)));
+		if (cols <= 1) {
+			l.strip.style.width = "";
+		} else {
+			const pad = parseFloat(getComputedStyle(l.strip).paddingLeft) || 0;
+			l.strip.style.width = `${cols * SNAPSHOT_ITEM_W + (cols - 1) * SNAPSHOT_GAP + pad * 2}px`;
+		}
+		this._updateSoloSliderGeometry();
+	}
+
+	// TEMPORARY — REMOVE AS SOON AS waxml.js GETS ITS OWN <Snapshot> RECALL
+	// (Hans is about to build one; "detta kommer snart att ersättas med en
+	// waxml-funktion", 2026-10-09). Recalling a snapshot writes its stored
+	// values into the XML — one edit, one undo step, so every other view
+	// shows them at once — and hands the same values to the live engine ONCE
+	// (waxml.js applies the transitionTime itself where it supports it). What
+	// this view adds is the PICTURE of that glide: every numeric attribute's
+	// fader/knob is animated to its target the way setTargetAtTime() moves an
+	// AudioParam — an exponential approach whose time constant is the
+	// element's transitionTime, inherited from its ancestors (typically just
+	// the <Mixer>'s). Non-numeric attributes (type, ...) and elements without
+	// any transitionTime jump straight to the value. The targets are whatever
+	// each <Command selector> matches right now.
+	_triggerSnapshot(snap, item) {
+		item.classList.remove("blink");
+		void item.offsetWidth;
+		item.classList.add("blink");
+		const snapNow = ops.findNodeById(xmlStore.root, snap.id);
+		if (!snapNow) return;
+		const byNode = new Map();
+		for (const cmd of snapNow.children) {
+			if (cmd.tagName !== "Command" || (cmd.attributes.type || "trig") !== "set") continue;
+			const { selector, variable, value } = cmd.attributes;
+			if (!selector || !variable) continue;
+			for (const target of ops.findNodesBySelector(xmlStore.root, selector)) {
+				if (target.id === snapNow.id || target.attributes[variable] === value) continue;
+				const entry = byNode.get(target.id) || { node: target, attributes: { ...target.attributes }, changed: {}, previous: {} };
+				entry.previous[variable] = target.attributes[variable];
+				entry.attributes[variable] = value;
+				entry.changed[variable] = value;
+				byNode.set(target.id, entry);
+			}
+		}
+		const edits = [...byNode.values()];
+		if (!edits.length) return;
+
+		// The document gets its final values right away; this view is told
+		// not to rebuild itself for that edit (like a fader drag), so the
+		// controls stay where they are until the animation moves them.
+		this._isLocalEdit = true;
+		let structural;
+		try {
+			structural = xmlStore.updateManyAttributes(edits.map((e) => ({ nodeId: e.node.id, attributes: e.attributes })));
+		} finally {
+			this._isLocalEdit = false;
+		}
+		this._runSnapshotTransition(edits, structural);
+	}
+
+	// transitionTime in seconds for `node`: its own, else the nearest
+	// ancestor's; 0 (= jump) when none of them has a numeric one.
+	_effectiveTransitionSeconds(node) {
+		for (let n = node; n; n = n.parent ? ops.findNodeById(xmlStore.root, n.parent) : null) {
+			const raw = n.attributes.transitionTime;
+			if (raw === undefined) continue;
+			const ms = parseFloat(raw);
+			return Number.isFinite(ms) && /^\s*\d+(\.\d+)?\s*$/.test(String(raw)) ? Math.max(0, ms) / 1000 : 0;
+		}
+		return 0;
+	}
+
+	// An attribute's value in the domain the engine interpolates it in:
+	// linear for a GainNode/Send gain, dB for a BiquadFilterNode's own gain,
+	// the plain number for everything else. NaN when it isn't a plain number.
+	_engineValue(node, attr, raw) {
+		if (raw === undefined) return NaN;
+		const text = String(raw).trim();
+		if (attr === "gain") {
+			if (!/^-?\d+(\.\d+)?\s*(dB)?$/i.test(text)) return NaN;
+			const db = parseGainAttributeToDb(node.tagName, text);
+			return isDbNativeGain(node.tagName) ? db : dbToLinearRatio(db);
+		}
+		return /^-?\d*\.?\d+(e[+-]?\d+)?$/i.test(text) ? parseFloat(text) : NaN;
+	}
+
+	_runSnapshotTransition(edits, structural) {
+		const prev = this._snapshotAnim;
+		if (prev) cancelAnimationFrame(prev.rafId);
+		// Values a still-running earlier transition had reached are where the
+		// new one starts from, not the (already final) XML value.
+		const reached = prev ? prev.current : new Map();
+		const tracks = []; // animated numeric attributes
+		for (const e of edits) {
+			const tau = this._effectiveTransitionSeconds(e.node);
+			for (const [attr, raw] of Object.entries(e.changed)) {
+				const key = `${e.node.id}:${attr}`;
+				const target = this._engineValue(e.node, attr, raw);
+				const start = reached.has(key) ? reached.get(key) : this._engineValue(e.node, attr, e.previous[attr]);
+				if (!Number.isFinite(target) || !Number.isFinite(start) || start === target) continue;
+				if (tau > 0) tracks.push({ e, attr, raw, key, start, target, tau });
+				else this._visualSetters.get(key)?.(target); // no transition: the control jumps at once
+			}
+		}
+		const current = new Map();
+		// The engine gets every target once, up front — an exponential glide
+		// of its own is waxml.js's job (stepping values into it here would
+		// only be smoothed a second time by its own setters).
+		if (!structural) {
+			for (const e of edits) {
+				if (!e.node.attributes.id) continue;
+				for (const [attr, raw] of Object.entries(e.changed)) applyLiveProperty(e.node.attributes.id, attr, this._asLiveValue(raw));
+			}
+		}
+
+		const t0 = performance.now();
+		const maxSeconds = Math.max(0, ...tracks.map((t) => t.tau)) * 5;
+		const step = () => {
+			const t = (performance.now() - t0) / 1000;
+			const done = t >= maxSeconds;
+			for (const tr of tracks) {
+				const value = done ? tr.target : tr.target + (tr.start - tr.target) * Math.exp(-t / tr.tau);
+				current.set(tr.key, value);
+				this._visualSetters.get(tr.key)?.(value);
+			}
+			if (done) {
+				this._snapshotAnim = null;
+				// Back in step with the document (anything the animation
+				// didn't draw — non-numeric values, ON lamps — shows now).
+				const mixerNow = this._activeMixerId ? ops.findNodeById(xmlStore.root, this._activeMixerId) : null;
+				if (mixerNow) this._render(mixerNow);
+				return;
+			}
+			this._snapshotAnim.rafId = requestAnimationFrame(step);
+		};
+		this._snapshotAnim = { rafId: 0, current };
+		if (!tracks.length) {
+			this._snapshotAnim = null;
+			const mixerNow = this._activeMixerId ? ops.findNodeById(xmlStore.root, this._activeMixerId) : null;
+			if (mixerNow) this._render(mixerNow);
+			return;
+		}
+		this._snapshotAnim.rafId = requestAnimationFrame(step);
+	}
+
+	// A stored value as the live setters take it: plain numbers as numbers,
+	// anything else ("-6dB", "peaking") as the raw string.
+	_asLiveValue(raw) {
+		const parsed = parseFloat(raw);
+		return Number.isFinite(parsed) && String(parsed) === String(raw).trim() ? parsed : raw;
+	}
+
+	// A <Snapshot> holding one <Command type="set" selector="#id"
+	// variable="attr" value="..."> per attribute of every child of the
+	// selected <Chain>s — or of every channel, after asking, when none is
+	// selected. Snapshots always sit first in the <Mixer>, in creation
+	// order, ahead of the channels. Per Hans (2026-10-09). id/class/label
+	// are skipped: they name the element rather than describe a state a
+	// "set" could restore.
+	async _createSnapshot(mixerNode) {
+		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
+		if (!mixerNow) return;
+		const chains = mixerNow.children.filter((c) => c.tagName === "Chain");
+		if (!chains.length) return;
+		let targets = chains.filter((c) => this._isNodeSelected(c.id));
+		if (!targets.length) {
+			const ok = await confirmDialog("No mixer channel is selected - Do you want to create a snapshot for all channels?");
+			if (!ok) return;
+			targets = chains;
+		}
+		// The document may have changed while the dialog was open.
+		const mixerFresh = ops.findNodeById(xmlStore.root, mixerNode.id);
+		if (!mixerFresh) return;
+		const targetIds = new Set(targets.map((c) => c.id));
+		const commands = [];
+		for (const chain of mixerFresh.children.filter((c) => c.tagName === "Chain" && targetIds.has(c.id))) {
+			for (const child of chain.children) {
+				const childId = child.attributes.id;
+				if (!childId) continue;
+				for (const [name, value] of Object.entries(child.attributes)) {
+					if (name === "id" || name === "class" || name === "label") continue;
+					commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${childId}`, variable: name, value: String(value) } });
+				}
+			}
+		}
+		if (!commands.length) {
+			showNotice("There are no attributes to capture in the selected channels.");
+			return;
+		}
+		let lastSnapshotIndex = -1;
+		mixerFresh.children.forEach((c, i) => {
+			if (c.tagName === "Snapshot") lastSnapshotIndex = i;
+		});
+		xmlStore.insertNewElementWithChildren(mixerFresh.id, "Snapshot", {}, commands, lastSnapshotIndex + 1);
 	}
 
 	// Text field + connect button writing the <Mixer>'s own `output` — the
@@ -2574,7 +2983,7 @@ export class WaMixerView extends HTMLElement {
 		const strip = document.createElement("div");
 		strip.className = "channel-strip";
 		strip.dataset.nodeId = child.id;
-		if (xmlStore.selectedNodeId === child.id) strip.classList.add("selected");
+		if (this._isNodeSelected(child.id)) strip.classList.add("selected");
 		this._wireStripSelect(strip, child);
 		strip.appendChild(this._buildSectionSpacers(sectionHeights));
 
@@ -2619,7 +3028,7 @@ export class WaMixerView extends HTMLElement {
 		const strip = document.createElement("div");
 		strip.className = "channel-strip";
 		strip.dataset.nodeId = child.id;
-		if (xmlStore.selectedNodeId === child.id) strip.classList.add("selected");
+		if (this._isNodeSelected(child.id)) strip.classList.add("selected");
 		this._wireStripSelect(strip, child);
 
 		if (child.tagName !== "Chain") {
@@ -3032,6 +3441,7 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, EQ_MIN_DB, EQ_MAX_DB);
 		const startDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
 		applyVisual(startDb);
+		this._visualSetters.set(`${node.id}:gain`, (db) => applyVisual(db)); // BiquadFilterNode.gain is native dB
 		knob.title = "Gain";
 		this._wireParamEntry(knob, node, "gain");
 
@@ -3077,6 +3487,7 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (t) => this._applyKnobRotation(dial, t, 0, 1);
 		const startT = freqToKnobT(readFrequency(node));
 		applyVisual(startT);
+		this._visualSetters.set(`${node.id}:frequency`, (freq) => applyVisual(freqToKnobT(freq)));
 		knob.title = "Frequency";
 		this._wireParamEntry(knob, node, "frequency");
 
@@ -3119,6 +3530,7 @@ export class WaMixerView extends HTMLElement {
 		knob.classList.add("knob-small", "knob-q");
 		const applyVisual = (q) => this._applyKnobRotation(dial, q, Q_MIN, Q_MAX);
 		applyVisual(readQ(node));
+		this._visualSetters.set(`${node.id}:Q`, (q) => applyVisual(q));
 		knob.title = "Q";
 		this._wireParamEntry(knob, node, "Q");
 
@@ -3157,6 +3569,7 @@ export class WaMixerView extends HTMLElement {
 		knob.classList.add("pan-knob");
 		const applyVisual = (pan) => this._applyKnobRotation(dial, pan, -1, 1);
 		applyVisual(readPan(node));
+		this._visualSetters.set(`${node.id}:pan`, (pan) => applyVisual(pan));
 		knob.title = "Pan";
 		this._wireParamEntry(knob, node, "pan");
 
@@ -3374,6 +3787,7 @@ export class WaMixerView extends HTMLElement {
 		};
 		const startDb = parseGainAttributeToDb(gainNode.tagName, gainNode.attributes.gain);
 		applyVisual(startDb);
+		this._visualSetters.set(`${gainNode.id}:gain`, (linear) => applyVisual(linear > 0 ? 20 * Math.log10(linear) : FADER_MIN_DB)); // GainNode.gain is linear
 		handle.title = "Volume";
 		this._wireParamEntry(handle, gainNode, "gain");
 
@@ -3520,6 +3934,7 @@ export class WaMixerView extends HTMLElement {
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, EQ_MIN_DB, EQ_MAX_DB);
 		const startDb = parseGainAttributeToDb(send.tagName, send.attributes.gain);
 		applyVisual(startDb);
+		this._visualSetters.set(`${send.id}:gain`, (linear) => applyVisual(linear > 0 ? 20 * Math.log10(linear) : EQ_MIN_DB)); // linear, like GainNode
 		knob.title = "Send Level";
 		this._wireParamEntry(knob, send, "gain");
 
