@@ -168,8 +168,9 @@ class XmlStore extends EventTarget {
 		this.setRoot(ops.createXmlNode(trimmed, null));
 	}
 
-	addChild(parentId, tagName) {
-		return this.insertNewChild(parentId, tagName);
+	// index: where among the parent's children (default: after the last one).
+	addChild(parentId, tagName, index) {
+		return this.insertNewChild(parentId, tagName, undefined, index);
 	}
 
 	// Like addChild, but with control over the initial attributes and

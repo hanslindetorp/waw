@@ -1308,11 +1308,15 @@ template.innerHTML = `
 			height: ${SNAPSHOT_ITEM_W}px;
 			box-sizing: border-box;
 		}
+		/* The 3D window is not modal (per Hans, 2026-10-09): no dimming, a
+		   click outside it neither closes it nor is swallowed — it must stay
+		   possible to use a Command button or a Snapshot with it open. Only the
+		   window itself takes pointer events; it closes with × or Escape. */
 		.panner-popup-backdrop {
 			position: fixed;
 			inset: 0;
 			z-index: 60;
-			background: rgba(0, 0, 0, 0.55);
+			pointer-events: none;
 			display: flex;
 			align-items: center;
 			justify-content: center;
@@ -1321,6 +1325,7 @@ template.innerHTML = `
 			display: none;
 		}
 		.panner-popup {
+			pointer-events: auto;
 			background: #1c1c1c;
 			border: 1px solid var(--waw-border, #2f2f2f);
 			border-radius: 10px;
@@ -1513,9 +1518,6 @@ export class WaMixerView extends HTMLElement {
 		// per Hans.
 		this._mixerRoot.addEventListener("click", () => {
 			if (this._activeMixerId) xmlStore.selectNode(this._activeMixerId);
-		});
-		this._pannerPopupBackdrop.addEventListener("click", (e) => {
-			if (e.target === this._pannerPopupBackdrop) this._closePannerPopup();
 		});
 		this.shadowRoot.querySelector(".panner-popup-close").addEventListener("click", () => this._closePannerPopup());
 		this._onStoreChange();

@@ -1266,7 +1266,11 @@ export class WaXmlTree extends HTMLElement {
 	// there's nothing to validate against, so new elements are just named
 	// "element" with no popover (matches the root-creation fallback name
 	// "root" in _renderCreateRoot).
-	_startAddChild(parentNode, allowedChildren, anchorEl) {
+	// index: where among parentNode's children the new one goes — 0 for the
+	// "+" on an element row (a new FIRST child, before the existing ones),
+	// undefined for the "+" row under a parent's last child (after it, at the
+	// end of the same parent). Per Hans (2026-10-09).
+	_startAddChild(parentNode, allowedChildren, anchorEl, index) {
 		const schema = xmlStore.schema;
 
 		if (schema && allowedChildren.length > 1) {
@@ -1275,12 +1279,12 @@ export class WaXmlTree extends HTMLElement {
 				return;
 			}
 			const options = [...allowedChildren].sort((a, b) => a.localeCompare(b));
-			this._openNamePopover(anchorEl, options, null, (name) => xmlStore.addChild(parentNode.id, name));
+			this._openNamePopover(anchorEl, options, null, (name) => xmlStore.addChild(parentNode.id, name, index));
 			return;
 		}
 
 		const tagName = schema && allowedChildren.length === 1 ? allowedChildren[0] : "element";
-		xmlStore.addChild(parentNode.id, tagName);
+		xmlStore.addChild(parentNode.id, tagName, index);
 	}
 
 	// Shared popover for picking an element name from a list — used both to
@@ -1333,7 +1337,7 @@ export class WaXmlTree extends HTMLElement {
 			addBtn.addEventListener("click", (e) => {
 				e.stopPropagation();
 				this._collapsedIds.delete(node.id);
-				this._startAddChild(node, allowedChildren, addBtn);
+				this._startAddChild(node, allowedChildren, addBtn, 0);
 			});
 			actions.appendChild(addBtn);
 		}
