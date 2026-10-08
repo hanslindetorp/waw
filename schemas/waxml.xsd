@@ -72,7 +72,7 @@
 
   <xs:simpleType name="convolutionGain">
     <xs:annotation>
-      <xs:documentation>Gain applied to the portion of the signal sent to a convolution reverb, used by AmbientAudio and ObjectBasedAudio (not by ConvolverNode itself). Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
+      <xs:documentation>Gain applied to the portion of the signal sent to a convolution reverb, used by ObjectBasedAudio, which is currently commented out (not by ConvolverNode itself, nor by AmbientAudio). Either a numeric value in the range 0-1, or a mathematical expression (see mathExpression).</xs:documentation>
     </xs:annotation>
     <xs:union memberTypes="convolutionGainValue mathExpression"/>
   </xs:simpleType>
@@ -1662,6 +1662,10 @@
       
       <!-- WAXML objects -->
 
+      <!--
+      ObjectBasedAudio is commented out for now (per Hans, 2026-10-09).
+      To reinstate: uncomment this element.
+
       <xs:element name="ObjectBasedAudio">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributes"/>
@@ -1695,10 +1699,11 @@
           <xs:attribute name="coneOuterGain" type="coneOuterGain"/>
         </xs:complexType>
       </xs:element>
+      -->
 
       <xs:element name="AmbientAudio">
         <xs:complexType>
-          <xs:attributeGroup ref="commonNodeAttributes"/>
+          <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
           <xs:attribute name="src" type="src"/>
           <xs:attribute name="detune" type="detune"/>
           <xs:attribute name="loop" type="loop"/>
@@ -1711,8 +1716,6 @@
           <xs:attribute name="randomPosition" type="randomPosition"/>
           <xs:attribute name="randomDuration" type="randomDuration"/>
           <xs:attribute name="randomDetune" type="randomDetune"/>
-          <xs:attribute name="convolution" type="convolution"/>
-          <xs:attribute name="convolutionGain" type="convolutionGain"/>
         </xs:complexType>
       </xs:element>
 

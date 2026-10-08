@@ -1560,7 +1560,8 @@ class AudioObject extends EventTarget{
   	set gain(val){
       if(typeof val == "string") val = WebAudioUtils.typeFixParam("gain", val, this._nodeType);
       let audioNode = this._nodeType == "send" ? this._bus : this._node;
-	  	this.setTargetAtTime("gain", val, 0, 0.001, true, audioNode);
+      let transitionTime = this.getParameter("transitionTime") || 0.001;
+	  	this.setTargetAtTime("gain", val, 0, transitionTime, true, audioNode);
       //console.log(this._nodeType + ".gain = " + val);
   	}
 
