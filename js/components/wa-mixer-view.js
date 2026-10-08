@@ -1332,12 +1332,17 @@ template.innerHTML = `
 			box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 			padding: 0.8rem 1rem 1rem;
 		}
+		/* The header is the drag handle (the window moves via a transform
+		   offset from its centred position, see _wirePannerPopupDrag). */
 		.panner-popup-header {
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
 			gap: 1rem;
 			margin-bottom: 0.4rem;
+			cursor: move;
+			user-select: none;
+			touch-action: none;
 		}
 		.panner-popup-title {
 			font-weight: 600;
@@ -1520,6 +1525,7 @@ export class WaMixerView extends HTMLElement {
 			if (this._activeMixerId) xmlStore.selectNode(this._activeMixerId);
 		});
 		this.shadowRoot.querySelector(".panner-popup-close").addEventListener("click", () => this._closePannerPopup());
+		this._wirePannerPopupDrag();
 		this._onStoreChange();
 		this._onPlayerStoreChange();
 	}
@@ -3249,6 +3255,48 @@ export class WaMixerView extends HTMLElement {
 
 	_closePannerPopup() {
 		this._pannerPopupBackdrop.hidden = true;
+	}
+
+	// Drag the 3D window by its header. The window stays centred by the
+	// backdrop's flexbox; a drag just adds a translate offset, which is kept
+	// between openings and clamped so the header can't leave the viewport.
+	_wirePannerPopupDrag() {
+		const popup = this.shadowRoot.querySelector(".panner-popup");
+		const header = this.shadowRoot.querySelector(".panner-popup-header");
+		this._pannerPopupOffset = { x: 0, y: 0 };
+		const apply = () => {
+			popup.style.transform = `translate(${this._pannerPopupOffset.x}px, ${this._pannerPopupOffset.y}px)`;
+		};
+		header.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0 || e.target.closest(".panner-popup-close")) return;
+			e.preventDefault();
+			header.setPointerCapture(e.pointerId);
+			const startOffset = { ...this._pannerPopupOffset };
+			const rect = popup.getBoundingClientRect();
+			const baseLeft = rect.left - startOffset.x;
+			const baseTop = rect.top - startOffset.y;
+			const startX = e.clientX;
+			const startY = e.clientY;
+			const onMove = (ev) => {
+				const margin = 40;
+				const x = startOffset.x + ev.clientX - startX;
+				const y = startOffset.y + ev.clientY - startY;
+				// Keep at least `margin` px of the window inside the viewport.
+				this._pannerPopupOffset = {
+					x: Math.min(window.innerWidth - margin - baseLeft, Math.max(margin - rect.width - baseLeft, x)),
+					y: Math.min(window.innerHeight - margin - baseTop, Math.max(-baseTop, y))
+				};
+				apply();
+			};
+			const onUp = () => {
+				header.removeEventListener("pointermove", onMove);
+				header.removeEventListener("pointerup", onUp);
+				header.removeEventListener("pointercancel", onUp);
+			};
+			header.addEventListener("pointermove", onMove);
+			header.addEventListener("pointerup", onUp);
+			header.addEventListener("pointercancel", onUp);
+		});
 	}
 
 	// nodeId (the shared XML `id` StereoPannerNode<->PannerNode keeps across
