@@ -214,6 +214,19 @@ template.innerHTML = `
 	</div>
 `;
 
+// Positions a running <Snapshot> transition is currently drawing, keyed
+// "<internal node id>:positionX|Y|Z" -> number (see wa-mixer-view.js's
+// _triggerSnapshot): every view shows these instead of the (already final)
+// XML values for as long as they are set, which is how the 3D graphs follow
+// a snapshot's glide. null when nothing is animating. Per Hans (2026-10-09).
+let positionOverrides = null;
+const liveViews = new Set();
+
+export function setPannerPositionOverrides(map) {
+	positionOverrides = map && map.size ? map : null;
+	liveViews.forEach((view) => view._render());
+}
+
 export class WaPannerView extends HTMLElement {
 	constructor() {
 		super();
@@ -240,6 +253,7 @@ export class WaPannerView extends HTMLElement {
 	}
 
 	connectedCallback() {
+		liveViews.add(this);
 		xmlStore.addEventListener("change", this._onStoreChange);
 		this._canvas.addEventListener("pointerdown", this._onCanvasPointerDown);
 		this._slider.addEventListener("pointerdown", this._onSliderPointerDown);
@@ -257,6 +271,7 @@ export class WaPannerView extends HTMLElement {
 	}
 
 	disconnectedCallback() {
+		liveViews.delete(this);
 		xmlStore.removeEventListener("change", this._onStoreChange);
 		window.removeEventListener("pointermove", this._onPointerMove);
 		window.removeEventListener("pointerup", this._onPointerUp);
@@ -383,6 +398,16 @@ export class WaPannerView extends HTMLElement {
 			// -1 only when the attribute is absent/unparseable — a real 0 must stay 0.
 			z: Number.isFinite(parseFloat(node.attributes.positionZ)) ? parseFloat(node.attributes.positionZ) : -1
 		}));
+		if (positionOverrides) {
+			for (const p of this._panners) {
+				const ox = positionOverrides.get(`${p.node.id}:positionX`);
+				const oy = positionOverrides.get(`${p.node.id}:positionY`);
+				const oz = positionOverrides.get(`${p.node.id}:positionZ`);
+				if (ox !== undefined) p.x = ox;
+				if (oy !== undefined) p.y = oy;
+				if (oz !== undefined) p.z = oz;
+			}
+		}
 
 		this._groupKeyCache = this._groupKey(primary);
 		if (this._zoomRadius === undefined) {

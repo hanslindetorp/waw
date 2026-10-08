@@ -23,7 +23,7 @@ import {
 } from "../waxml-integration/gain-units.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
 import { wireMapClaim, wireInlineTextEdit } from "../utils/param-binding.js";
-import "./wa-panner-view.js";
+import { setPannerPositionOverrides } from "./wa-panner-view.js";
 
 // Analog-mixer-style channel-strip view for a <Mixer> element (styled after
 // an Allen & Heath-style hardware desk, per Hans). Every direct child of
@@ -2714,6 +2714,14 @@ export class WaMixerView extends HTMLElement {
 		const edits = [...byNode.values()];
 		if (!edits.length) return;
 
+		// Work out what glides and where from before the document changes,
+		// so the 3D graphs (which redraw on the XML edit itself) can already
+		// be told to keep showing the starting positions.
+		const plan = this._planSnapshotTransition(edits);
+		const positionStarts = new Map();
+		for (const tr of plan.tracks) if (/^position[XYZ]$/.test(tr.attr)) positionStarts.set(tr.key, tr.start);
+		setPannerPositionOverrides(positionStarts);
+
 		// The document gets its final values right away; this view is told
 		// not to rebuild itself for that edit (like a fader drag), so the
 		// controls stay where they are until the animation moves them.
@@ -2724,7 +2732,7 @@ export class WaMixerView extends HTMLElement {
 		} finally {
 			this._isLocalEdit = false;
 		}
-		this._runSnapshotTransition(edits, structural);
+		this._runSnapshotTransition(edits, structural, plan);
 	}
 
 	// transitionTime in seconds for `node`: its own, else the nearest
@@ -2753,9 +2761,9 @@ export class WaMixerView extends HTMLElement {
 		return /^-?\d*\.?\d+(e[+-]?\d+)?$/i.test(text) ? parseFloat(text) : NaN;
 	}
 
-	_runSnapshotTransition(edits, structural) {
+	// Which numeric attributes will glide, from where to where and how fast.
+	_planSnapshotTransition(edits) {
 		const prev = this._snapshotAnim;
-		if (prev) cancelAnimationFrame(prev.rafId);
 		// Values a still-running earlier transition had reached are where the
 		// new one starts from, not the (already final) XML value.
 		const reached = prev ? prev.current : new Map();
@@ -2771,6 +2779,12 @@ export class WaMixerView extends HTMLElement {
 				else this._visualSetters.get(key)?.(target); // no transition: the control jumps at once
 			}
 		}
+		return { tracks };
+	}
+
+	_runSnapshotTransition(edits, structural, { tracks }) {
+		const prev = this._snapshotAnim;
+		if (prev) cancelAnimationFrame(prev.rafId);
 		const current = new Map();
 		// The engine gets every target once, up front — an exponential glide
 		// of its own is waxml.js's job (stepping values into it here would
@@ -2787,11 +2801,15 @@ export class WaMixerView extends HTMLElement {
 		const step = () => {
 			const t = (performance.now() - t0) / 1000;
 			const done = t >= maxSeconds;
+			const positions = new Map(); // what the 3D graphs should draw this frame
 			for (const tr of tracks) {
 				const value = done ? tr.target : tr.target + (tr.start - tr.target) * Math.exp(-t / tr.tau);
 				current.set(tr.key, value);
 				this._visualSetters.get(tr.key)?.(value);
+				if (/^position[XYZ]$/.test(tr.attr)) positions.set(tr.key, value);
 			}
+			// Once done, the graphs go back to the document's (final) values.
+			setPannerPositionOverrides(done ? null : positions);
 			if (done) {
 				this._snapshotAnim = null;
 				// Back in step with the document (anything the animation
@@ -2805,6 +2823,7 @@ export class WaMixerView extends HTMLElement {
 		this._snapshotAnim = { rafId: 0, current };
 		if (!tracks.length) {
 			this._snapshotAnim = null;
+			setPannerPositionOverrides(null);
 			const mixerNow = this._activeMixerId ? ops.findNodeById(xmlStore.root, this._activeMixerId) : null;
 			if (mixerNow) this._render(mixerNow);
 			return;
