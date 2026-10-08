@@ -3175,12 +3175,11 @@ export class WaMixerView extends HTMLElement {
 				this._switchToStereoPanner(nodeNow);
 				return;
 			}
-			// Switching on 3D goes straight to the X/Y/Z pan window — per
-			// Hans (2026-10-08). (Turning it off again is still this same
-			// button; the grid thumbnail it leaves behind reopens the window.)
+			// Switching on 3D only swaps the pan knob for the grid thumbnail —
+			// no window opens (per Hans, 2026-10-09; it briefly did before).
+			// Turning it off again is still this same button; the thumbnail
+			// opens the window.
 			this._switchToPannerNode(nodeNow);
-			const pannerNow = ops.findNodeById(xmlStore.root, nodeNow.id);
-			if (pannerNow) this._openPannerPopup(pannerNow);
 		});
 		return btn;
 	}
@@ -3221,6 +3220,9 @@ export class WaMixerView extends HTMLElement {
 	_openPannerPopup(node, title = null, group = false) {
 		this._pannerPopupTitle.textContent = title || `3D panning — ${node.attributes.label || node.attributes.id || "PannerNode"}`;
 		this._pannerPopupBackdrop.hidden = false;
+		// A single channel's window is 50% bigger than the base size, the
+		// master's all channels' window twice as big (per Hans, 2026-10-09).
+		this._pannerPopupView.setScale(group ? 2 : 1.5);
 		this._pannerPopupView.setPrimaryNode(node.id, !group);
 	}
 

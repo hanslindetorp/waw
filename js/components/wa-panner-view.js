@@ -111,7 +111,7 @@ template.innerHTML = `
 			display: flex;
 			gap: 8px;
 			white-space: nowrap;
-			font: 10px monospace;
+			font: 10px monospace; /* text keeps its base size when the view is scaled up (per Hans, 2026-10-09) */
 			color: var(--waw-muted, #8a8a8a);
 		}
 		.rd-val {
@@ -121,25 +121,25 @@ template.innerHTML = `
 			display: flex;
 			flex-direction: column;
 			align-items: center;
-			width: ${SIDE_W}px;
+			width: calc(${SIDE_W}px * var(--s, 1));
 		}
 		.slider-max-label {
-			height: ${SQUARE_TOP}px;
+			height: calc(${SQUARE_TOP}px * var(--s, 1));
 			box-sizing: border-box;
 			display: flex;
 			align-items: flex-end;
-			padding-bottom: ${SQUARE_TOP - LABEL_H + 8}px; /* baseline level with the "N squares" readout above the square */
+			padding-bottom: calc(${SQUARE_TOP - LABEL_H + 8}px * var(--s, 1)); /* baseline level with the "N squares" readout above the square */
 			font: 10px monospace;
 			color: #8a8a8a;
 		}
 		.slider {
 			position: relative;
-			width: 14px;
-			height: ${SQUARE_SIDE}px;
+			width: calc(14px * var(--s, 1));
+			height: calc(${SQUARE_SIDE}px * var(--s, 1));
 			box-sizing: border-box; /* the 1px border must not make it taller than the square */
 			background: #16181a;
 			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 7px;
+			border-radius: calc(7px * var(--s, 1));
 			touch-action: none;
 			cursor: ns-resize;
 		}
@@ -154,11 +154,11 @@ template.innerHTML = `
 		}
 		.slider-thumb {
 			position: absolute;
-			left: -3px;
-			right: -3px;
-			height: 6px;
+			left: calc(-3px * var(--s, 1));
+			right: calc(-3px * var(--s, 1));
+			height: calc(6px * var(--s, 1));
 			background: var(--waw-accent, #4fa3ff);
-			border-radius: 3px;
+			border-radius: calc(3px * var(--s, 1));
 			box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 			transform: translateY(-50%);
 		}
@@ -174,13 +174,13 @@ template.innerHTML = `
 			gap: 0.3rem;
 		}
 		.zoom-btn {
-			width: 22px;
+			width: 22px; /* zoom buttons keep their base size when the view is scaled up (per Hans, 2026-10-09) */
 			height: 22px;
 			border-radius: 5px;
 			background: #24272c;
 			border: 1px solid var(--waw-border, #2f2f2f);
 			color: inherit;
-			font-size: 0.95rem;
+			font-size: 0.95rem; /* glyph keeps its base size; only the button box scales */
 			line-height: 1;
 			cursor: pointer;
 			padding: 0;
@@ -270,6 +270,19 @@ export class WaPannerView extends HTMLElement {
 		this._primaryNodeId = nodeId;
 		this._onlyPrimary = onlyPrimary;
 		this._render();
+	}
+
+	// Draws the whole view at `scale` times its natural size (the popups in
+	// wa-mixer-view.js use 1.5 and 2) — the canvas bitmap is made that much
+	// bigger and everything is still drawn in the same logical units, the
+	// CSS around it follows --s, and pointer positions are converted back to
+	// logical units. Per Hans (2026-10-09).
+	setScale(scale) {
+		this._scale = scale;
+		this.style.setProperty("--s", String(scale));
+		this._canvas.width = CANVAS_W * scale;
+		this._canvas.height = CANVAS_H * scale;
+		this._drawScene();
 	}
 
 	get _thumb() {
@@ -428,6 +441,8 @@ export class WaPannerView extends HTMLElement {
 	_drawScene() {
 		this._updateReadout();
 		const ctx = this._ctx;
+		const scale = this._scale || 1;
+		ctx.setTransform(scale, 0, 0, scale, 0, 0);
 		const w = CANVAS_W,
 			h = CANVAS_H;
 		ctx.clearRect(0, 0, w, h);
@@ -526,7 +541,9 @@ export class WaPannerView extends HTMLElement {
 			// at all in that case, not even a dimmed one.
 			if (!soloSource && !this._thumb) {
 				const label = this._channelName(p.node);
-				ctx.font = "9px monospace";
+				// Drawn under the view's scale transform, so counter it: the text
+				// stays 9px however big the view is.
+				ctx.font = `${9 / scale}px monospace`;
 				ctx.textAlign = "center";
 				ctx.fillStyle = isSelected ? "#cdd3d8" : "rgba(138,138,138,0.7)";
 				ctx.fillText(label, px, py + SPEAKER_BADGE_PX + 10);
@@ -565,8 +582,8 @@ export class WaPannerView extends HTMLElement {
 	// ── Speaker drag (positionX/positionZ) ──────────────────────────────
 	_onCanvasPointerDown(e) {
 		const rect = this._canvas.getBoundingClientRect();
-		const sx = this._canvas.width / rect.width;
-		const sy = this._canvas.height / rect.height;
+		const sx = CANVAS_W / rect.width;
+		const sy = CANVAS_H / rect.height;
 		const px = (e.clientX - rect.left) * sx;
 		const py = (e.clientY - rect.top) * sy;
 		const zoom = this._currentZoom();
@@ -628,8 +645,8 @@ export class WaPannerView extends HTMLElement {
 			return;
 		}
 		const rect = this._canvas.getBoundingClientRect();
-		const sx = this._canvas.width / rect.width;
-		const sy = this._canvas.height / rect.height;
+		const sx = CANVAS_W / rect.width;
+		const sy = CANVAS_H / rect.height;
 		const px = (e.clientX - rect.left) * sx;
 		const py = (e.clientY - rect.top) * sy;
 		const zoom = this._currentZoom();
