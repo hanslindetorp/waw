@@ -302,8 +302,18 @@ function labelFromPath(path) {
 	return String(path).split("/").pop().replace(/\.[^.]+$/, "");
 }
 
+// What a new element's controls are set to: written out as attributes (not
+// left unset) so a Snapshot picks every knob up, not only the ones that have
+// been turned. The values are the Web Audio defaults — the knobs' resting
+// positions — except a filter's frequency, which follows its type.
+const DEFAULT_Q = "1";
+const DEFAULT_PAN = "0";
+const MUTE_ON_GAIN = "1"; // what the ON button writes for "on"
+const defaultVolumeGain = () => formatGainAttribute("GainNode", 0);
+const defaultSendGain = () => formatGainAttribute("Send", 0);
+
 function defaultFilterAttributes(type) {
-	return { type, label: filterLabel(type), gain: "0", Q: "0", frequency: String(FILTER_TYPE_DEFAULT_FREQUENCY[type] ?? 300) };
+	return { type, label: filterLabel(type), gain: "0", Q: DEFAULT_Q, frequency: String(FILTER_TYPE_DEFAULT_FREQUENCY[type] ?? 300) };
 }
 
 const template = document.createElement("template");
@@ -2473,11 +2483,9 @@ export class WaMixerView extends HTMLElement {
 		this._ensureMixerDefaults(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
 		this._addMuteGain(chain); // always first in the signal chain when the strip is created, per Hans
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "highshelf", label: filterLabel("highshelf"), frequency: "4000" });
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "peaking", label: filterLabel("peaking"), frequency: "400" });
-		xmlStore.insertNewChild(chain.id, "BiquadFilterNode", { type: "lowshelf", label: filterLabel("lowshelf"), frequency: "150" });
-		xmlStore.insertNewChild(chain.id, "StereoPannerNode", { label: PAN_LABEL });
-		xmlStore.insertNewChild(chain.id, "GainNode", { label: VOLUME_LABEL });
+		["highshelf", "peaking", "lowshelf"].forEach((type) => xmlStore.insertNewChild(chain.id, "BiquadFilterNode", defaultFilterAttributes(type)));
+		xmlStore.insertNewChild(chain.id, "StereoPannerNode", { label: PAN_LABEL, pan: DEFAULT_PAN });
+		xmlStore.insertNewChild(chain.id, "GainNode", { label: VOLUME_LABEL, gain: defaultVolumeGain() });
 	}
 
 	// The channel's mute GainNode, identified from here on by its id (the
@@ -2485,7 +2493,7 @@ export class WaMixerView extends HTMLElement {
 	// _classifyChain.
 	_addMuteGain(chain) {
 		const chainId = chain.attributes.id;
-		xmlStore.insertNewChild(chain.id, "GainNode", chainId ? { id: `${chainId}${MUTE_ID_SUFFIX}`, label: MUTE_LABEL } : { label: MUTE_LABEL });
+		xmlStore.insertNewChild(chain.id, "GainNode", chainId ? { id: `${chainId}${MUTE_ID_SUFFIX}`, label: MUTE_LABEL, gain: MUTE_ON_GAIN } : { label: MUTE_LABEL, gain: MUTE_ON_GAIN });
 	}
 
 	_addChannelPanVolVU(mixerNode) {
@@ -2494,8 +2502,8 @@ export class WaMixerView extends HTMLElement {
 		this._ensureMixerDefaults(mixerNow);
 		const chain = xmlStore.insertNewChild(mixerNow.id, "Chain", { id: this._nextChannelId(mixerNow) });
 		this._addMuteGain(chain); // same as Full Channel Strip
-		xmlStore.insertNewChild(chain.id, "StereoPannerNode", { label: PAN_LABEL });
-		xmlStore.insertNewChild(chain.id, "GainNode", { label: VOLUME_LABEL });
+		xmlStore.insertNewChild(chain.id, "StereoPannerNode", { label: PAN_LABEL, pan: DEFAULT_PAN });
+		xmlStore.insertNewChild(chain.id, "GainNode", { label: VOLUME_LABEL, gain: defaultVolumeGain() });
 	}
 
 	_addChannelVU(mixerNode) {
@@ -3985,7 +3993,7 @@ export class WaMixerView extends HTMLElement {
 			() => {
 				knob.title = "Q";
 			},
-			0
+			Number(DEFAULT_Q)
 		);
 
 		return wrap;
@@ -4479,7 +4487,7 @@ export class WaMixerView extends HTMLElement {
 			const chainNow = ops.findNodeById(xmlStore.root, chainNode.id);
 			if (!chainNow) return;
 			const rolesNow = this._classifyChain(chainNow);
-			xmlStore.insertNewChild(chainNow.id, "Send", { label: SEND_LABEL }, this._insertPositionAfterEq(chainNow, rolesNow));
+			xmlStore.insertNewChild(chainNow.id, "Send", { label: SEND_LABEL, gain: defaultSendGain() }, this._insertPositionAfterEq(chainNow, rolesNow));
 		});
 		return slot;
 	}
