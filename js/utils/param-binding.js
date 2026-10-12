@@ -1,4 +1,5 @@
 import { varMapMode } from "../state/var-map-mode.js";
+import { inputMapMode } from "../state/input-map-mode.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { isVariableControlled, variableNameFromValue } from "../xml-editor/variable-references.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
@@ -105,12 +106,23 @@ export function wireMapClaim(el, { getNode, attrName }) {
 	const isNumericTarget = isNumericAttributeSchema(attrSchema);
 	if (isNumericTarget) el.classList.add("map-target-armed");
 	el.addEventListener("pointerdown", (e) => {
-		if (!varMapMode.armed || !isNumericTarget) return;
-		e.preventDefault();
-		e.stopPropagation();
-		e.stopImmediatePropagation();
-		commitRaw(getNode, attrName, `$${varMapMode.varName}`);
-		varMapMode.disarm();
+		if (!isNumericTarget) return;
+		if (varMapMode.armed) {
+			e.preventDefault();
+			e.stopPropagation();
+			e.stopImmediatePropagation();
+			commitRaw(getNode, attrName, `$${varMapMode.varName}`);
+			varMapMode.disarm();
+		} else if (inputMapMode.armed) {
+			// An INPUT entry being mapped: this parameter becomes the target of
+			// a brand new <Var> (see input-map-mode.js's claimAttribute).
+			const nodeNow = getNode();
+			if (!nodeNow) return;
+			e.preventDefault();
+			e.stopPropagation();
+			e.stopImmediatePropagation();
+			inputMapMode.claimAttribute(nodeNow.id, attrName);
+		}
 	});
 }
 

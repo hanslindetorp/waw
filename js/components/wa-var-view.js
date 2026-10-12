@@ -1,4 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
+import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { computeMapPoints, mapoutPointPositions, applyConvertFn, computeConvertPoints, validateConvertExpression, mapStage1 } from "../xml-editor/var-mapper-math.js";
 import { formatValue } from "../utils/number-format.js";
@@ -581,6 +582,7 @@ export class WaVarView extends HTMLElement {
 		this._selectedPointIndex = null; // index into mapin/mapout — see Curve node's "Per point" mode
 
 		this._onStoreChange = this._onStoreChange.bind(this);
+		this._onProjectReset = () => this._axisOverrides.clear();
 		this._onMapPointerDown = this._onMapPointerDown.bind(this);
 		this._onMapPointerMove = this._onMapPointerMove.bind(this);
 		this._onMapPointerUp = this._onMapPointerUp.bind(this);
@@ -592,6 +594,7 @@ export class WaVarView extends HTMLElement {
 
 	connectedCallback() {
 		xmlStore.addEventListener("change", this._onStoreChange);
+		xmlStore.addEventListener("project-reset", this._onProjectReset);
 		this._mapCanvas.addEventListener("mousedown", this._onMapPointerDown);
 		this._mapCanvas.addEventListener("dblclick", this._onMapDblClick);
 		window.addEventListener("mousemove", this._onMapPointerMove);
@@ -627,6 +630,7 @@ export class WaVarView extends HTMLElement {
 	disconnectedCallback() {
 		this._disposed = true;
 		xmlStore.removeEventListener("change", this._onStoreChange);
+		xmlStore.removeEventListener("project-reset", this._onProjectReset);
 		window.removeEventListener("mousemove", this._onMapPointerMove);
 		window.removeEventListener("mouseup", this._onMapPointerUp);
 		if (this._rafId) cancelAnimationFrame(this._rafId);
@@ -666,8 +670,17 @@ export class WaVarView extends HTMLElement {
 		return node.attributes.id || node.id;
 	}
 
+	// Only <Var>s that still exist are saved: an override left behind by a
+	// deleted Var would otherwise come back to life under the same id on a
+	// later, different Var (a graph frame from nowhere).
 	getState() {
-		return { axisOverrides: Object.fromEntries(this._axisOverrides) };
+		const live = new Set();
+		const walk = (n) => {
+			if (n.tagName === "Var") live.add(this._axisOverrideKey(n));
+			n.children.forEach(walk);
+		};
+		if (xmlStore.root) walk(xmlStore.root);
+		return { axisOverrides: Object.fromEntries([...this._axisOverrides].filter(([key]) => live.has(key))) };
 	}
 
 	applyState(state) {
@@ -685,7 +698,15 @@ export class WaVarView extends HTMLElement {
 
 	// wa-preview.js only shows us for a <Var> selection — bail out otherwise
 	// (same shape as wa-wam-view.js's own _onStoreChange).
-	_onStoreChange() {
+	_onStoreChange(e) {
+		// A newly created <Var> always starts from the default frame (0..1 on
+		// both axes, or the extremes of whatever mapin/mapout it was created
+		// with) — never from a frame left over under the same id.
+		const newId = e?.detail?.newNodeId;
+		if (newId) {
+			const created = ops.findNodeById(xmlStore.root, newId);
+			if (created?.tagName === "Var") this._axisOverrides.delete(this._axisOverrideKey(created));
+		}
 		const node = xmlStore.getSelectedNode();
 		if (!node || node.tagName !== "Var") return;
 		if (node.id !== this._activeNodeId) {

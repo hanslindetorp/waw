@@ -5,6 +5,7 @@
 // XmlNode = { id, tagName, attributes: {name: value}, children: XmlNode[], textContent, parent: id|null }
 
 import { findSrcAttribute } from "./src-attribute.js";
+import { renameVariableInValue } from "./variable-references.js";
 
 let nodeIdCounter = 0;
 
@@ -387,6 +388,25 @@ export function insertChild(root, parentId, child, index) {
 export function updateNodeAttributes(root, nodeId, attributes) {
 	if (root.id === nodeId) return { ...root, attributes };
 	return { ...root, children: root.children.map((c) => updateNodeAttributes(c, nodeId, attributes)) };
+}
+
+// Rewrites every attribute value that references the <Var> `oldName` to
+// `newName` instead (see renameVariableInValue) — used when a <Var> is given
+// a new `name`, so everything that was driven by it stays connected. A
+// <Var>'s own `name` attribute is not a reference and is left alone.
+export function renameVarReferences(root, oldName, newName) {
+	let changed = false;
+	const attributes = {};
+	for (const [key, value] of Object.entries(root.attributes)) {
+		const next = root.tagName === "Var" && key === "name" ? value : renameVariableInValue(value, oldName, newName);
+		if (next !== value) changed = true;
+		attributes[key] = next;
+	}
+	return {
+		...root,
+		attributes: changed ? attributes : root.attributes,
+		children: root.children.map((c) => renameVarReferences(c, oldName, newName))
+	};
 }
 
 // Rewrites every node's src/source attribute (schema-aware, via the same

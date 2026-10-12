@@ -37,3 +37,16 @@ export function variablePropFromValue(value) {
 	const dot = full.indexOf(".");
 	return dot === -1 ? "value" : full.slice(dot + 1) || "value";
 }
+
+// Rewrites every reference to the <Var> `oldName` in one attribute value to
+// `newName` — "$old", "${old}" and "var(old)", where a "$old" only counts when
+// the name ends there (so "$old2" is another variable, while "$old.speed" is
+// still this one's property). Returns the value untouched when nothing matches.
+export function renameVariableInValue(value, oldName, newName) {
+	if (typeof value !== "string" || !value.toLowerCase().includes(oldName.toLowerCase())) return value;
+	const esc = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return value
+		.replace(new RegExp(`\\$\\{${esc}\\}`, "gi"), () => `\${${newName}}`)
+		.replace(new RegExp(`var\\(${esc}\\)`, "gi"), () => `var(${newName})`)
+		.replace(new RegExp(`\\$${esc}(?![a-z0-9:_])`, "gi"), () => `$${newName}`);
+}

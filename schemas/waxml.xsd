@@ -1038,6 +1038,15 @@
     <xs:restriction base="xs:string"/>
   </xs:simpleType>
 
+  <xs:simpleType name="varName">
+    <xs:annotation>
+      <xs:documentation>The name of a &lt;Var&gt;, the identifier other attributes refer to it by ($name). Only letters, digits and underscore: no spaces or other characters, per Hans (2026-10-09).</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[a-zA-Z0-9_]+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <xs:simpleType name="src">
     <xs:annotation>
       <xs:documentation></xs:documentation>
@@ -1593,7 +1602,7 @@
       <xs:element name="Var">
         <xs:complexType>
           <xs:attributeGroup ref="commonNodeAttributesNoInput"/>
-          <xs:attribute name="name" type="name"/>
+          <xs:attribute name="name" type="varName"/>
           <xs:attribute name="mapin" type="mapin"/>
           <xs:attribute name="mapout" type="mapout"/>
           <xs:attribute name="default" type="default"/>

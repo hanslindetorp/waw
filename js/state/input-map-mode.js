@@ -1,3 +1,5 @@
+import { createVarForAttribute } from "../xml-editor/input-mapping.js";
+
 // Global "armed" state for mapping an INPUT (webcam) entry's metric onto a
 // root-level <Var> — the mirror image of var-map-mode.js's own Var-to-
 // attribute mapping, but the direction is reversed: wa-webcam-input.js arms
@@ -25,6 +27,11 @@ class InputMapMode extends EventTarget {
 		// comment for why a global, inherited CSS property reaches every
 		// component's markup for free.
 		document.documentElement.style.cursor = "crosshair";
+		// Any numeric parameter (an Inspector row, a Chain/Mixer knob) is a
+		// target too now — they blink through the same inherited custom
+		// property var-map-mode.js uses (see its arm()); per Hans
+		// (2026-10-09), INPUT mapping no longer needs a root <Var> first.
+		document.documentElement.style.setProperty("--waw-map-armed-anim", "target-armed-blink");
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 
@@ -32,6 +39,7 @@ class InputMapMode extends EventTarget {
 		if (!this._armed) return;
 		this._armed = false;
 		document.documentElement.style.cursor = "";
+		document.documentElement.style.setProperty("--waw-map-armed-anim", "none");
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 
@@ -42,6 +50,22 @@ class InputMapMode extends EventTarget {
 		if (!this._armed || !varName) return;
 		this.dispatchEvent(new CustomEvent("pick", { detail: { varName } }));
 		this.disarm();
+	}
+
+	// Called by a claim site (param-binding.js's wireMapClaim, the Inspector's
+	// attribute rows) when a numeric attribute is clicked while armed: creates
+	// the <Var> that will drive it (see input-mapping.js) and reports it as a
+	// "pick" with `direct: true` — the entry then pushes its values straight
+	// into the hidden "input_<name>" variable the Var reads (see
+	// input-mapping.js), rather than through a root <Var> knob. Returns the
+	// Var's name, or null when nothing was created.
+	claimAttribute(nodeId, attrName) {
+		if (!this._armed) return null;
+		const created = createVarForAttribute(nodeId, attrName);
+		if (!created) return null;
+		this.dispatchEvent(new CustomEvent("pick", { detail: { ...created, direct: true } }));
+		this.disarm();
+		return created.varName;
 	}
 }
 
@@ -57,6 +81,10 @@ document.addEventListener("keydown", (e) => {
 // root Var knob claiming it (see wa-var-knobs.js) means it landed somewhere
 // with no "map this INPUT entry here" meaning, so the arming ends. Same
 // pattern as var-map-mode.js's own identical listener.
-document.addEventListener("click", () => {
-	if (inputMapMode.armed) inputMapMode.disarm();
+document.addEventListener("click", (e) => {
+	if (!inputMapMode.armed) return;
+	// Picking elements in the XML tree stays possible while armed, so the
+	// parameter to map can be brought up in the Inspector first.
+	if (e.composedPath().some((el) => el.tagName === "WA-XML-TREE")) return;
+	inputMapMode.disarm();
 });

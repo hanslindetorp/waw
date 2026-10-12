@@ -1,7 +1,6 @@
 import { playerStore } from "../waxml-integration/player-store.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { inputMapMode } from "../state/input-map-mode.js";
-import { showNotice } from "./wa-notice-dialog.js";
 
 // The INPUT panel's "Web Camera" section — MediaPipe hand/pose/face tracking
 // that lets Hans click a landmark (or several) on the live webcam feed and
@@ -621,6 +620,7 @@ export class WaWebcamInput extends HTMLElement {
 		this._activeSelection = new Set(); // clicked-but-not-yet-saved labels
 		this._allLandmarks = [];
 		this._landmarkMap = new Map();
+		this._onVarLinkChanged = (e) => this._followVarLink(e.detail);
 		this._savedEntries = []; // { id, type, labelMetas, lastValues, mappings, row, valueEls, mapEls }
 		this._savedEntryCounter = 0;
 		this._liveDisplayType = null;
@@ -631,6 +631,7 @@ export class WaWebcamInput extends HTMLElement {
 	}
 
 	connectedCallback() {
+		xmlStore.addEventListener("var-link-changed", this._onVarLinkChanged);
 		this.shadowRoot.querySelectorAll(".model-btn").forEach((btn) => {
 			btn.addEventListener("click", () => {
 				const model = btn.dataset.model;
@@ -660,7 +661,43 @@ export class WaWebcamInput extends HTMLElement {
 	}
 
 	disconnectedCallback() {
+		xmlStore.removeEventListener("var-link-changed", this._onVarLinkChanged);
 		this._stop();
+	}
+
+	// A <Var>'s `name` and/or `value` changed (see xml-store.js's
+	// _varLinkChange): every mapping that pointed at it follows, so the link
+	// keeps working. A mapping made straight onto a parameter also keeps
+	// feeding the variable the Var now reads from (its `value`).
+	_followVarLink({ oldName, newName, oldValue, newValue }) {
+		// A Var's `value` refers to the hidden variable as "$input_var1"; the
+		// mapping stores the bare name the entry actually sets.
+		const bare = (v) => (typeof v === "string" ? v.trim().replace(/^\$/, "") : "");
+		const oldInput = bare(oldValue);
+		const newInput = bare(newValue);
+		const validInput = /^[A-Za-z0-9_]+$/.test(newInput);
+		let changed = false;
+		this._savedEntries.forEach((entry) => {
+			Object.entries(entry.mappings).forEach(([key, list]) => {
+				let hit = false;
+				list.forEach((mapping) => {
+					if (mapping.varName !== oldName) return;
+					if (newName !== oldName) {
+						mapping.varName = newName;
+						hit = true;
+					}
+					if (mapping.direct && oldInput !== newInput && mapping.inputVar === oldInput && validInput) {
+						mapping.inputVar = newInput;
+						hit = true;
+					}
+				});
+				if (hit) {
+					changed = true;
+					if (entry.mapEls[key]) this._refreshMapControl(entry.mapEls[key], entry, key);
+				}
+			});
+		});
+		if (changed) this._dispatchStateChange();
 	}
 
 	// Public wrapper so outside code (workstation-state.js's
@@ -1149,7 +1186,14 @@ export class WaWebcamInput extends HTMLElement {
 					return [
 						key,
 						list.map((one) =>
-							typeof one === "string" ? { varName: one, min: 0, max: 1 } : { varName: one.varName, min: one.min ?? 0, max: one.max ?? 1 }
+							typeof one === "string"
+								? { varName: one, min: 0, max: 1 }
+								: {
+										varName: one.varName,
+										min: one.min ?? 0,
+										max: one.max ?? 1,
+										...(one.direct ? { direct: true, inputVar: one.inputVar ?? `input_${one.varName}` } : {})
+									}
 						)
 					];
 				})
@@ -1323,11 +1367,10 @@ export class WaWebcamInput extends HTMLElement {
 	// (per Hans: "Om det inte finns någon <Var> i rooten ska det komma upp
 	// en instruktion om att man behöver skapa en").
 	_mapKey(entry, key, anchorEl, index) {
-		const hasRootVar = xmlStore.root?.children.some((c) => c.tagName === "Var" && (c.attributes.name || c.attributes.id));
-		if (!hasRootVar) {
-			showNotice("Map... needs at least one root-level <Var> to target. Add one first — click the + next to Variables in the bottom bar.");
-			return;
-		}
+		// Armed for two kinds of target (per Hans, 2026-10-09): a numeric
+		// parameter anywhere (Inspector row, Chain/Mixer knob) gets a brand
+		// new <Var> made for it — see input-mapping.js — and a root <Var>
+		// knob maps onto that existing Var as before.
 		if (inputMapMode.armed) inputMapMode.disarm(); // re-arming for a different anchor — see the "change" cleanup below
 		inputMapMode.arm();
 		const visualEl = anchorEl.closest(".sv-mapped") || anchorEl;
@@ -1336,12 +1379,19 @@ export class WaWebcamInput extends HTMLElement {
 			if (!entry.mappings[key]) entry.mappings[key] = [];
 			const list = entry.mappings[key];
 			const mappingIndex = index === null || index === undefined ? list.length : index;
+			// `direct`: the Var was created for an attribute (see
+			// input-mapping.js). It reads the hidden variable `inputVar`
+			// ("input_<name>"), which this entry sets with waxml.set() — no root
+			// Var gets a "value" reference written onto it.
+			const direct = !!e.detail.direct;
+			const directFields = direct ? { direct: true, inputVar: e.detail.inputVar } : {};
 			if (index === null || index === undefined) {
-				list.push({ varName: e.detail.varName, min: 0, max: 1 });
+				list.push({ varName: e.detail.varName, min: 0, max: 1, ...directFields });
 			} else {
-				list[index] = { ...list[index], varName: e.detail.varName };
+				const { direct: _d, inputVar: _i, ...rest } = list[index];
+				list[index] = { ...rest, varName: e.detail.varName, ...directFields };
 			}
-			this._writeVarReference(e.detail.varName, this._syntheticVarName(entry, key, mappingIndex));
+			if (!direct) this._writeVarReference(e.detail.varName, this._syntheticVarName(entry, key, mappingIndex));
 			this._refreshMapControl(entry.mapEls[key], entry, key);
 			this._dispatchStateChange();
 		};
@@ -1457,7 +1507,10 @@ export class WaWebcamInput extends HTMLElement {
 				// _writeVarReference) is what actually references this name;
 				// wa-var-knobs.js's own pushFromTarget polls it from there. Per
 				// Hans (2026-10-05).
-				playerStore.setVariable(this._syntheticVarName(entry, key, index), normalized);
+				// A mapping made straight onto a parameter (see input-mapping.js)
+				// sets the hidden "input_<name>" variable its <Var> reads, wherever
+				// in the document that Var sits.
+				playerStore.setVariable(mapping.direct ? mapping.inputVar : this._syntheticVarName(entry, key, index), normalized);
 			});
 		}
 	}

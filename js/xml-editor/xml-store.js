@@ -34,6 +34,10 @@ class XmlStore extends EventTarget {
 	// collide with ones already used earlier in the same document/session.
 	resetIdCounters() {
 		this._idCounters = new Map();
+		// Views holding per-element interface state keyed by element id (e.g.
+		// wa-var-view.js's graph frames) drop it here — the same id in another
+		// project is a different element.
+		this.dispatchEvent(new CustomEvent("project-reset"));
 	}
 
 	// --- schema ---
@@ -547,10 +551,45 @@ class XmlStore extends EventTarget {
 		if (!this.root) return;
 		const node = ops.findNodeById(this.root, nodeId);
 		attributes = this._applyActiveFadeTimeWorkaround(node, attributes);
-		const structural = this._attributeChangeNeedsRebuild(node, attributes);
+		const link = this._varLinkChange(node, attributes);
+		if (link) attributes = link.attributes;
+		const structural = !!link || this._attributeChangeNeedsRebuild(node, attributes);
 		const liveNudge = !structural ? this._buildLiveNudge(node, attributes) : null;
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
+		if (link?.renamed) this.root = ops.renameVarReferences(this.root, link.detail.oldName, link.detail.newName);
 		this._syncCode(structural, liveNudge ? { liveNudge } : {});
+		if (link) this.dispatchEvent(new CustomEvent("var-link-changed", { detail: link.detail }));
+	}
+
+	// A <Var>'s `name` and/or `value` changing — the two things the rest of
+	// the app links to it by. Per Hans (2026-10-09), both must keep working:
+	//  - a new `name`: every attribute elsewhere that referred to "$old" is
+	//    pointed at the new name in the same edit, and a `value` that was the
+	//    hidden input variable made for that name ("$input_old", see
+	//    input-mapping.js) follows to "$input_new";
+	//  - a new `value`: reported as well, so an INPUT mapping that feeds the
+	//    old one now feeds the new one.
+	// Returns { attributes (the new set, `value` adjusted), renamed, detail }
+	// or null when neither changed. `detail` ({ oldName, newName, oldValue,
+	// newValue }) goes out as the "var-link-changed" event.
+	_varLinkChange(node, attributes) {
+		if (!node || node.tagName !== "Var") return null;
+		const oldName = node.attributes.name;
+		const newName = attributes.name;
+		const renamed = !!oldName && !!newName && oldName !== newName;
+		let next = attributes;
+		const oldValue = node.attributes.value;
+		if (renamed && oldValue === `$input_${oldName}` && attributes.value === oldValue) {
+			next = { ...attributes, value: `$input_${newName}` };
+		}
+		const newValue = next.value;
+		const valueChanged = oldValue !== newValue;
+		if (!renamed && !valueChanged) return null;
+		return {
+			attributes: next,
+			renamed,
+			detail: { oldName, newName: renamed ? newName : oldName, oldValue, newValue }
+		};
 	}
 
 	// Several nodes' attribute edits as ONE edit (one sync, one undo step) —
@@ -563,14 +602,22 @@ class XmlStore extends EventTarget {
 	updateManyAttributes(changes) {
 		if (!this.root || !changes.length) return false;
 		let structural = false;
+		const links = [];
 		for (const { nodeId, attributes } of changes) {
 			const node = ops.findNodeById(this.root, nodeId);
 			if (!node) continue;
-			const attrs = this._applyActiveFadeTimeWorkaround(node, attributes);
-			if (this._attributeChangeNeedsRebuild(node, attrs)) structural = true;
+			let attrs = this._applyActiveFadeTimeWorkaround(node, attributes);
+			const link = this._varLinkChange(node, attrs);
+			if (link) attrs = link.attributes;
+			if (link || this._attributeChangeNeedsRebuild(node, attrs)) structural = true;
 			this.root = ops.updateNodeAttributes(this.root, nodeId, attrs);
+			if (link) {
+				if (link.renamed) this.root = ops.renameVarReferences(this.root, link.detail.oldName, link.detail.newName);
+				links.push(link.detail);
+			}
 		}
 		this._syncCode(structural);
+		links.forEach((detail) => this.dispatchEvent(new CustomEvent("var-link-changed", { detail })));
 		return structural;
 	}
 

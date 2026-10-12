@@ -7,6 +7,7 @@ import { isInheritable, resolveInheritedAttribute } from "../xml-editor/attribut
 import { openIoPicker } from "./wa-io-picker.js";
 import { openVoicePicker } from "./wa-voice-picker.js";
 import { varMapMode } from "../state/var-map-mode.js";
+import { inputMapMode } from "../state/input-map-mode.js";
 import { isNumericAttributeSchema } from "../xml-editor/schema-parser.js";
 
 // Showing/editing an element's own tag name here is turned off per Hans
@@ -636,13 +637,18 @@ export class WaNodeInspector extends HTMLElement {
 		// directly, no popup, same as before that feature briefly existed on
 		// this path too.
 		row.addEventListener("click", (e) => {
-			if (!varMapMode.armed || !isNumericTarget) return;
+			if (!isNumericTarget || !(varMapMode.armed || inputMapMode.armed)) return;
 			e.preventDefault();
 			e.stopPropagation();
 			const current = xmlStore.getSelectedNode();
 			if (!current || current.id !== node.id) return;
-			xmlStore.updateAttributes(node.id, { ...current.attributes, [attrName]: `$${varMapMode.varName}` });
-			varMapMode.disarm();
+			if (varMapMode.armed) {
+				xmlStore.updateAttributes(node.id, { ...current.attributes, [attrName]: `$${varMapMode.varName}` });
+				varMapMode.disarm();
+			} else {
+				// An INPUT entry being mapped: a new <Var> drives this attribute.
+				inputMapMode.claimAttribute(node.id, attrName);
+			}
 		});
 
 		const nameSpan = document.createElement("span");

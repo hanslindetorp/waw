@@ -14,6 +14,7 @@ import {
 import { isEditableContext } from "../project/edit-history.js";
 import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
+import { computeMapPoints } from "../xml-editor/var-mapper-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
 import { buildParamChip, isParamVarControlled } from "../utils/param-binding.js";
@@ -92,6 +93,15 @@ const ANALYSER_DEFAULT_MIN_DB = -60;
 const CARD_INTERACTIVE_SELECTOR =
 	"canvas, .knob, select, input, textarea, button, a, wa-panner-view, .param-chip, .param-chip-input, .mode-toggle, [contenteditable]";
 const CHAIN_CARD_DRAG_TYPE = "application/x-waw-chain-card";
+// A <Var> card shown beside the element it drives (see _buildVarCard): every
+// card is exactly this tall, so the arrows joining them to the element can be
+// laid out from these numbers alone. VAR_ARROW_Y is where, from a card's top,
+// its arrow leaves — and where the arrow arrives at the element.
+const VAR_CARD_W = 186;
+const VAR_CARD_H = 124;
+const VAR_CARD_GAP = 10;
+const VAR_GUTTER_W = 34;
+const VAR_ARROW_Y = 26;
 const GAIN_FADER_TRACK_HEIGHT = 130;
 const GAIN_FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range, same feel as wa-mixer-view.js
@@ -270,7 +280,11 @@ template.innerHTML = `
 			box-sizing: border-box;
 			display: flex;
 			flex-direction: column;
-			align-items: center;
+			align-items: flex-start;
+		}
+		.chain-viewport > * {
+			margin-left: auto;
+			margin-right: auto;
 		}
 		.centered {
 			color: var(--waw-muted, #8a8a8a);
@@ -401,9 +415,131 @@ template.innerHTML = `
 			padding: 0.05rem 0;
 			word-break: break-all;
 		}
-		.connector-arrow-wrap {
+		/* One element of the chain and the arrow leading on from it. The
+		   arrow stretches (flex: 1) when <Var> cards beside the element make
+		   the row taller than the element itself. */
+		.chain-stack.has-vars {
+			width: auto;
+			max-width: none;
+		}
+		.chain-row {
+			display: flex;
+			width: 100%;
+		}
+		.chain-stack.has-vars .chain-row {
+			width: auto;
+		}
+		.row-main {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			width: 260px;
 			flex: 0 0 auto;
-			line-height: 0;
+		}
+		.chain-row:not(.has-var-slot) .row-main,
+		.chain-stack:not(.has-vars) .row-main {
+			width: 100%;
+		}
+		.connector {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			flex: 1 0 26px;
+			min-height: 26px;
+		}
+		.connector-line {
+			flex: 1 1 auto;
+			width: 2px;
+			background: #4fa3ff;
+		}
+		.connector-head {
+			flex: 0 0 auto;
+			width: 0;
+			height: 0;
+			border-left: 6px solid transparent;
+			border-right: 6px solid transparent;
+			border-top: 10px solid #4fa3ff;
+		}
+		.var-slot {
+			display: flex;
+			flex: 0 0 auto;
+			width: ${VAR_CARD_W + VAR_GUTTER_W}px;
+		}
+		.var-col {
+			display: flex;
+			flex-direction: column;
+			gap: ${VAR_CARD_GAP}px;
+			width: ${VAR_CARD_W}px;
+			flex: 0 0 auto;
+		}
+		.var-gutter {
+			position: relative;
+			width: ${VAR_GUTTER_W}px;
+			flex: 0 0 auto;
+		}
+		.var-gutter > div {
+			position: absolute;
+			background: #4fa3ff;
+		}
+		.var-gutter .arrow-head {
+			background: none;
+			width: 0;
+			height: 0;
+			border-top: 6px solid transparent;
+			border-bottom: 6px solid transparent;
+			border-left: 10px solid #4fa3ff;
+		}
+		.var-card {
+			height: ${VAR_CARD_H}px;
+			box-sizing: border-box;
+			background: #1a1c1f;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 6px;
+			padding: 0.4rem 0.5rem;
+			cursor: pointer;
+			display: flex;
+			flex-direction: column;
+			gap: 0.25rem;
+			overflow: hidden;
+		}
+		.var-card:hover {
+			border-color: var(--waw-accent, #4fa3ff);
+		}
+		.var-card-head {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			gap: 0.3rem;
+			height: ${VAR_ARROW_Y - 8}px;
+		}
+		.var-card-title {
+			font-size: 0.7rem;
+			font-weight: 600;
+			color: #cdd3d8;
+		}
+		.var-card-name {
+			font-size: 0.62rem;
+			color: var(--waw-accent, #4fa3ff);
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.var-card canvas {
+			width: 100%;
+			height: 60px;
+			background: #101010;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 3px;
+			display: block;
+		}
+		.var-card-foot {
+			font-size: 0.56rem;
+			color: var(--waw-muted, #8a8a8a);
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
 		}
 
 		/* Knob widget — same visual as wa-mixer-view.js's filter/gain knobs
@@ -841,18 +977,34 @@ export class WaChainView extends HTMLElement {
 				return;
 			}
 
-			this._stackEl.appendChild(this._buildArrow());
 			this._renderedChildIds = new Set(resolved.children.map((c) => c.id));
-			resolved.children.forEach((child, i) => {
-				if (i > 0) this._stackEl.appendChild(this._buildArrow());
+
+			// A <Var> that a card of this list refers to ($name in one of its
+			// attributes) is shown beside that card instead of as a card of its
+			// own; one nothing here refers to stays in the list.
+			const allVars = this._collectVars();
+			const varsFor = new Map();
+			const claimed = new Set();
+			resolved.children.forEach((child) => {
+				if (child.tagName === "Var") return;
+				const vars = this._varsReferencedBy(child, resolved.children, allVars);
+				if (!vars.length) return;
+				varsFor.set(child.id, vars);
+				vars.forEach((v) => claimed.add(v.id));
+			});
+			const shown = resolved.children.filter((c) => !claimed.has(c.id));
+			const hasVars = varsFor.size > 0;
+			this._stackEl.classList.toggle("has-vars", hasVars);
+
+			this._stackEl.appendChild(this._buildRow(null, this._buildConnector(false), hasVars));
+			shown.forEach((child) => {
 				const builder = NODE_BUILDERS[child.tagName];
 				const card = builder ? builder(this, child) : this._buildGenericCard(child);
 				if (child.id === resolved.highlightId || xmlStore.selectedNodeIds.has(child.id)) card.classList.add("selected");
 				this._wireCardSelect(card, child);
 				if (resolved.chainId) this._wireCardReorder(card, child, resolved.chainId);
-				this._stackEl.appendChild(card);
+				this._stackEl.appendChild(this._buildRow(varsFor.get(child.id) || null, card, hasVars, this._buildConnector(true)));
 			});
-			this._stackEl.appendChild(this._buildArrow());
 		} finally {
 			this._rendering = false;
 			if (this._renderQueued) {
@@ -945,14 +1097,180 @@ export class WaChainView extends HTMLElement {
 		ids.forEach((id) => xmlStore.removeNode(id));
 	}
 
-	_buildArrow() {
+	// The blue arrow between elements. `grows`: it takes up whatever height
+	// the row has beyond its element (taller when <Var> cards sit beside it).
+	_buildConnector(grows) {
 		const el = document.createElement("div");
-		el.className = "connector-arrow-wrap";
-		el.innerHTML = `<svg viewBox="0 0 24 26" width="24" height="26">
-			<line x1="12" y1="0" x2="12" y2="18" stroke="#4fa3ff" stroke-width="2"/>
-			<path d="M12,26 L6,16 L18,16 Z" fill="#4fa3ff"/>
-		</svg>`;
+		el.className = "connector";
+		if (!grows) el.style.flex = "0 0 26px";
+		el.innerHTML = `<div class="connector-line"></div><div class="connector-head"></div>`;
 		return el;
+	}
+
+	// One step of the chain: [<Var> cards + the arrows into the element] [the
+	// element and its onward arrow]. `vars` null means no <Var> for this
+	// element; `hasVars` keeps the elements of the other rows in the same
+	// column. The first row (arrow only) passes content as the main part.
+	_buildRow(vars, content, hasVars, connector = null) {
+		const row = document.createElement("div");
+		row.className = "chain-row";
+		if (hasVars) {
+			row.classList.add("has-var-slot");
+			const slot = document.createElement("div");
+			slot.className = "var-slot";
+			if (vars?.length) this._fillVarSlot(slot, vars);
+			row.appendChild(slot);
+		}
+		const main = document.createElement("div");
+		main.className = "row-main";
+		main.appendChild(content);
+		if (connector) main.appendChild(connector);
+		row.appendChild(main);
+		return row;
+	}
+
+	// The <Var> cards (stacked, with a little extra room between them) and
+	// the arrows that run from each into the element on their right: stubs
+	// from every card to a shared vertical line, and one arrowhead from there
+	// into the element — all at fixed offsets, see VAR_CARD_H.
+	_fillVarSlot(slot, vars) {
+		const col = document.createElement("div");
+		col.className = "var-col";
+		vars.forEach((v) => col.appendChild(this._buildVarCard(v)));
+		slot.appendChild(col);
+
+		const gutter = document.createElement("div");
+		gutter.className = "var-gutter";
+		const piece = (css, cls = "") => {
+			const d = document.createElement("div");
+			if (cls) d.className = cls;
+			Object.assign(d.style, css);
+			gutter.appendChild(d);
+		};
+		const step = VAR_CARD_H + VAR_CARD_GAP;
+		const mid = VAR_GUTTER_W / 2;
+		vars.forEach((_, k) => piece({ left: "0px", top: `${VAR_ARROW_Y - 1 + k * step}px`, width: `${mid + 1}px`, height: "2px" }));
+		if (vars.length > 1) piece({ left: `${mid}px`, top: `${VAR_ARROW_Y - 1}px`, width: "2px", height: `${(vars.length - 1) * step + 2}px` });
+		piece({ left: `${mid}px`, top: `${VAR_ARROW_Y - 1}px`, width: `${VAR_GUTTER_W - 10 - mid}px`, height: "2px" });
+		piece({ left: `${VAR_GUTTER_W - 10}px`, top: `${VAR_ARROW_Y - 6}px` }, "arrow-head");
+		slot.appendChild(gutter);
+	}
+
+	// Every <Var> in the document, in document order.
+	_collectVars() {
+		const out = [];
+		const walk = (n) => {
+			if (n.tagName === "Var") out.push(n);
+			n.children.forEach(walk);
+		};
+		if (xmlStore.root) walk(xmlStore.root);
+		return out;
+	}
+
+	// The <Var>s one element's attributes refer to ($name, ${name},
+	// var(name)): one among the siblings in this list wins over a same-named
+	// one elsewhere in the document.
+	_varsReferencedBy(node, siblings, allVars) {
+		const names = new Set();
+		const re = /[$][{]([a-z0-9:_]+)[}]|[$]([a-z0-9:_]+)|var[(]([a-z0-9:_]+)[)]/gi;
+		Object.values(node.attributes).forEach((value) => {
+			if (typeof value !== "string") return;
+			for (const m of value.matchAll(re)) names.add(m[1] || m[2] || m[3]);
+		});
+		const found = [];
+		names.forEach((name) => {
+			const v = siblings.find((c) => c.tagName === "Var" && c.attributes.name === name) || allVars.find((c) => c.attributes.name === name);
+			if (v && !found.includes(v)) found.push(v);
+		});
+		return found;
+	}
+
+	// A compact <Var> preview: its name, where it takes its value from, the
+	// mapin -> mapout curve, and which of curve/pattern/convert it uses. A
+	// click selects the <Var> (which opens its own preview).
+	_buildVarCard(varNode) {
+		const card = document.createElement("div");
+		card.className = "var-card";
+		card.title = "Open this <Var>";
+		const head = document.createElement("div");
+		head.className = "var-card-head";
+		const title = document.createElement("span");
+		title.className = "var-card-title";
+		title.textContent = "Var";
+		const name = document.createElement("span");
+		name.className = "var-card-name";
+		name.textContent = varNode.attributes.name || varNode.attributes.id || "";
+		head.append(title, name);
+		card.appendChild(head);
+
+		const canvas = document.createElement("canvas");
+		canvas.width = 340;
+		canvas.height = 110;
+		card.appendChild(canvas);
+		this._drawVarCurve(canvas, varNode);
+
+		const a = varNode.attributes;
+		const foot = document.createElement("div");
+		foot.className = "var-card-foot";
+		const parts = [];
+		if (a.value) parts.push(`← ${a.value}`);
+		if (a.curve) parts.push(`curve ${a.curve}`);
+		if (a.pattern) parts.push("pattern");
+		if (a.convert) parts.push("convert");
+		foot.textContent = parts.join(" · ");
+		foot.title = parts.join("\n");
+		card.appendChild(foot);
+
+		card.addEventListener("click", () => xmlStore.selectNode(varNode.id));
+		return card;
+	}
+
+	_drawVarCurve(canvas, varNode) {
+		const num = (str) => {
+			if (typeof str !== "string" || !str.trim()) return null;
+			const list = str.split(",").map((x) => Number(x.trim()));
+			return list.some((n) => !Number.isFinite(n)) ? null : list;
+		};
+		const mapin = num(varNode.attributes.mapin) || [0, 1];
+		const mapout = num(varNode.attributes.mapout) || [0, 1];
+		const pattern = num(varNode.attributes.pattern);
+		const w = canvas.width;
+		const h = canvas.height;
+		const pad = 8;
+		const ctx = canvas.getContext("2d");
+		ctx.clearRect(0, 0, w, h);
+		const pts = computeMapPoints({ mapin, mapout, curve: varNode.attributes.curve, pattern }, 120);
+		const minIn = mapin[0];
+		const maxIn = mapin[mapin.length - 1] === mapin[0] ? mapin[0] + 1 : mapin[mapin.length - 1];
+		let minOut = Math.min(...mapout);
+		let maxOut = Math.max(...mapout);
+		if (minOut === maxOut) {
+			minOut -= 0.5;
+			maxOut += 0.5;
+		}
+		const cx = (x) => pad + ((x - minIn) / (maxIn - minIn)) * (w - 2 * pad);
+		const cy = (y) => h - pad - ((y - minOut) / (maxOut - minOut)) * (h - 2 * pad);
+		ctx.strokeStyle = "#333";
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		ctx.moveTo(pad, h - pad);
+		ctx.lineTo(w - pad, h - pad);
+		ctx.moveTo(pad, pad);
+		ctx.lineTo(pad, h - pad);
+		ctx.stroke();
+		ctx.strokeStyle = "#4fa3ff";
+		ctx.lineWidth = 2.5;
+		ctx.beginPath();
+		pts.forEach((p, i) => (i === 0 ? ctx.moveTo(cx(p.x), cy(p.y)) : ctx.lineTo(cx(p.x), cy(p.y))));
+		ctx.stroke();
+		ctx.fillStyle = "#8a8a8a";
+		ctx.font = "16px system-ui, sans-serif";
+		const fmt = (n) => String(Math.round(n * 100) / 100);
+		ctx.textAlign = "left";
+		ctx.fillText(fmt(minOut), pad + 4, h - pad - 4);
+		ctx.fillText(fmt(maxOut), pad + 4, pad + 14);
+		ctx.textAlign = "right";
+		ctx.fillText(fmt(maxIn), w - pad - 2, h - pad - 4);
 	}
 
 	_buildCardHeader(node) {
