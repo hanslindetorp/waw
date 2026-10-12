@@ -14,12 +14,13 @@ import {
 import { isEditableContext } from "../project/edit-history.js";
 import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
-import { computeMapPoints } from "../xml-editor/var-mapper-math.js";
+import { computeMapPoints, mapStage1 } from "../xml-editor/var-mapper-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
 import { buildParamChip, isParamVarControlled } from "../utils/param-binding.js";
 import { getLiveProperty } from "../waxml-integration/live-property.js";
 import "./wa-panner-view.js";
+import "./wa-var-view.js";
 
 // Preview-panel state (see wa-preview.js) for a selected <Chain> — a
 // vertical stack of small per-node-type "cards" (one per native Web Audio
@@ -101,6 +102,10 @@ const VAR_CARD_W = 186;
 const VAR_CARD_H = 124;
 const VAR_CARD_GAP = 10;
 const VAR_GUTTER_W = 34;
+const VAR_EXPANDED_W = 380; // a <Var> unfolded to its full preview (see _buildExpandedVar)
+const FLIP_MS = 320;
+const AUDIO_ARROW_COLOR = "#e8e8e8";
+const VAR_ARROW_COLOR = "#45b58c";
 const VAR_ARROW_Y = 26;
 const GAIN_FADER_TRACK_HEIGHT = 130;
 const GAIN_FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
@@ -447,10 +452,13 @@ template.innerHTML = `
 			flex: 1 0 26px;
 			min-height: 26px;
 		}
+		/* Audio signal between elements: white. The signal of a <Var> into its
+		   element (.var-gutter below) is green, the same green as a Var's own
+		   output elsewhere. Blue is kept for the selected element. */
 		.connector-line {
 			flex: 1 1 auto;
 			width: 2px;
-			background: #4fa3ff;
+			background: ${AUDIO_ARROW_COLOR};
 		}
 		.connector-head {
 			flex: 0 0 auto;
@@ -458,19 +466,53 @@ template.innerHTML = `
 			height: 0;
 			border-left: 6px solid transparent;
 			border-right: 6px solid transparent;
-			border-top: 10px solid #4fa3ff;
+			border-top: 10px solid ${AUDIO_ARROW_COLOR};
 		}
 		.var-slot {
 			display: flex;
 			flex: 0 0 auto;
-			width: ${VAR_CARD_W + VAR_GUTTER_W}px;
+			width: calc(var(--var-col-w, ${VAR_CARD_W}px) + ${VAR_GUTTER_W}px);
 		}
 		.var-col {
 			display: flex;
 			flex-direction: column;
 			gap: ${VAR_CARD_GAP}px;
-			width: ${VAR_CARD_W}px;
+			width: var(--var-col-w, ${VAR_CARD_W}px);
 			flex: 0 0 auto;
+		}
+		/* A <Var> unfolded to its full preview, in the column of <Var>s. */
+		.var-expanded {
+			box-sizing: border-box;
+			background: #1a1c1f;
+			border: 1px solid var(--waw-accent, #4fa3ff);
+			border-radius: 6px;
+			padding: 0.4rem 0.5rem 0.5rem;
+		}
+		.var-expanded-head {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			gap: 0.4rem;
+			height: ${VAR_ARROW_Y - 8}px;
+			cursor: pointer;
+		}
+		.var-expanded-head .collapse {
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.7rem;
+		}
+		.var-card-graph {
+			position: relative;
+		}
+		.var-dot {
+			position: absolute;
+			width: 8px;
+			height: 8px;
+			margin: -4px 0 0 -4px;
+			border-radius: 50%;
+			background: #4fa3ff;
+			border: 1px solid rgba(255, 255, 255, 0.7);
+			box-sizing: border-box;
+			pointer-events: none;
 		}
 		.var-gutter {
 			position: relative;
@@ -479,7 +521,7 @@ template.innerHTML = `
 		}
 		.var-gutter > div {
 			position: absolute;
-			background: #4fa3ff;
+			background: ${VAR_ARROW_COLOR};
 		}
 		.var-gutter .arrow-head {
 			background: none;
@@ -487,7 +529,7 @@ template.innerHTML = `
 			height: 0;
 			border-top: 6px solid transparent;
 			border-bottom: 6px solid transparent;
-			border-left: 10px solid #4fa3ff;
+			border-left: 10px solid ${VAR_ARROW_COLOR};
 		}
 		.var-card {
 			height: ${VAR_CARD_H}px;
@@ -503,7 +545,7 @@ template.innerHTML = `
 			overflow: hidden;
 		}
 		.var-card:hover {
-			border-color: var(--waw-accent, #4fa3ff);
+			border-color: #5a6068;
 		}
 		.var-card-head {
 			display: flex;
@@ -519,7 +561,7 @@ template.innerHTML = `
 		}
 		.var-card-name {
 			font-size: 0.62rem;
-			color: var(--waw-accent, #4fa3ff);
+			color: ${VAR_ARROW_COLOR};
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 			overflow: hidden;
 			text-overflow: ellipsis;
@@ -650,11 +692,11 @@ template.innerHTML = `
 		}
 		.fader-handle.remote-controlled {
 			cursor: default;
-			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 3px rgba(0, 0, 0, 0.6);
+			box-shadow: 0 0 0 2px rgba(69, 181, 140, 0.6), 0 1px 3px rgba(0, 0, 0, 0.6);
 		}
 		.knob.remote-controlled {
 			cursor: default;
-			box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
+			box-shadow: 0 0 0 2px rgba(69, 181, 140, 0.6), 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 0 2px rgba(255, 255, 255, 0.15);
 		}
 		.knob.remote-controlled:hover {
 			filter: none;
@@ -713,8 +755,8 @@ template.innerHTML = `
 			border-color: var(--waw-border, #2f2f2f);
 		}
 		.param-chip.var-controlled {
-			color: var(--waw-accent, #4fa3ff);
-			border: 1px dashed var(--waw-accent, #4fa3ff);
+			color: ${VAR_ARROW_COLOR};
+			border: 1px dashed ${VAR_ARROW_COLOR};
 			cursor: default;
 		}
 		/* Faint yellow ring on every mappable chip/knob while a Var's
@@ -918,6 +960,18 @@ export class WaChainView extends HTMLElement {
 	_resolveRenderList(node) {
 		if (!node) return null;
 		if (node.tagName === "Chain") return { children: node.children, highlightId: null, chainId: node.id };
+		// A selected <Var>: the chain it sits in, or the element(s) beside it
+		// that refer to it — it unfolds in place instead of replacing the view.
+		if (node.tagName === "Var") {
+			const parent = node.parent ? findNodeById(xmlStore.root, node.parent) : null;
+			if (!parent) return null;
+			if (parent.tagName === "Chain") return { children: parent.children, highlightId: null, chainId: parent.id };
+			const allVars = this._collectVars();
+			const targets = parent.children.filter(
+				(c) => c.tagName !== "Var" && NODE_BUILDERS[c.tagName] && this._varsReferencedBy(c, parent.children, allVars).some((v) => v.id === node.id)
+			);
+			return targets.length ? { children: targets, highlightId: null, chainId: null } : null;
+		}
 		if (!NODE_BUILDERS[node.tagName]) return null;
 		const chainAncestor = this._findAncestorChain(node);
 		if (chainAncestor) return { children: chainAncestor.children, highlightId: node.id, chainId: chainAncestor.id };
@@ -956,7 +1010,20 @@ export class WaChainView extends HTMLElement {
 		this._rendering = true;
 		try {
 			const node = xmlStore.getSelectedNode();
-			const resolved = this._resolveRenderList(node);
+			const plan = this._planRender(node);
+			const resolved = plan?.resolved ?? null;
+
+			// Pieces of the picture that slide from where they were to where they
+			// now are (see _playFlip) — measured before anything is cleared. The
+			// scroll position is kept across the rebuild too.
+			const viewport = this.shadowRoot.querySelector(".chain-viewport");
+			const scrollTop = viewport.scrollTop;
+			const scrollLeft = viewport.scrollLeft;
+			const flipScope = resolved ? `${resolved.chainId ?? resolved.children[0]?.id}` : null;
+			const before = flipScope !== null && flipScope === this._flipScope ? this._collectFlipRects() : null;
+			this._flipScope = flipScope;
+			this._stackEl.style.minHeight = `${this._stackEl.offsetHeight}px`;
+
 			this._stackEl.innerHTML = "";
 			// Every card (including any AnalyserNode ones and any
 			// $var-controlled knob/curve) gets rebuilt fresh below — drop the
@@ -967,44 +1034,45 @@ export class WaChainView extends HTMLElement {
 			this._activeRemoteControlTicks = new Set();
 			this._renderedChildIds = new Set();
 
-			if (!resolved) return;
+			if (!resolved) {
+				this._stackEl.style.minHeight = "";
+				return;
+			}
 
 			if (resolved.children.length === 0) {
 				const hint = document.createElement("p");
 				hint.className = "centered";
 				hint.textContent = "Empty chain — add elements in the XML editor.";
 				this._stackEl.appendChild(hint);
+				this._stackEl.style.minHeight = "";
 				return;
 			}
 
 			this._renderedChildIds = new Set(resolved.children.map((c) => c.id));
-
-			// A <Var> that a card of this list refers to ($name in one of its
-			// attributes) is shown beside that card instead of as a card of its
-			// own; one nothing here refers to stays in the list.
-			const allVars = this._collectVars();
-			const varsFor = new Map();
-			const claimed = new Set();
-			resolved.children.forEach((child) => {
-				if (child.tagName === "Var") return;
-				const vars = this._varsReferencedBy(child, resolved.children, allVars);
-				if (!vars.length) return;
-				varsFor.set(child.id, vars);
-				vars.forEach((v) => claimed.add(v.id));
-			});
-			const shown = resolved.children.filter((c) => !claimed.has(c.id));
+			const { varsFor, shown } = plan;
 			const hasVars = varsFor.size > 0;
 			this._stackEl.classList.toggle("has-vars", hasVars);
+			// One <Var> unfolded (the selected one) widens the column of <Var>s
+			// for every row, so the elements stay in one column.
+			const expandedId = [...varsFor.values()].flat().find((v) => v.id === xmlStore.selectedNodeId)?.id ?? null;
+			this._stackEl.style.setProperty("--var-col-w", `${expandedId ? VAR_EXPANDED_W : VAR_CARD_W}px`);
 
-			this._stackEl.appendChild(this._buildRow(null, this._buildConnector(false), hasVars));
+			this._stackEl.appendChild(this._buildRow("top", null, this._buildConnector("top", false), hasVars));
 			shown.forEach((child) => {
 				const builder = NODE_BUILDERS[child.tagName];
 				const card = builder ? builder(this, child) : this._buildGenericCard(child);
+				card.dataset.flip = `card:${child.id}`;
 				if (child.id === resolved.highlightId || xmlStore.selectedNodeIds.has(child.id)) card.classList.add("selected");
 				this._wireCardSelect(card, child);
 				if (resolved.chainId) this._wireCardReorder(card, child, resolved.chainId);
-				this._stackEl.appendChild(this._buildRow(varsFor.get(child.id) || null, card, hasVars, this._buildConnector(true)));
+				this._stackEl.appendChild(this._buildRow(child.id, varsFor.get(child.id) || null, card, hasVars, this._buildConnector(child.id, true)));
 			});
+
+			viewport.scrollTop = scrollTop;
+			viewport.scrollLeft = scrollLeft;
+			this._stackEl.style.minHeight = "";
+			this._layoutGutters();
+			this._playFlip(before);
 		} finally {
 			this._rendering = false;
 			if (this._renderQueued) {
@@ -1097,13 +1165,49 @@ export class WaChainView extends HTMLElement {
 		ids.forEach((id) => xmlStore.removeNode(id));
 	}
 
-	// The blue arrow between elements. `grows`: it takes up whatever height
-	// the row has beyond its element (taller when <Var> cards sit beside it).
-	_buildConnector(grows) {
+	// What a render shows for `node`: the list of elements, which <Var>s sit
+	// beside which element, and which elements are left once the claimed
+	// <Var>s are taken out of the list.
+	_planRender(node) {
+		const resolved = this._resolveRenderList(node);
+		if (!resolved) return null;
+		const allVars = this._collectVars();
+		const varsFor = new Map();
+		const claimed = new Set();
+		resolved.children.forEach((child) => {
+			if (child.tagName === "Var") return;
+			const vars = this._varsReferencedBy(child, resolved.children, allVars);
+			if (!vars.length) return;
+			varsFor.set(child.id, vars);
+			vars.forEach((v) => claimed.add(v.id));
+		});
+		return { resolved, varsFor, claimed, shown: resolved.children.filter((c) => !claimed.has(c.id)) };
+	}
+
+	// Whether selecting this <Var> can be shown right here, as a card that
+	// unfolds beside its element — wa-preview.js asks before it swaps in the
+	// Var's own preview.
+	showsVar(node) {
+		const plan = this._planRender(node);
+		return !!plan && [...plan.varsFor.values()].some((vars) => vars.some((v) => v.id === node.id));
+	}
+
+	// The blue arrow leading on from an element (or into the first one). It
+	// takes up whatever height its row has beyond the element (`grows`), which
+	// is more when <Var> cards beside it are taller. Line and head are
+	// separate pieces so the head can slide down with the next element while
+	// the line is drawn out behind it (see _playFlip).
+	_buildConnector(rowKey, grows) {
 		const el = document.createElement("div");
 		el.className = "connector";
 		if (!grows) el.style.flex = "0 0 26px";
-		el.innerHTML = `<div class="connector-line"></div><div class="connector-head"></div>`;
+		const line = document.createElement("div");
+		line.className = "connector-line";
+		line.dataset.flip = `cl:${rowKey}`;
+		const head = document.createElement("div");
+		head.className = "connector-head";
+		head.dataset.flip = `ch:${rowKey}`;
+		el.append(line, head);
 		return el;
 	}
 
@@ -1111,9 +1215,10 @@ export class WaChainView extends HTMLElement {
 	// element and its onward arrow]. `vars` null means no <Var> for this
 	// element; `hasVars` keeps the elements of the other rows in the same
 	// column. The first row (arrow only) passes content as the main part.
-	_buildRow(vars, content, hasVars, connector = null) {
+	_buildRow(rowKey, vars, content, hasVars, connector = null) {
 		const row = document.createElement("div");
 		row.className = "chain-row";
+		row.dataset.rowKey = rowKey;
 		if (hasVars) {
 			row.classList.add("has-var-slot");
 			const slot = document.createElement("div");
@@ -1129,31 +1234,139 @@ export class WaChainView extends HTMLElement {
 		return row;
 	}
 
-	// The <Var> cards (stacked, with a little extra room between them) and
-	// the arrows that run from each into the element on their right: stubs
-	// from every card to a shared vertical line, and one arrowhead from there
-	// into the element — all at fixed offsets, see VAR_CARD_H.
+	// The <Var> cards (stacked, with a little extra room between them). The
+	// arrows into the element are drawn afterwards, once the cards have their
+	// real positions (_layoutGutters) — a card may be unfolded and tall.
 	_fillVarSlot(slot, vars) {
 		const col = document.createElement("div");
 		col.className = "var-col";
-		vars.forEach((v) => col.appendChild(this._buildVarCard(v)));
+		vars.forEach((v) => col.appendChild(v.id === xmlStore.selectedNodeId ? this._buildExpandedVar(v) : this._buildVarCard(v)));
 		slot.appendChild(col);
-
 		const gutter = document.createElement("div");
 		gutter.className = "var-gutter";
-		const piece = (css, cls = "") => {
-			const d = document.createElement("div");
-			if (cls) d.className = cls;
-			Object.assign(d.style, css);
-			gutter.appendChild(d);
-		};
-		const step = VAR_CARD_H + VAR_CARD_GAP;
-		const mid = VAR_GUTTER_W / 2;
-		vars.forEach((_, k) => piece({ left: "0px", top: `${VAR_ARROW_Y - 1 + k * step}px`, width: `${mid + 1}px`, height: "2px" }));
-		if (vars.length > 1) piece({ left: `${mid}px`, top: `${VAR_ARROW_Y - 1}px`, width: "2px", height: `${(vars.length - 1) * step + 2}px` });
-		piece({ left: `${mid}px`, top: `${VAR_ARROW_Y - 1}px`, width: `${VAR_GUTTER_W - 10 - mid}px`, height: "2px" });
-		piece({ left: `${VAR_GUTTER_W - 10}px`, top: `${VAR_ARROW_Y - 6}px` }, "arrow-head");
 		slot.appendChild(gutter);
+	}
+
+	// A selected <Var>, unfolded: its whole preview (mapping graph, curve,
+	// pattern, convert — the same view as the preview panel's own), sitting
+	// among the other elements. Clicking the header folds it up again by
+	// selecting the element it drives.
+	_buildExpandedVar(varNode) {
+		const box = document.createElement("div");
+		box.className = "var-expanded";
+		box.dataset.flip = `var:${varNode.id}`;
+		box.dataset.varItem = varNode.id;
+		box.dataset.expanded = "";
+		const head = document.createElement("div");
+		head.className = "var-expanded-head";
+		head.title = "Fold up";
+		const title = document.createElement("span");
+		title.className = "var-card-title";
+		title.textContent = `Var  ${varNode.attributes.name || varNode.attributes.id || ""}`;
+		const fold = document.createElement("span");
+		fold.className = "collapse";
+		fold.textContent = "▴ fold up";
+		head.append(title, fold);
+		head.addEventListener("click", () => {
+			const target = this._targetOfVar(varNode);
+			if (target) xmlStore.selectNode(target.id);
+		});
+		box.appendChild(head);
+		const view = document.createElement("wa-var-view");
+		view.setAttribute("embedded", "");
+		box.appendChild(view);
+		return box;
+	}
+
+	// The first element (of those showing) whose attributes refer to this <Var>.
+	_targetOfVar(varNode) {
+		const siblings = [...this._stackEl.querySelectorAll("[data-flip^='card:']")].map((el) => el.dataset.flip.slice(5));
+		const allVars = this._collectVars();
+		for (const id of siblings) {
+			const n = findNodeById(xmlStore.root, id);
+			if (n && this._varsReferencedBy(n, [], allVars).some((v) => v.id === varNode.id)) return n;
+		}
+		return null;
+	}
+
+	// Draws the arrows from the <Var> cards into the element beside them: a
+	// short line out of each card, one vertical line joining them and a
+	// single arrowhead into the element. Positions are measured (an unfolded
+	// card is tall; its line leaves level with its Convert block).
+	_layoutGutters() {
+		this._stackEl.querySelectorAll(".chain-row").forEach((row) => {
+			const slot = row.querySelector(".var-slot");
+			const gutter = slot?.querySelector(".var-gutter");
+			if (!gutter) return;
+			gutter.innerHTML = "";
+			const items = [...slot.querySelectorAll(".var-col > [data-flip]")];
+			if (!items.length) return;
+			const slotTop = slot.getBoundingClientRect().top;
+			const ys = items.map((item) => {
+				const rect = item.getBoundingClientRect();
+				if (!("expanded" in item.dataset)) return rect.top - slotTop + VAR_ARROW_Y;
+				const convert = item.querySelector("wa-var-view")?.shadowRoot?.querySelector(".convert-node");
+				const c = convert?.getBoundingClientRect();
+				return c && c.height ? c.top + c.height / 2 - slotTop : rect.top - slotTop + VAR_ARROW_Y;
+			});
+			const mid = VAR_GUTTER_W / 2;
+			const rowKey = row.dataset.rowKey;
+			const piece = (key, css, cls = "") => {
+				const d = document.createElement("div");
+				if (cls) d.className = cls;
+				d.dataset.flip = `g:${rowKey}:${key}`;
+				Object.assign(d.style, Object.fromEntries(Object.entries(css).map(([k, v]) => [k, `${v}px`])));
+				gutter.appendChild(d);
+			};
+			ys.forEach((y, k) => piece(`s${k}`, { left: 0, top: y - 1, width: mid + 1, height: 2 }));
+			const top = Math.min(VAR_ARROW_Y, ...ys);
+			const bottom = Math.max(VAR_ARROW_Y, ...ys);
+			if (bottom > top) piece("v", { left: mid, top: top - 1, width: 2, height: bottom - top + 2 });
+			piece("f", { left: mid, top: VAR_ARROW_Y - 1, width: VAR_GUTTER_W - 10 - mid, height: 2 });
+			piece("h", { left: VAR_GUTTER_W - 10, top: VAR_ARROW_Y - 6 }, "arrow-head");
+		});
+	}
+
+	// Everything that moves or changes size when the view is rebuilt slides
+	// (or is drawn out) from where it was to where it now is, instead of
+	// jumping — per Hans (2026-10-12). Elements carry a data-flip key; a
+	// position change is a translate, growth is a reveal (clip-path) from the
+	// top-left; the layout itself is already final, so nothing reflows while
+	// it plays.
+	_collectFlipRects() {
+		const rects = new Map();
+		this._stackEl.querySelectorAll("[data-flip]").forEach((el) => {
+			const r = el.getBoundingClientRect();
+			rects.set(el.dataset.flip, { x: r.left, y: r.top, w: r.width, h: r.height });
+		});
+		return rects;
+	}
+
+	_playFlip(before) {
+		if (!before || typeof Element.prototype.animate !== "function") return;
+		if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+		this._stackEl.querySelectorAll("[data-flip]").forEach((el) => {
+			const old = before.get(el.dataset.flip);
+			const r = el.getBoundingClientRect();
+			if (!old) {
+				// Something new that is not a plain arrow part (an arrow part
+				// appearing is covered by its neighbours moving): a short fade.
+				if (/^(var|card):/.test(el.dataset.flip)) el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FLIP_MS, easing: "ease-out" });
+				return;
+			}
+			const dx = old.x - r.left;
+			const dy = old.y - r.top;
+			const growW = Math.max(0, r.width - old.w);
+			const growH = Math.max(0, r.height - old.h);
+			if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && growW < 0.5 && growH < 0.5) return;
+			el.animate(
+				[
+					{ transform: `translate(${dx}px, ${dy}px)`, clipPath: `inset(0 ${growW}px ${growH}px 0)` },
+					{ transform: "translate(0, 0)", clipPath: "inset(0 0 0 0)" }
+				],
+				{ duration: FLIP_MS, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" }
+			);
+		});
 	}
 
 	// Every <Var> in the document, in document order.
@@ -1186,12 +1399,14 @@ export class WaChainView extends HTMLElement {
 	}
 
 	// A compact <Var> preview: its name, where it takes its value from, the
-	// mapin -> mapout curve, and which of curve/pattern/convert it uses. A
-	// click selects the <Var> (which opens its own preview).
+	// mapin -> mapout curve with a dot showing the live value, and which of
+	// curve/pattern/convert it uses. A click unfolds it (selects the <Var>).
 	_buildVarCard(varNode) {
 		const card = document.createElement("div");
 		card.className = "var-card";
-		card.title = "Open this <Var>";
+		card.title = "Unfold this <Var>";
+		card.dataset.flip = `var:${varNode.id}`;
+		card.dataset.varItem = varNode.id;
 		const head = document.createElement("div");
 		head.className = "var-card-head";
 		const title = document.createElement("span");
@@ -1203,11 +1418,19 @@ export class WaChainView extends HTMLElement {
 		head.append(title, name);
 		card.appendChild(head);
 
+		const graph = document.createElement("div");
+		graph.className = "var-card-graph";
 		const canvas = document.createElement("canvas");
 		canvas.width = 340;
 		canvas.height = 110;
-		card.appendChild(canvas);
-		this._drawVarCurve(canvas, varNode);
+		graph.appendChild(canvas);
+		const dot = document.createElement("div");
+		dot.className = "var-dot";
+		dot.hidden = true;
+		graph.appendChild(dot);
+		card.appendChild(graph);
+		const mapper = this._drawVarCurve(canvas, varNode);
+		this._watchVarValue(varNode, mapper, dot);
 
 		const a = varNode.attributes;
 		const foot = document.createElement("div");
@@ -1223,6 +1446,33 @@ export class WaChainView extends HTMLElement {
 
 		card.addEventListener("click", () => xmlStore.selectNode(varNode.id));
 		return card;
+	}
+
+	// Moves the little dot along the card's curve to where the <Var>'s live
+	// input is right now (hidden while nothing is playing or no value has
+	// come in) — on the shared per-frame loop, like the other live readouts.
+	_watchVarValue(varNode, mapper, dot) {
+		const realId = varNode.attributes.id;
+		if (!realId || !mapper) return;
+		this._watchRemoteControlled(() => {
+			let live = null;
+			if (playerStore.isDocumentLoaded) {
+				try {
+					live = playerStore.getLiveObjects(`[id='${realId}']`)?.[0] ?? null;
+				} catch {
+					live = null;
+				}
+			}
+			if (!live || typeof live.lastInputValue !== "number") {
+				dot.hidden = true;
+				return;
+			}
+			const stage1 = mapStage1(live.lastInputValue, mapper.params);
+			const p = mapper.toFraction(live.lastInputValue, stage1);
+			dot.style.left = `${p.x * 100}%`;
+			dot.style.top = `${p.y * 100}%`;
+			dot.hidden = false;
+		});
 	}
 
 	_drawVarCurve(canvas, varNode) {
@@ -1271,6 +1521,12 @@ export class WaChainView extends HTMLElement {
 		ctx.fillText(fmt(maxOut), pad + 4, pad + 14);
 		ctx.textAlign = "right";
 		ctx.fillText(fmt(maxIn), w - pad - 2, h - pad - 4);
+		const clamp = (v, lo, hi) => Math.max(Math.min(lo, hi), Math.min(Math.max(lo, hi), v));
+		return {
+			params: { mapin, mapout, curve: varNode.attributes.curve, pattern },
+			// Where the live value falls on the drawn curve, as fractions of the canvas.
+			toFraction: (rawIn, stage1) => ({ x: cx(clamp(rawIn, minIn, maxIn)) / w, y: cy(clamp(stage1, minOut, maxOut)) / h })
+		};
 	}
 
 	_buildCardHeader(node) {

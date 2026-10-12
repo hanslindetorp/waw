@@ -311,6 +311,16 @@ export class WaPreview extends HTMLElement {
 		}
 
 		if (node.tagName === "Var") {
+			// Selected from the Chain preview (a click on its card there, not a
+			// tree click — those carry `open`): the Var unfolds right where it is,
+			// among the elements, instead of replacing them. Per Hans
+			// (2026-10-12).
+			const chainView = this._states.get("chain")?.querySelector("wa-chain-view");
+			if (this._activeState === "chain" && e?.detail?.open !== true && chainView?.showsVar(node)) {
+				this._lastNodeId = node.id;
+				this._lastResolvedUrl = null;
+				return;
+			}
 			// Same priority reasoning as the Wam branch above — a <Var> can
 			// sit inside a <Mixer> (it's one of the tags MIXER_NO_SIGNAL_TAGS
 			// excludes from getting its own channel strip) and still needs

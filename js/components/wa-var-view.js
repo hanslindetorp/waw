@@ -55,6 +55,11 @@ const CURVE_CUSTOM = "__custom_power__";
 const CONVERT_PRESETS = ["MIDI->frequency", "dB->power"];
 const CONVERT_CUSTOM = "__custom_expr__";
 
+// The Mapping graphs' frames, shared by every instance of this view — the
+// preview panel's own and the ones embedded in the Chain preview — so a Var
+// looks the same wherever it is shown.
+const SHARED_AXIS_OVERRIDES = new Map();
+
 const MAP_PADDING = 18;
 const POINT_HIT_RADIUS = 9;
 
@@ -96,6 +101,18 @@ template.innerHTML = `
 			font: 0.85rem/1.4 system-ui, sans-serif;
 			box-sizing: border-box;
 			padding: 0.75rem;
+		}
+		/* Shown in the middle of the Chain preview (see wa-chain-view.js): as
+		   tall as its content, no panel padding, and without the final value
+		   to the right of the Convert block (the Chain preview draws its own
+		   arrow out of the Var). */
+		:host([embedded]) {
+			height: auto;
+			overflow: visible;
+			padding: 0;
+		}
+		:host([embedded]) .outgoing-row {
+			display: none;
 		}
 		.chain {
 			position: relative;
@@ -435,7 +452,7 @@ template.innerHTML = `
 	</style>
 
 	<div class="chain">
-		<svg class="flow-arrow-svg"><path class="flow-arrow-path" fill="none" stroke="#4fa3ff" stroke-width="2" marker-end="url(#flow-arrowhead)" /><defs><marker id="flow-arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="4" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#4fa3ff" /></marker></defs></svg>
+		<svg class="flow-arrow-svg"><path class="flow-arrow-path" fill="none" stroke="#45b58c" stroke-width="2" marker-end="url(#flow-arrowhead)" /><defs><marker id="flow-arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="4" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#45b58c" /></marker></defs></svg>
 
 		<div class="incoming-row">
 			<span class="incoming-arrow">&#8595; incoming data</span>
@@ -574,7 +591,7 @@ export class WaVarView extends HTMLElement {
 		// changes via double-clicking its own label (_editAxisValue), and
 		// falls back to mapin/mapout's own extremes when nothing's stored
 		// here for this Var yet.
-		this._axisOverrides = new Map(); // key -> { mapinMin?, mapinMax?, mapoutMin?, mapoutMax? }
+		this._axisOverrides = SHARED_AXIS_OVERRIDES; // key -> { mapinMin?, mapinMax?, mapoutMin?, mapoutMax? }
 		this._drag = null; // { index, isEndpoint, axisLock: "x"|"y"|null, startX, startY, isNew }
 		this._rafId = null;
 		this._disposed = false;
@@ -686,7 +703,8 @@ export class WaVarView extends HTMLElement {
 	applyState(state) {
 		if (!state || typeof state !== "object") return;
 		if (state.axisOverrides && typeof state.axisOverrides === "object") {
-			this._axisOverrides = new Map(Object.entries(state.axisOverrides));
+			this._axisOverrides.clear();
+			Object.entries(state.axisOverrides).forEach(([key, value]) => this._axisOverrides.set(key, value));
 			const node = xmlStore.getSelectedNode();
 			if (node && node.tagName === "Var") this._render(node);
 		}

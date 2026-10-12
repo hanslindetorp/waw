@@ -1,42 +1,46 @@
 import { playerStore } from "../waxml-integration/player-store.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { inputMapMode } from "../state/input-map-mode.js";
+import "./wa-color-picker.js";
+import { COLOR_PALETTE } from "./wa-color-picker.js";
 
-// The INPUT panel's "Web Camera" section — MediaPipe hand/pose/face tracking
-// that lets Hans click a landmark (or several) on the live webcam feed and
-// map its live metrics (x/y/z for one point; dist2d/dist3d for two;
-// area/circumference for three or more) onto a root-level <Var>, driven live
-// via playerStore.setVariable() — same call wa-var-knobs.js's own knobs use.
+// The INPUT panel's "Web Camera" section — MediaPipe hand/body/face tracking
+// that turns points on the live webcam picture into 0–1 values driving
+// parameters in the document (see input-mapping.js).
+//
+// Adding a mapping (per Hans, 2026-10-12):
+//   1. "+" in the top-left corner of the video, then one of hand | body | face
+//      — only that tracker is switched on (nothing runs until it is needed);
+//   2. click one or more points in the video; a single point sprays its color
+//      along its path, two points are joined by a line and three or more by
+//      a surface, all in real time;
+//   3. as soon as a point is selected the range it moves through is
+//      calibrated ("Move the body to auto-calibrate") until "map..." is
+//      pressed; with one point a Horizontal | Vertical | Both choice sits
+//      above the button;
+//   4. "map..." works as before — then click the parameter (or a root <Var>
+//      knob) to map to. The result is a row below the video.
+//
+// What a row measures, always calibrated to 0–1:
+//   one point, Horizontal — x; Vertical — y (up is more); Both — the distance
+//     from the lower-left corner of the range the point has covered, in
+//     proportion to that range's diagonal;
+//   two points — their 2D distance;
+//   three or more — the area they enclose.
+// (The old 3D measures and circumference are gone.)
+//
+// Every row sprays/draws in its own color — also when it is not selected —
+// and picking a row shows its points in the video.
+//
+// Rows (with the points, color, mode, calibrated range and targets) are
+// persisted via getState()/applyState() — see workstation-state.js's own
+// registerLayoutExtras wiring — never as WAXML document content. Rows saved
+// by the earlier version are converted when the project opens.
 //
 // Ported from Hans's own reference implementation (https://msw.waxml.org/,
-// fetched 2026-09-22) — the landmark math (dist2d/dist3d/area2d/area3d/
-// circum2d/circum3d), the click-to-select hit-test, and the per-frame
-// landmark rebuild are all near-verbatim from there. What's new here,
-// per Hans's own architecture call (2026-09-22):
-//   - No video-file mode — webcam only, for this first pass.
-//   - Camera/model loading is gated behind an explicit Start button (never
-//     auto-starts just because this section is visible) — matches this
-//     app's existing "never resume audio without a real user gesture" rule
-//     (see waxml-bridge.js).
-//   - The reference's own sendToWaxml() was stubbed out with commented
-//     placeholder setVariable() calls and auto-derived variable names
-//     (hand5x, hand5y, ...). Here, each metric is *explicitly* mapped to an
-//     existing root <Var> — INPUT stays outside the WAXML spec itself (no
-//     new schema elements), but what it writes into is a completely
-//     ordinary root Var. Only mapped metrics are ever sent; everything else
-//     is display-only.
-//   - That mapping (plus which models are enabled and which camera is
-//     selected) is persisted via getState()/applyState() — see
-//     workstation-state.js's own registerLayoutExtras wiring — never as
-//     WAXML document content.
-//   - Mapping a metric onto a Var (per Hans, 2026-10-03) arms the shared
-//     input-map-mode.js singleton, the same "arm a mode, let some other
-//     element claim the next click" shape var-map-mode.js's own Var-to-
-//     attribute mapping already uses, instead of a popup menu — see
-//     _mapKey. Every root-level <Var> knob (wa-var-knobs.js's global row
-//     only, never the local one) is the only valid target; there's no way
-//     to create a new one from here anymore, so an empty root gets an
-//     explanatory notice instead of arming with nothing to pick.
+// fetched 2026-09-22): the landmark rebuild and click-to-select hit-test.
+// Camera/model loading stays gated behind an explicit Start button — this app
+// never starts media without a real user gesture (see waxml-bridge.js).
 
 const MEDIAPIPE_VERSION = "0.10.35";
 const VISION_BUNDLE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/vision_bundle.mjs`;
@@ -46,10 +50,11 @@ const MODEL_URLS = {
 	pose: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
 	face: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 };
+const MODEL_CHOICES = { hands: "hand", pose: "body", face: "face" };
+const SPRAY_MS = 200; // how long a sprayed dot takes to fade away — short, so a point moved back and forth drags a tail behind it
 
-// ── Math helpers (per Hans's own reference, verbatim) ─────────────────────
-const dist2d = (a, b) => Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-const dist3d = (a, b) => Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2 + (b.z - a.z) ** 2);
+// ── Measures ────────────────────────────────────────────────────────────
+const dist2d = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
 
 function area2d(pts) {
 	let s = 0;
@@ -61,55 +66,144 @@ function area2d(pts) {
 	return Math.abs(s) / 2;
 }
 
-function area3d(pts) {
-	const [a, b, c] = pts;
-	const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
-	const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
-	const cx = ab.y * ac.z - ab.z * ac.y;
-	const cy = ab.z * ac.x - ab.x * ac.z;
-	const cz = ab.x * ac.y - ab.y * ac.x;
-	return Math.sqrt(cx * cx + cy * cy + cz * cz) / 2;
+function kindForCount(n) {
+	return n === 1 ? "point" : n === 2 ? "dist" : "area";
 }
 
-function circum2d(pts) {
-	let p = 0;
-	const n = pts.length;
-	for (let i = 0; i < n; i++) p += dist2d(pts[i], pts[(i + 1) % n]);
-	return p;
+// What a calibration holds. A point: the range it covered on each axis and —
+// for "both axes" — the two ends (a and b) of the line it moved along (see
+// finalizeCalib); the others: the smallest and largest value.
+function emptyCalib(kind) {
+	return kind === "point"
+		? { xMin: null, xMax: null, yMin: null, yMax: null, ax: null, ay: null, bx: null, by: null, n: 0, xSum: 0, ySum: 0 }
+		: { min: null, max: null };
 }
 
-function circum3d(pts) {
-	return dist3d(pts[0], pts[1]) + dist3d(pts[1], pts[2]) + dist3d(pts[2], pts[0]);
+// Samples kept while calibrating a point on both axes (see finalizeCalib):
+// near-repeats are skipped and the list is thinned if it grows long.
+function pushSample(samples, sample) {
+	const last = samples[samples.length - 1];
+	if (last && Math.hypot(sample.sx - last.sx, sample.sy - last.sy) < 0.002) return;
+	samples.push(sample);
+	if (samples.length > 3000) samples.splice(0, samples.length, ...samples.filter((_, i) => i % 2 === 0));
 }
 
-function calcValues(pts, type) {
-	switch (type) {
-		case "point":
-			return { x: pts[0].x, y: pts[0].y, z: pts[0].z };
-		case "dist":
-			return { dist2d: dist2d(pts[0], pts[1]), dist3d: dist3d(pts[0], pts[1]) };
-		case "triangle":
-			return { area2d: area2d(pts), area3d: area3d(pts), circum2d: circum2d(pts), circum3d: circum3d(pts) };
-		case "polygon":
-			return { area2d: area2d(pts), circum2d: circum2d(pts) };
-		default:
-			return {};
+// "Both axes" follows a line. After a calibration the line goes between the
+// two of its points that lay furthest apart (the longest of all the lines one
+// can draw between them); the end that is nearer the bottom-left of the
+// picture is 0, the other 1. Positions are those of the picture as shown —
+// x to the right (mirrored, as the preview is), y upwards, the same way
+// Horizontal and Vertical count — in the picture's shape on screen (x scaled
+// by `aspect`).
+function finalizeCalib(calib, samples, aspect) {
+	if (!("ax" in calib)) return;
+	calib.ax = calib.ay = calib.bx = calib.by = null;
+	const pts = samples.map((p) => ({ x: p.sx, y: p.sy }));
+	let best = 0;
+	let a = null;
+	let b = null;
+	for (let i = 0; i < pts.length; i++) {
+		for (let j = i + 1; j < pts.length; j++) {
+			const d = Math.hypot((pts[i].x - pts[j].x) * aspect, pts[i].y - pts[j].y);
+			if (d > best) {
+				best = d;
+				a = pts[i];
+				b = pts[j];
+			}
+		}
+	}
+	if (!a) return;
+	const nearer = (p) => p.x * aspect + p.y;
+	if (nearer(a) > nearer(b) || (nearer(a) === nearer(b) && a.x > b.x)) [a, b] = [b, a];
+	[calib.ax, calib.ay, calib.bx, calib.by] = [a.x, a.y, b.x, b.y];
+}
+
+const widen = (lo, hi, v) => [lo === null ? v : Math.min(lo, v), hi === null ? v : Math.max(hi, v)];
+
+// The points of an area in the order they go round it, whatever order they
+// were picked in — by angle around their centre, in the shape the picture
+// has on screen (x scaled by `aspect`). Clicked as an X, four corners still
+// make a square.
+function angularOrder(pts, aspect = 1) {
+	const cx = pts.reduce((s, p) => s + p.x * aspect, 0) / pts.length;
+	const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+	return [...pts].sort((a, b) => Math.atan2(a.y - cy, a.x * aspect - cx) - Math.atan2(b.y - cy, b.x * aspect - cx));
+}
+
+// What is measured from the points at this moment. A point is read as the
+// viewer sees it: mirrored (the preview is), and with up as more. Distances
+// are those of the picture on screen — x is scaled by `aspect` (width /
+// height), so the same gap reads the same whichever way it points; an area is
+// the same up to a constant that calibration removes.
+function sampleFor(kind, pts, aspect = 1) {
+	if (kind === "point") return { sx: 1 - pts[0].x, sy: 1 - pts[0].y };
+	if (kind === "dist") return Math.hypot((pts[1].x - pts[0].x) * aspect, pts[1].y - pts[0].y);
+	return area2d(angularOrder(pts, aspect));
+}
+
+function expandCalib(calib, kind, sample) {
+	if (kind === "point") {
+		[calib.xMin, calib.xMax] = widen(calib.xMin, calib.xMax, sample.sx);
+		[calib.yMin, calib.yMax] = widen(calib.yMin, calib.yMax, sample.sy);
+		calib.n = (calib.n || 0) + 1;
+		calib.xSum = (calib.xSum || 0) + sample.sx;
+		calib.ySum = (calib.ySum || 0) + sample.sy;
+	} else {
+		[calib.min, calib.max] = widen(calib.min, calib.max, sample);
 	}
 }
 
-const TYPE_KEYS = {
-	point: ["x", "y", "z"],
-	dist: ["dist2d", "dist3d"],
-	triangle: ["area2d", "area3d", "circum2d", "circum3d"],
-	polygon: ["area2d", "circum2d"]
-};
+const unit = (v, lo, hi) => (lo === null || hi === null || !(hi > lo) ? undefined : Math.max(0, Math.min(1, (v - lo) / (hi - lo))));
 
-function typeForCount(n) {
-	return n === 1 ? "point" : n === 2 ? "dist" : n === 3 ? "triangle" : "polygon";
+// 0–1, or undefined while the range hasn't been covered yet.
+//
+// One point on both axes is read along a line: its right-angled projection
+// onto the line a (0) to b (1) — the near leg of the right triangle whose
+// hypotenuse is a–P — so a point beside the line reads as the point of the
+// line straight "beside" it. Beyond a or b it is 0 or 1. The line is the one
+// finalizeCalib found; a row saved before that has the diagonal of its range
+// instead, from its bottom-left to its top-right corner. The geometry is that
+// of the picture on screen (x scaled by `aspect`, width / height), so the
+// right angle is a right angle as seen.
+function normalizeSample(kind, mode, calib, sample, aspect = 1) {
+	if (kind !== "point") return unit(sample, calib.min, calib.max);
+	if (mode === "horizontal") return unit(sample.sx, calib.xMin, calib.xMax);
+	if (mode === "vertical") return unit(sample.sy, calib.yMin, calib.yMax);
+	return linePosition(calib, sample, aspect)?.t;
 }
 
-function fmt(v) {
-	return Number.isFinite(v) ? parseFloat(v.toFixed(3)) : "—";
+// Where a point falls on the line "both axes" follows: `t` is 0 at a and 1 at
+// b (clamped beyond them), a and b the line's ends. null while there is no
+// line yet.
+function linePosition(calib, sample, aspect = 1) {
+	let { ax, ay, bx, by } = calib;
+	if (ax === null || ax === undefined) {
+		if (calib.xMin === null || calib.xMin === undefined) return null;
+		[ax, ay, bx, by] = [calib.xMin, calib.yMin, calib.xMax, calib.yMax];
+	}
+	const abx = (bx - ax) * aspect;
+	const aby = by - ay;
+	const lengthSquared = abx * abx + aby * aby;
+	if (!(lengthSquared > 0)) return null;
+	const apx = (sample.sx - ax) * aspect;
+	const apy = sample.sy - ay;
+	return { t: Math.max(0, Math.min(1, (apx * abx + apy * aby) / lengthSquared)), a: { x: ax, y: ay }, b: { x: bx, y: by } };
+}
+
+// The mean of a calibrated axis (what the calibration saw on average), or the
+// middle of its range for a row saved without one.
+function axisMean(calib, axis) {
+	if (calib.n > 0) return (axis === "x" ? calib.xSum : calib.ySum) / calib.n;
+	const lo = axis === "x" ? calib.xMin : calib.yMin;
+	const hi = axis === "x" ? calib.xMax : calib.yMax;
+	return lo === null || lo === undefined ? null : (lo + hi) / 2;
+}
+
+function modelOfLabel(label) {
+	if (/^(leftHand|rightHand|hand)\d+$/.test(label)) return "hands";
+	if (/^pose\d+$/.test(label)) return "pose";
+	if (/^face\d+$/.test(label)) return "face";
+	return "unknown";
 }
 
 const template = document.createElement("template");
@@ -126,47 +220,6 @@ template.innerHTML = `
 			gap: 0.5rem;
 			flex-wrap: wrap;
 			margin-bottom: 0.6rem;
-		}
-		.model-btn {
-			display: flex;
-			align-items: center;
-			gap: 0.4rem;
-			padding: 0.3rem 0.6rem 0.3rem 0.5rem;
-			border: 1.5px solid var(--waw-border, #2f2f2f);
-			border-radius: 7px;
-			background: #1a1c1f;
-			color: var(--waw-muted, #8a8a8a);
-			cursor: pointer;
-			font-size: 0.78rem;
-			font-family: inherit;
-		}
-		.model-btn .dot {
-			width: 7px;
-			height: 7px;
-			border-radius: 50%;
-			background: var(--waw-border, #2f2f2f);
-			flex-shrink: 0;
-		}
-		.model-btn.active[data-model="hands"] {
-			border-color: var(--waw-teal, #45b58c);
-			color: var(--waw-teal, #45b58c);
-		}
-		.model-btn.active[data-model="hands"] .dot {
-			background: var(--waw-teal, #45b58c);
-		}
-		.model-btn.active[data-model="pose"] {
-			border-color: #fb923c;
-			color: #fb923c;
-		}
-		.model-btn.active[data-model="pose"] .dot {
-			background: #fb923c;
-		}
-		.model-btn.active[data-model="face"] {
-			border-color: var(--waw-accent, #4fa3ff);
-			color: var(--waw-accent, #4fa3ff);
-		}
-		.model-btn.active[data-model="face"] .dot {
-			background: var(--waw-accent, #4fa3ff);
 		}
 		.camera-select {
 			margin-left: auto;
@@ -193,6 +246,268 @@ template.innerHTML = `
 			background: var(--waw-danger, #e5484d);
 			color: #fff;
 		}
+		.video-wrapper {
+			position: relative;
+			background: #000;
+			border-radius: 8px;
+			overflow: hidden;
+			line-height: 0;
+			margin-bottom: 0.6rem;
+		}
+		video {
+			width: 100%;
+			display: block;
+		}
+		video.mirror,
+		canvas.mirror {
+			transform: scaleX(-1);
+		}
+		canvas {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+		}
+		canvas.picking {
+			cursor: crosshair;
+		}
+		.status-overlay {
+			position: absolute;
+			inset: 0;
+			z-index: 3;
+			background: rgba(0, 0, 0, 0.82);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			text-align: center;
+			padding: 1rem;
+			color: var(--waw-muted, #8a8a8a);
+			font-size: 0.8rem;
+			line-height: 1.4;
+		}
+		.status-overlay.error {
+			color: var(--waw-danger, #e5484d);
+		}
+		.status-overlay[hidden] {
+			display: none;
+		}
+		/* The controls drawn over the video; only the controls themselves take
+		   the pointer, the rest lets clicks through to the canvas. */
+		.vid-ui {
+			position: absolute;
+			inset: 0;
+			z-index: 2;
+			pointer-events: none;
+			line-height: 1.2;
+		}
+		.vid-ui > * {
+			pointer-events: auto;
+		}
+		/* The instruction text is a row of its own across the top, with the
+		   add controls beneath it, so nothing it says ever lies under a button. */
+		.top-ui {
+			position: absolute;
+			top: 0.4rem;
+			left: 0.4rem;
+			right: 0.4rem;
+			display: flex;
+			flex-direction: column;
+			align-items: stretch;
+			gap: 0.35rem;
+			pointer-events: none;
+		}
+		.top-ui > * {
+			pointer-events: auto;
+		}
+		.add-wrap {
+			display: flex;
+			align-items: center;
+			gap: 0.35rem;
+		}
+		.add-wrap[hidden],
+		.model-choices[hidden],
+		.map-wrap[hidden],
+		.subtitle[hidden],
+		.axis-select[hidden] {
+			display: none;
+		}
+		.model-choices {
+			display: flex;
+			gap: 0.3rem;
+		}
+		/* A half-transparent dark ground (also when hovered, where a light one
+		   made white text vanish on a light picture) and a light outline, so
+		   the controls read on anything the camera shows. */
+		.add-btn,
+		.model-choices button,
+		.map-btn,
+		.axis-select {
+			background: rgba(0, 0, 0, 0.72);
+			border: 1.5px solid rgba(255, 255, 255, 0.9);
+			border-radius: 6px;
+			color: #fff;
+			font: 600 0.8rem system-ui, sans-serif;
+			text-shadow: 0 0 3px #000;
+			box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+			cursor: pointer;
+		}
+		.add-btn {
+			width: 28px;
+			height: 28px;
+			padding: 0;
+			border-radius: 50%;
+			font-size: 1.1rem;
+		}
+		.model-choices button,
+		.map-btn,
+		.axis-select {
+			padding: 0.25rem 0.6rem;
+		}
+		.add-btn:hover,
+		.model-choices button:hover,
+		.map-btn:hover {
+			background: rgba(0, 0, 0, 0.9);
+			border-color: #fff;
+		}
+		.map-btn.armed {
+			border-color: #facc15;
+			color: #facc15;
+		}
+		.subtitle {
+			align-self: center;
+			max-width: 100%;
+			padding: 0.2rem 0.6rem;
+			background: rgba(0, 0, 0, 0.78);
+			color: #fff;
+			font: 0.82rem/1.3 system-ui, sans-serif;
+			text-align: center;
+			border-radius: 3px;
+			pointer-events: none;
+		}
+		.map-wrap {
+			position: absolute;
+			right: 0.5rem;
+			bottom: 0.5rem;
+			display: flex;
+			flex-direction: column;
+			align-items: flex-end;
+			gap: 0.3rem;
+		}
+		.axis-select {
+			font-weight: 400;
+		}
+		.axis-select option {
+			color: #000;
+		}
+
+		.saved-list {
+			display: flex;
+			flex-direction: column;
+			gap: 0.3rem;
+		}
+		.saved-row {
+			background: rgba(255, 255, 255, 0.04);
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 7px;
+			padding: 0.45rem 0.6rem;
+			display: flex;
+			flex-direction: column;
+			gap: 0.4rem;
+			cursor: pointer;
+		}
+		.saved-row.selected {
+			border-color: #fff;
+			background: rgba(255, 255, 255, 0.09);
+		}
+		.saved-row-top {
+			display: flex;
+			align-items: center;
+			flex-wrap: wrap;
+			gap: 0.4rem 0.5rem;
+		}
+		.saved-label {
+			flex: 1 1 6rem;
+			min-width: 0;
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.74rem;
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.1rem;
+		}
+		.slm-hands {
+			color: var(--waw-teal, #45b58c);
+		}
+		.slm-pose {
+			color: #fb923c;
+		}
+		.slm-face {
+			color: var(--waw-accent, #4fa3ff);
+		}
+		.slm-sep {
+			color: var(--waw-muted, #8a8a8a);
+		}
+		.measure-tag {
+			font-size: 0.62rem;
+			color: var(--waw-muted, #8a8a8a);
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			white-space: nowrap;
+		}
+		.saved-controls {
+			display: flex;
+			align-items: center;
+			flex-wrap: wrap;
+			gap: 0.4rem;
+		}
+		.row-axis {
+			background: #1a1c1f;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 5px;
+			color: inherit;
+			font-size: 0.68rem;
+			padding: 0.1rem 0.2rem;
+		}
+		.mute-btn,
+		.icon-btn {
+			border: 1.5px solid var(--waw-border, #2f2f2f);
+			border-radius: 6px;
+			background: #1a1c1f;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: pointer;
+			font-family: inherit;
+			line-height: 1;
+		}
+		.mute-btn {
+			padding: 0.15rem 0.45rem;
+			font-size: 0.7rem;
+		}
+		.icon-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0.2rem 0.3rem;
+		}
+		.mute-btn.active {
+			border-color: #fb923c;
+			color: #fb923c;
+			background: rgba(251, 146, 60, 0.14);
+		}
+		.icon-btn.active {
+			border-color: var(--waw-teal, #45b58c);
+			color: var(--waw-teal, #45b58c);
+			background: rgba(69, 181, 140, 0.12);
+		}
+		.saved-del {
+			background: none;
+			border: none;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: pointer;
+			font-size: 1rem;
+			line-height: 1;
+			padding: 0 0.2rem;
+		}
+		.saved-del:hover {
+			color: var(--waw-danger, #e5484d);
+		}
 		.calibrate-btn {
 			padding: 0.15rem 0.5rem;
 			border: 1.5px solid var(--waw-border, #2f2f2f);
@@ -216,276 +531,35 @@ template.innerHTML = `
 		.calibrate-hint[hidden] {
 			display: none;
 		}
-		/* Per-entry mute — per Hans (2026-09-27): a manual knob drag should
-		   always be possible even while INPUT drives it, but if the webcam
-		   keeps sending values every frame that fights any manual attempt,
-		   so this lets one entry stop feeding its mapped Var(s) without
-		   losing its mappings (unlike deleting it outright). */
-		.bypass-toggle {
-			position: relative;
-			display: inline-block;
-			width: 26px;
-			height: 15px;
-			flex-shrink: 0;
-		}
-		.bypass-toggle input {
-			opacity: 0;
-			width: 0;
-			height: 0;
-		}
-		.bypass-toggle .toggle-track {
-			position: absolute;
-			inset: 0;
-			background: #2a2a2a;
-			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 15px;
-			cursor: pointer;
-			transition: background 0.12s ease;
-		}
-		.bypass-toggle .toggle-track::before {
-			content: "";
-			position: absolute;
-			width: 9px;
-			height: 9px;
-			left: 2px;
-			top: 2px;
-			background: var(--waw-muted, #8a8a8a);
-			border-radius: 50%;
-			transition: transform 0.12s ease, background 0.12s ease;
-		}
-		.bypass-toggle input:checked + .toggle-track {
-			background: rgba(69, 181, 140, 0.18);
-			border-color: var(--waw-teal, #45b58c);
-		}
-		.bypass-toggle input:checked + .toggle-track::before {
-			transform: translateX(11px);
-			background: var(--waw-teal, #45b58c);
-		}
-		.video-wrapper {
-			position: relative;
-			background: #000;
-			border-radius: 8px;
-			overflow: hidden;
-			line-height: 0;
-			margin-bottom: 0.6rem;
-		}
-		video {
-			width: 100%;
-			display: block;
-		}
-		video.mirror,
-		canvas.mirror {
-			transform: scaleX(-1);
-		}
-		canvas {
-			position: absolute;
-			inset: 0;
-			width: 100%;
-			height: 100%;
-			cursor: crosshair;
-		}
-		.status-overlay {
-			position: absolute;
-			inset: 0;
-			background: rgba(0, 0, 0, 0.82);
+		.value-row {
 			display: flex;
 			align-items: center;
-			justify-content: center;
-			text-align: center;
-			padding: 1rem;
-			color: var(--waw-muted, #8a8a8a);
-			font-size: 0.8rem;
-		}
-		.status-overlay.error {
-			color: var(--waw-danger, #e5484d);
-		}
-		.status-overlay[hidden] {
-			display: none;
-		}
-		.sel-panel {
-			background: rgba(255, 255, 255, 0.04);
-			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 8px;
-			padding: 0.6rem 0.7rem;
-			margin-bottom: 0.6rem;
-		}
-		.sel-top {
-			display: flex;
-			align-items: flex-start;
 			gap: 0.5rem;
 		}
-		.chip-container {
+		.value-bar {
 			flex: 1 1 auto;
-			display: flex;
-			flex-wrap: wrap;
-			gap: 0.3rem;
-			align-items: center;
-			min-height: 1.5rem;
+			height: 6px;
+			background: #1a1c1f;
+			border-radius: 3px;
+			overflow: hidden;
 		}
-		.hint-text {
-			font-size: 0.68rem;
-			color: var(--waw-muted, #8a8a8a);
+		.value-fill {
+			height: 100%;
+			width: 0;
+			background: var(--entry-color, #4fa3ff);
+		}
+		.value-num {
 			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-		}
-		.sel-chip {
-			display: inline-flex;
-			align-items: center;
-			gap: 0.3rem;
-			padding: 0.15rem 0.3rem 0.15rem 0.5rem;
-			border-radius: 20px;
-			font-size: 0.75rem;
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			border: 1px solid;
-		}
-		.sel-chip.model-hands {
-			border-color: var(--waw-teal, #45b58c);
-			color: var(--waw-teal, #45b58c);
-		}
-		.sel-chip.model-pose {
-			border-color: #fb923c;
-			color: #fb923c;
-		}
-		.sel-chip.model-face {
-			border-color: var(--waw-accent, #4fa3ff);
-			color: var(--waw-accent, #4fa3ff);
-		}
-		.sel-chip button {
-			background: none;
-			border: none;
-			color: currentColor;
-			cursor: pointer;
-			font-size: 0.85rem;
-			padding: 0;
-			opacity: 0.6;
-			line-height: 1;
-		}
-		.sel-chip button:hover {
-			opacity: 1;
-		}
-		.sel-actions {
-			flex: 0 0 auto;
-			display: flex;
-			gap: 0.3rem;
-		}
-		.clear-btn,
-		.add-btn {
-			padding: 0.2rem 0.5rem;
-			border-radius: 5px;
-			font-size: 0.75rem;
-			font-family: inherit;
-			cursor: pointer;
-			white-space: nowrap;
-		}
-		.clear-btn {
-			background: none;
-			border: 1px solid var(--waw-border, #2f2f2f);
-			color: var(--waw-muted, #8a8a8a);
-		}
-		.add-btn {
-			background: var(--waw-accent, #4fa3ff);
-			border: none;
-			color: #06131f;
-			font-weight: 600;
-		}
-		.live-values {
-			display: flex;
-			gap: 0.9rem;
-			flex-wrap: wrap;
-			margin-top: 0.5rem;
-		}
-		.coord-block {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			gap: 0.15rem;
-		}
-		.coord-key {
-			font-size: 0.62rem;
-			color: var(--waw-muted, #8a8a8a);
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-		}
-		.coord-val {
-			font-size: 0.85rem;
-			font-weight: 600;
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.72rem;
+			min-width: 2.6rem;
+			text-align: right;
 			color: var(--waw-fg, #e8e8e8);
-			min-width: 3.2rem;
-			text-align: center;
 		}
-		.saved-list {
+		.targets {
 			display: flex;
-			flex-direction: column;
+			flex-wrap: wrap;
+			align-items: center;
 			gap: 0.3rem;
-		}
-		.saved-row {
-			background: rgba(255, 255, 255, 0.04);
-			border: 1px solid var(--waw-border, #2f2f2f);
-			border-radius: 7px;
-			padding: 0.45rem 0.6rem;
-			display: flex;
-			flex-direction: column;
-			gap: 0.4rem;
-		}
-		.saved-row-top {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 0.5rem;
-		}
-		.saved-label {
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			font-size: 0.78rem;
-			display: flex;
-			flex-wrap: wrap;
-			gap: 0.1rem;
-		}
-		.slm-hands {
-			color: var(--waw-teal, #45b58c);
-		}
-		.slm-pose {
-			color: #fb923c;
-		}
-		.slm-face {
-			color: var(--waw-accent, #4fa3ff);
-		}
-		.slm-sep {
-			color: var(--waw-muted, #8a8a8a);
-		}
-		.saved-del {
-			background: none;
-			border: none;
-			color: var(--waw-muted, #8a8a8a);
-			cursor: pointer;
-			font-size: 1rem;
-			line-height: 1;
-			padding: 0 0.2rem;
-		}
-		.saved-del:hover {
-			color: var(--waw-danger, #e5484d);
-		}
-		.saved-vals {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 0.6rem 0.9rem;
-		}
-		.sv-block {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			gap: 0.2rem;
-		}
-		.sv-key {
-			font-size: 0.6rem;
-			color: var(--waw-muted, #8a8a8a);
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-		}
-		.sv-val {
-			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
-			font-size: 0.82rem;
-			font-weight: 600;
-			color: var(--waw-fg, #e8e8e8);
-			min-width: 3rem;
-			text-align: center;
 		}
 		.sv-map-btn {
 			background: none;
@@ -502,10 +576,9 @@ template.innerHTML = `
 			border-color: var(--waw-accent, #4fa3ff);
 			color: var(--waw-accent, #4fa3ff);
 		}
-		/* Whichever button/pill armed input-map-mode.js just now — same
-		   yellow ring wa-var-knobs.js's own Map button and every valid
-		   target use (see that file's own comment on why the @keyframes is
-		   declared again per shadow root). Per Hans (2026-10-03). */
+		/* Whichever button/pill armed input-map-mode.js just now — the same
+		   yellow ring every valid target uses (see wa-var-knobs.js's own
+		   comment on why the @keyframes is declared again per shadow root). */
 		@keyframes target-armed-blink {
 			0%,
 			100% {
@@ -516,7 +589,8 @@ template.innerHTML = `
 			}
 		}
 		.sv-map-btn.armed,
-		.sv-mapped.armed {
+		.sv-mapped.armed,
+		.map-btn.armed {
 			border-style: solid;
 			border-color: #facc15;
 			color: #facc15;
@@ -549,39 +623,36 @@ template.innerHTML = `
 		.sv-unmap:hover {
 			opacity: 1;
 		}
-		/* Stacked, not inline — an entry can map the same metric to several
-		   <Var>s now (per Hans, 2026-09-30), so this needs room for more than
-		   one pill plus the trailing "Map..." button. */
-		.sv-map-wrap {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			gap: 0.2rem;
-		}
 	</style>
 	<div class="row">
-		<button class="model-btn active" type="button" data-model="hands"><span class="dot"></span>Hands</button>
-		<button class="model-btn active" type="button" data-model="pose"><span class="dot"></span>Body</button>
-		<button class="model-btn active" type="button" data-model="face"><span class="dot"></span>Face</button>
-		<select class="camera-select" title="Camera"></select>
-	</div>
-	<div class="row">
 		<button class="start-btn" type="button">Start</button>
+		<select class="camera-select" title="Camera"></select>
 	</div>
 	<div class="video-wrapper">
 		<video autoplay playsinline muted></video>
 		<canvas></canvas>
-		<div class="status-overlay">Camera is off. Click Start to begin tracking.</div>
-	</div>
-	<div class="sel-panel">
-		<div class="sel-top">
-			<div class="chip-container"><span class="hint-text">Select one or more points in the video</span></div>
-			<div class="sel-actions">
-				<button class="clear-btn hidden" type="button">Clear</button>
-				<button class="add-btn hidden" type="button">+ Add</button>
+		<div class="vid-ui" hidden>
+			<div class="top-ui">
+				<div class="subtitle" hidden></div>
+				<div class="add-wrap">
+					<button class="add-btn" type="button" title="Add a mapping">+</button>
+					<span class="model-choices" hidden>
+						<button type="button" data-model="hands">hand</button>
+						<button type="button" data-model="pose">body</button>
+						<button type="button" data-model="face">face</button>
+					</span>
+				</div>
+			</div>
+			<div class="map-wrap" hidden>
+				<select class="axis-select" title="Which movement to follow" hidden>
+					<option value="horizontal">Horizontal</option>
+					<option value="vertical">Vertical</option>
+					<option value="both" selected>Both</option>
+				</select>
+				<button class="map-btn" type="button">Calibrate...</button>
 			</div>
 		</div>
-		<div class="live-values"></div>
+		<div class="status-overlay">Camera is off. Click Start to begin tracking.</div>
 	</div>
 	<div class="saved-list"></div>
 `;
@@ -591,57 +662,71 @@ export class WaWebcamInput extends HTMLElement {
 		super();
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
+		const $ = (sel) => this.shadowRoot.querySelector(sel);
 
-		this._videoEl = this.shadowRoot.querySelector("video");
-		this._canvas = this.shadowRoot.querySelector("canvas");
+		this._videoEl = $("video");
+		this._canvas = $("canvas");
 		this._ctx = this._canvas.getContext("2d");
-		this._statusOverlay = this.shadowRoot.querySelector(".status-overlay");
-		this._cameraSelect = this.shadowRoot.querySelector(".camera-select");
-		this._startBtn = this.shadowRoot.querySelector(".start-btn");
-		this._chipContainer = this.shadowRoot.querySelector(".chip-container");
-		this._liveValuesDiv = this.shadowRoot.querySelector(".live-values");
-		this._clearBtn = this.shadowRoot.querySelector(".clear-btn");
-		this._addBtn = this.shadowRoot.querySelector(".add-btn");
-		this._savedListEl = this.shadowRoot.querySelector(".saved-list");
+		this._statusOverlay = $(".status-overlay");
+		this._cameraSelect = $(".camera-select");
+		this._startBtn = $(".start-btn");
+		this._vidUi = $(".vid-ui");
+		this._addWrap = $(".add-wrap");
+		this._addBtn = $(".add-btn");
+		this._modelChoices = $(".model-choices");
+		this._subtitle = $(".subtitle");
+		this._mapWrap = $(".map-wrap");
+		this._axisSelect = $(".axis-select");
+		this._mapBtn = $(".map-btn");
+		this._savedListEl = $(".saved-list");
 
+		// Per model: the tracker instance (once loaded) and the latest result.
 		this._modelState = {
-			hands: { enabled: true, instance: null, results: null },
-			pose: { enabled: true, instance: null, results: null },
-			face: { enabled: true, instance: null, results: null }
+			hands: { instance: null, results: null, loading: null },
+			pose: { instance: null, results: null, loading: null },
+			face: { instance: null, results: null, loading: null }
 		};
 		this._drawUtils = null;
-		this._visionModule = null; // the dynamically-imported MediaPipe module, cached across Start/Stop
-		this._modelsLoadPromise = null;
+		this._visionModule = null;
+		this._visionPromise = null;
 		this._currentStream = null;
 		this._cameraDeviceId = null;
 		this._running = false;
 		this._rafId = null;
+		this._lastVideoTime = -1;
 
-		this._activeSelection = new Set(); // clicked-but-not-yet-saved labels
+		this._choosing = false; // the hand | body | face buttons are showing
+		this._adding = null; // { model } while picking points for a new mapping
+		this._activeSelection = []; // labels of the points picked so far, in order
+		this._activeCalib = null;
+		this._activeSamples = [];
+		this._calibPhase = "idle"; // of the selection: "idle" -> "calibrating" (Calibrate... pressed) -> "done" (Done pressed; the button is map...)
+		this._calibNote = ""; // a short message under way, e.g. when nothing moved
+		this._activeParticles = [];
+		this._pendingMap = null; // the snapshot "map..." took, while a target is being picked
+		this._nextColorIndex = 0;
+		this._selectionColor = COLOR_PALETTE[0];
+
 		this._allLandmarks = [];
 		this._landmarkMap = new Map();
-		this._onVarLinkChanged = (e) => this._followVarLink(e.detail);
-		this._savedEntries = []; // { id, type, labelMetas, lastValues, mappings, row, valueEls, mapEls }
+		this._savedEntries = []; // { id, model, labels, labelMetas, color, mode, calib, mappings, bypassed, ... }
 		this._savedEntryCounter = 0;
-		this._liveDisplayType = null;
-		this._liveSpans = {};
+		this._selectedEntryId = null;
 
+		this._onVarLinkChanged = (e) => this._followVarLink(e.detail);
 		this._tick = this._tick.bind(this);
 		this._onCanvasClick = this._onCanvasClick.bind(this);
+		this._onKeyDown = (e) => {
+			// Capture phase, so that an armed mapping's own Escape (input-map-mode.js)
+			// is left to disarm it first.
+			if (e.key !== "Escape" || inputMapMode.armed) return;
+			if (this._adding || this._choosing) this._cancelAdding();
+		};
 	}
 
 	connectedCallback() {
 		xmlStore.addEventListener("var-link-changed", this._onVarLinkChanged);
-		this.shadowRoot.querySelectorAll(".model-btn").forEach((btn) => {
-			btn.addEventListener("click", () => {
-				const model = btn.dataset.model;
-				const state = this._modelState[model];
-				state.enabled = !state.enabled;
-				btn.classList.toggle("active", state.enabled);
-				if (!state.enabled) state.results = null;
-				this._dispatchStateChange();
-			});
-		});
+		document.addEventListener("keydown", this._onKeyDown, true);
 		this._startBtn.addEventListener("click", () => (this._running ? this._stop() : this._start()));
 		this._cameraSelect.addEventListener("change", () => {
 			this._cameraDeviceId = this._cameraSelect.value || null;
@@ -649,25 +734,24 @@ export class WaWebcamInput extends HTMLElement {
 			this._dispatchStateChange();
 		});
 		this._canvas.addEventListener("click", this._onCanvasClick);
-		this._clearBtn.addEventListener("click", () => {
-			this._activeSelection.clear();
-			this._updateSelectionUI();
+		this._addBtn.addEventListener("click", () => this._onAddButton());
+		this._modelChoices.querySelectorAll("button").forEach((btn) => btn.addEventListener("click", () => this._beginAdding(btn.dataset.model)));
+		this._mapBtn.addEventListener("click", (e) => {
+			e.stopPropagation(); // the click that arms must not also be the "unclaimed click" that disarms
+			this._onMapButton();
 		});
-		this._addBtn.addEventListener("click", () => {
-			this._addToSaved();
-			this._activeSelection.clear();
-			this._updateSelectionUI();
-		});
+		this._updateOverlay();
 	}
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("var-link-changed", this._onVarLinkChanged);
+		document.removeEventListener("keydown", this._onKeyDown, true);
 		this._stop();
 	}
 
 	// A <Var>'s `name` and/or `value` changed (see xml-store.js's
-	// _varLinkChange): every mapping that pointed at it follows, so the link
-	// keeps working. A mapping made straight onto a parameter also keeps
+	// _varLinkChange): every target that pointed at it follows, so the link
+	// keeps working. A target made straight onto a parameter also keeps
 	// feeding the variable the Var now reads from (its `value`).
 	_followVarLink({ oldName, newName, oldValue, newValue }) {
 		// A Var's `value` refers to the hidden variable as "$input_var1"; the
@@ -678,24 +762,22 @@ export class WaWebcamInput extends HTMLElement {
 		const validInput = /^[A-Za-z0-9_]+$/.test(newInput);
 		let changed = false;
 		this._savedEntries.forEach((entry) => {
-			Object.entries(entry.mappings).forEach(([key, list]) => {
-				let hit = false;
-				list.forEach((mapping) => {
-					if (mapping.varName !== oldName) return;
-					if (newName !== oldName) {
-						mapping.varName = newName;
-						hit = true;
-					}
-					if (mapping.direct && oldInput !== newInput && mapping.inputVar === oldInput && validInput) {
-						mapping.inputVar = newInput;
-						hit = true;
-					}
-				});
-				if (hit) {
-					changed = true;
-					if (entry.mapEls[key]) this._refreshMapControl(entry.mapEls[key], entry, key);
+			let hit = false;
+			entry.mappings.forEach((mapping) => {
+				if (mapping.varName !== oldName) return;
+				if (newName !== oldName) {
+					mapping.varName = newName;
+					hit = true;
+				}
+				if (mapping.direct && oldInput !== newInput && mapping.inputVar === oldInput && validInput) {
+					mapping.inputVar = newInput;
+					hit = true;
 				}
 			});
+			if (hit) {
+				changed = true;
+				this._refreshTargets(entry);
+			}
 		});
 		if (changed) this._dispatchStateChange();
 	}
@@ -707,22 +789,21 @@ export class WaWebcamInput extends HTMLElement {
 		this._stop();
 	}
 
-	// ── Persistence (workstation-state.json, via workstation-state.js's own
-	// registerLayoutExtras — see that file's "webcamInput" wiring) ──────────
+	// ── Persistence (workstation-state.json) ─────────────────────────────
 	getState() {
 		return {
-			modelToggles: {
-				hands: this._modelState.hands.enabled,
-				pose: this._modelState.pose.enabled,
-				face: this._modelState.face.enabled
-			},
+			version: 2,
 			cameraDeviceId: this._cameraDeviceId,
 			running: this._running,
 			entries: this._savedEntries.map((e) => ({
 				id: e.id,
-				labels: e.labelMetas.map((m) => m.label),
-				type: e.type,
-				mappings: Object.fromEntries(Object.entries(e.mappings).map(([key, list]) => [key, list.map((m) => ({ ...m }))])),
+				model: e.model,
+				labels: [...e.labels],
+				color: e.color,
+				mode: e.mode,
+				invert: e.invert,
+				calib: { ...e.calib },
+				mappings: e.mappings.map((m) => ({ ...m })),
 				bypassed: e.bypassed
 			}))
 		};
@@ -730,19 +811,10 @@ export class WaWebcamInput extends HTMLElement {
 
 	applyState(state) {
 		if (!state || typeof state !== "object") return;
-		if (state.modelToggles && typeof state.modelToggles === "object") {
-			["hands", "pose", "face"].forEach((model) => {
-				if (typeof state.modelToggles[model] !== "boolean") return;
-				this._modelState[model].enabled = state.modelToggles[model];
-				this.shadowRoot.querySelector(`.model-btn[data-model="${model}"]`)?.classList.toggle("active", state.modelToggles[model]);
-			});
-		}
 		if (typeof state.cameraDeviceId === "string") this._cameraDeviceId = state.cameraDeviceId;
 		if (Array.isArray(state.entries)) {
-			state.entries.forEach((e) => {
-				if (!Array.isArray(e.labels) || e.labels.length === 0) return;
-				this._restoreSavedEntry(e);
-			});
+			this._migrateEntries(state.entries).forEach((e) => this._createEntry(e));
+			this._syncModels();
 		}
 		// Per Hans (2026-09-26): a project saved with the camera running
 		// should have it running again as soon as the project opens, rather
@@ -753,38 +825,78 @@ export class WaWebcamInput extends HTMLElement {
 		if (state.running) this._start();
 	}
 
+	// Rows saved before the 2026-10-12 redesign had a metric per key (x, y, z,
+	// dist2d, dist3d, area2d, ...), each with its own targets and range. Each
+	// key that still exists becomes a row of its own — x → Horizontal, y →
+	// Vertical, dist2d, area2d — keeping its targets, its range (in today's
+	// mirrored, up-is-more terms) and the name it was sent under, so a root
+	// <Var> that refers to that name keeps working. The 3D measures and
+	// circumference are dropped.
+	_migrateEntries(entries) {
+		const out = [];
+		for (const e of entries) {
+			if (!Array.isArray(e.labels) || e.labels.length === 0) continue;
+			if (e.version === 2 || e.model) {
+				out.push(e);
+				continue;
+			}
+			const model = modelOfLabel(e.labels[0]);
+			const oldMappings = e.mappings && typeof e.mappings === "object" ? e.mappings : {};
+			const n = e.labels.length;
+			const keys = n === 1 ? ["x", "y"] : n === 2 ? ["dist2d"] : ["area2d"];
+			for (const key of keys) {
+				const list = oldMappings[key];
+				if (!list) continue;
+				const mappings = (Array.isArray(list) ? list : [list]).map((one) =>
+					typeof one === "string" ? { varName: one, min: 0, max: 1 } : one
+				);
+				if (!mappings.length) continue;
+				const first = mappings[0];
+				const lo = first.min ?? null;
+				const hi = first.max ?? null;
+				let calib;
+				if (key === "x") calib = { ...emptyCalib("point"), xMin: hi === null ? null : 1 - hi, xMax: lo === null ? null : 1 - lo };
+				else if (key === "y") calib = { ...emptyCalib("point"), yMin: hi === null ? null : 1 - hi, yMax: lo === null ? null : 1 - lo };
+				else calib = { min: lo, max: hi };
+				out.push({
+					model,
+					labels: e.labels,
+					mode: key === "x" ? "horizontal" : key === "y" ? "vertical" : "both",
+					calib,
+					mappings: mappings.map((m) => ({
+						varName: m.varName,
+						...(m.direct ? { direct: true, inputVar: m.inputVar ?? `input_${m.varName}` } : {})
+					})),
+					bypassed: !!e.bypassed
+				});
+			}
+		}
+		return out;
+	}
+
 	_dispatchStateChange() {
 		this.dispatchEvent(new CustomEvent("state-change", { bubbles: true, composed: true }));
 	}
 
 	// ── Start / Stop ─────────────────────────────────────────────────────
-	// getUserMedia() is called as the very first async step, in parallel
-	// with (not after) loading MediaPipe's model files — those are fetched
-	// over the network and can easily take several seconds, and some
-	// browsers stop treating a getUserMedia call as driven by the
-	// triggering user gesture once that much time has passed since it. The
-	// old serial order (models, then camera) was silently breaking the
-	// project-open autostart (applyState's own _start() call, itself
-	// already downstream of the file-open gesture by the time the project
-	// file and workstation-state.json have been read/parsed): by the time
-	// it reached getUserMedia, the gesture had already gone stale, so it
-	// silently sat there needing an actual click. Per Hans's bug report
-	// (2026-09-29). Requesting the camera first (alongside, not blocked by,
-	// the model load) keeps it as close to the gesture as possible — and is
-	// strictly faster besides, since the two loads now run concurrently.
+	// getUserMedia() is called as the very first async step so it stays as
+	// close as possible to the triggering user gesture (some browsers stop
+	// treating it as driven by the gesture after a few seconds — the old
+	// "models first, then camera" order silently broke the project-open
+	// autostart; per Hans's bug report 2026-09-29). The trackers are loaded
+	// afterwards, one by one and only when a row or a new mapping needs them.
 	async _start() {
 		this._startBtn.disabled = true;
 		this._setStatus("Requesting camera…", false);
 		try {
-			const modelsPromise = this._ensureModelsLoaded();
 			const activeId = await this._startCamera(this._cameraDeviceId);
-			this._setStatus("Loading MediaPipe…", false);
-			await modelsPromise;
 			await this._enumerateCameras(activeId);
 			this._running = true;
 			this._startBtn.textContent = "Stop";
 			this._startBtn.classList.add("running");
 			this._statusOverlay.hidden = true;
+			this._syncModels();
+			this._updateOverlay();
 			this._rafId = requestAnimationFrame(this._tick);
 		} catch (err) {
 			this._setStatus(`Error: ${err.message}\nCheck camera access and network connection.`, true);
@@ -803,48 +915,79 @@ export class WaWebcamInput extends HTMLElement {
 			this._currentStream = null;
 		}
 		this._running = false;
+		this._choosing = false;
+		this._adding = null;
+		this._activeSelection = [];
 		this._startBtn.textContent = "Start";
 		this._startBtn.classList.remove("running");
 		this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+		Object.values(this._modelState).forEach((s) => (s.results = null));
 		this._setStatus("Camera is off. Click Start to begin tracking.", false);
+		this._updateOverlay();
 	}
 
 	_setStatus(text, isError) {
 		this._statusOverlay.hidden = false;
+		this._vidUi.hidden = true;
 		this._statusOverlay.classList.toggle("error", !!isError);
 		this._statusOverlay.textContent = text;
 	}
 
-	// Loads the WASM runtime + all three models once, then keeps them warm
-	// across later Stop/Start toggles — per Hans (2026-09-22): re-downloading
-	// ~3 model files every time the user toggles Start would be wasteful.
-	_ensureModelsLoaded() {
-		if (this._modelsLoadPromise) return this._modelsLoadPromise;
-		this._modelsLoadPromise = (async () => {
+	// ── Trackers ─────────────────────────────────────────────────────────
+	// Which trackers have to run right now: the ones the rows use, plus the
+	// one a new mapping is being picked in.
+	_neededModels() {
+		const needed = new Set(this._savedEntries.map((e) => e.model));
+		if (this._adding) needed.add(this._adding.model);
+		needed.delete("unknown");
+		return needed;
+	}
+
+	// Loads (once) every tracker that is needed and not loaded yet — the WASM
+	// runtime is shared, each model is its own download. They stay loaded
+	// across Stop/Start (re-downloading would be wasteful), but only the
+	// needed ones run (see _tick).
+	_syncModels() {
+		if (!this._running) return;
+		this._neededModels().forEach((name) => {
+			const state = this._modelState[name];
+			if (state.instance || state.loading) return;
+			state.loading = this._loadModel(name)
+				.catch((err) => this._showError(`Could not load ${MODEL_CHOICES[name]} tracking: ${err.message}`))
+				.finally(() => {
+					state.loading = null;
+					this._updateOverlay();
+				});
+			this._updateOverlay();
+		});
+	}
+
+	_showError(text) {
+		this._subtitle.hidden = false;
+		this._subtitle.textContent = text;
+	}
+
+	_ensureVision() {
+		if (this._visionPromise) return this._visionPromise;
+		this._visionPromise = (async () => {
 			const mod = await import(/* webpackIgnore: true */ VISION_BUNDLE_URL);
 			this._visionModule = mod;
-			const { HandLandmarker, PoseLandmarker, FaceLandmarker, FilesetResolver, DrawingUtils } = mod;
-			const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
-			await Promise.all([
-				HandLandmarker.createFromOptions(vision, {
-					baseOptions: { modelAssetPath: MODEL_URLS.hands, delegate: "GPU" },
-					runningMode: "VIDEO",
-					numHands: 2
-				}).then((lm) => (this._modelState.hands.instance = lm)),
-				PoseLandmarker.createFromOptions(vision, {
-					baseOptions: { modelAssetPath: MODEL_URLS.pose, delegate: "GPU" },
-					runningMode: "VIDEO",
-					numPoses: 1
-				}).then((lm) => (this._modelState.pose.instance = lm)),
-				FaceLandmarker.createFromOptions(vision, {
-					baseOptions: { modelAssetPath: MODEL_URLS.face, delegate: "GPU" },
-					runningMode: "VIDEO",
-					numFaces: 1
-				}).then((lm) => (this._modelState.face.instance = lm))
-			]);
-			this._drawUtils = new DrawingUtils(this._ctx);
+			this._vision = await mod.FilesetResolver.forVisionTasks(WASM_PATH);
+			this._drawUtils = new mod.DrawingUtils(this._ctx);
 		})();
-		return this._modelsLoadPromise;
+		return this._visionPromise;
+	}
+
+	async _loadModel(name) {
+		await this._ensureVision();
+		const { HandLandmarker, PoseLandmarker, FaceLandmarker } = this._visionModule;
+		const options = (path, extra) => ({ baseOptions: { modelAssetPath: path, delegate: "GPU" }, runningMode: "VIDEO", ...extra });
+		this._modelState[name].instance =
+			name === "hands"
+				? await HandLandmarker.createFromOptions(this._vision, options(MODEL_URLS.hands, { numHands: 2 }))
+				: name === "pose"
+					? await PoseLandmarker.createFromOptions(this._vision, options(MODEL_URLS.pose, { numPoses: 1 }))
+					: await FaceLandmarker.createFromOptions(this._vision, options(MODEL_URLS.face, { numFaces: 1 }));
 	}
 
 	async _enumerateCameras(activeId) {
@@ -897,21 +1040,25 @@ export class WaWebcamInput extends HTMLElement {
 	_tick() {
 		this._syncCanvasSize();
 		if (this._running && this._videoEl.readyState >= 2) {
-			const ts = performance.now();
-			const ms = this._modelState;
-			ms.hands.results = ms.hands.enabled ? ms.hands.instance.detectForVideo(this._videoEl, ts) : null;
-			ms.pose.results = ms.pose.enabled ? ms.pose.instance.detectForVideo(this._videoEl, ts) : null;
-			ms.face.results = ms.face.enabled ? ms.face.instance.detectForVideo(this._videoEl, ts) : null;
-			this._onMediaPipeUpdate();
+			// The trackers run once per picture the camera delivers; the drawing
+			// (the fading sprays) runs on every screen refresh in between.
+			if (this._videoEl.currentTime !== this._lastVideoTime) {
+				this._lastVideoTime = this._videoEl.currentTime;
+				const ts = performance.now();
+				const needed = this._neededModels();
+				for (const [name, state] of Object.entries(this._modelState)) {
+					state.results = needed.has(name) && state.instance ? state.instance.detectForVideo(this._videoEl, ts) : null;
+				}
+				this._onMediaPipeUpdate();
+			} else {
+				this._renderCanvas(performance.now(), false);
+			}
 		}
 		if (this._running) this._rafId = requestAnimationFrame(this._tick);
 	}
 
-	// Variable-name-free version of the reference's own onMediaPipeUpdate —
-	// labels stay hand0..41 / pose0..32 / face0..477 (used only to identify
-	// which landmark a saved entry/active selection points at); the actual
-	// WAXML variable it feeds comes from that entry's own per-key mapping
-	// (see _sendMappedValues), not the label itself.
+	// Rebuilds the point lookup from this frame's results. Labels stay
+	// leftHand0..20 / rightHand0..20, pose0..32 and face0..477.
 	_onMediaPipeUpdate() {
 		this._allLandmarks = [];
 		this._landmarkMap.clear();
@@ -919,9 +1066,18 @@ export class WaWebcamInput extends HTMLElement {
 			this._allLandmarks.push(e);
 			this._landmarkMap.set(e.label, e);
 		};
+		const make = (model, lm) => ({
+			model,
+			x: parseFloat(lm.x.toFixed(3)),
+			y: parseFloat(lm.y.toFixed(3)),
+			z: parseFloat((lm.z ?? 0).toFixed(3)),
+			cx: lm.x * this._canvas.width,
+			cy: lm.y * this._canvas.height
+		});
 
-		if (this._modelState.hands.results?.landmarks) {
-			const { landmarks, handedness, handednesses } = this._modelState.hands.results;
+		const handResults = this._modelState.hands.results;
+		if (handResults?.landmarks) {
+			const { landmarks, handedness, handednesses } = handResults;
 			// The field was renamed "handedness" -> "handednesses" at some
 			// point in @mediapipe/tasks-vision's own history — checking both
 			// costs nothing and keeps this working across versions.
@@ -929,127 +1085,85 @@ export class WaWebcamInput extends HTMLElement {
 			let idx = 0;
 			landmarks.forEach((hand, handIdx) => {
 				const rawSide = handsList[handIdx]?.[0]?.categoryName; // "Left" | "Right", per MediaPipe's own (unmirrored) frame
-				// The preview is always shown mirrored (see _startCamera's own
-				// ".mirror" class), so MediaPipe's own Left/Right — classified
-				// from the raw, unmirrored camera frame — reads backwards from
-				// what the user visually sees as *their* left/right hand on
-				// screen; swap to match the display. Per Hans (2026-10-03):
-				// "Det ska gå att mappa händerna separat. Visst finns det
-				// leftHand och rightHand?"
+				// The preview is shown mirrored, so MediaPipe's own Left/Right
+				// reads backwards from what the user sees on screen; swap to
+				// match the display. Per Hans (2026-10-03).
 				const side = rawSide === "Left" ? "rightHand" : rawSide === "Right" ? "leftHand" : null;
 				hand.forEach((lm, i) => {
-					const point = {
-						model: "hands",
-						x: parseFloat(lm.x.toFixed(3)),
-						y: parseFloat(lm.y.toFixed(3)),
-						z: parseFloat((lm.z ?? 0).toFixed(3)),
-						cx: lm.x * this._canvas.width,
-						cy: lm.y * this._canvas.height
-					};
-					// The old combined "hand0".."hand41" labels (first-detected
-					// hand 0-20, second 21-41, no left/right distinction) are
-					// kept ONLY in _landmarkMap — never _allLandmarks, so a new
-					// click in the canvas can never select one — purely so an
-					// already-saved entry that still references one keeps
-					// resolving exactly as it always did. Per Hans (2026-10-03):
-					// "Om man öppnar ett projekt som är gjort med bara 'hand'
-					// ska den mappas från båda händerna som tidigare."
+					const point = make("hands", lm);
+					// The old combined "hand0".."hand41" labels (no left/right
+					// distinction) are kept ONLY in _landmarkMap — never
+					// _allLandmarks, so a click can never select one — purely so
+					// a row saved with one still resolves. Per Hans (2026-10-03).
 					this._landmarkMap.set(`hand${idx}`, { label: `hand${idx}`, ...point });
 					idx++;
 					if (side) push({ label: `${side}${i}`, ...point });
 				});
 			});
 		}
-		if (this._modelState.pose.results?.landmarks) {
-			for (const pose of this._modelState.pose.results.landmarks) {
-				for (let i = 0; i < pose.length; i++) {
-					const lm = pose[i];
-					push({
-						label: `pose${i}`,
-						model: "pose",
-						x: parseFloat(lm.x.toFixed(3)),
-						y: parseFloat(lm.y.toFixed(3)),
-						z: parseFloat((lm.z ?? 0).toFixed(3)),
-						cx: lm.x * this._canvas.width,
-						cy: lm.y * this._canvas.height
-					});
-				}
-			}
+		const poseResults = this._modelState.pose.results;
+		if (poseResults?.landmarks) {
+			for (const pose of poseResults.landmarks) pose.forEach((lm, i) => push({ label: `pose${i}`, ...make("pose", lm) }));
 		}
-		if (this._modelState.face.results?.faceLandmarks) {
-			for (const face of this._modelState.face.results.faceLandmarks) {
-				for (let i = 0; i < face.length; i++) {
-					const lm = face[i];
-					push({
-						label: `face${i}`,
-						model: "face",
-						x: parseFloat(lm.x.toFixed(3)),
-						y: parseFloat(lm.y.toFixed(3)),
-						z: parseFloat((lm.z ?? 0).toFixed(3)),
-						cx: lm.x * this._canvas.width,
-						cy: lm.y * this._canvas.height
-					});
-				}
-			}
+		const faceResults = this._modelState.face.results;
+		if (faceResults?.faceLandmarks) {
+			for (const face of faceResults.faceLandmarks) face.forEach((lm, i) => push({ label: `face${i}`, ...make("face", lm) }));
 		}
 
-		this._updateActiveLiveValues();
-		this._updateSavedEntryValues();
-		this._renderCanvas();
+		this._updateActiveSelection();
+		this._savedEntries.forEach((entry) => this._updateEntryValue(entry));
+		this._renderCanvas(performance.now());
 	}
 
-	// ── Canvas rendering ─────────────────────────────────────────────────
-	_renderCanvas() {
-		const ctx = this._ctx;
-		ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-		const mod = this._visionModule;
-		if (!mod || !this._drawUtils) return;
-
-		if (this._modelState.hands.results?.landmarks) {
-			for (const lms of this._modelState.hands.results.landmarks) {
-				this._drawUtils.drawConnectors(lms, mod.HandLandmarker.HAND_CONNECTIONS, { color: "#45b58c", lineWidth: 3 });
-				this._drawUtils.drawLandmarks(lms, { color: "#2f8f6e", fillColor: "#12362a", lineWidth: 1, radius: 4 });
-			}
+	// ── Adding a mapping ─────────────────────────────────────────────────
+	_onAddButton() {
+		if (this._adding || this._choosing) {
+			this._cancelAdding();
+			return;
 		}
-		if (this._modelState.pose.results?.landmarks) {
-			for (const lms of this._modelState.pose.results.landmarks) {
-				this._drawUtils.drawConnectors(lms, mod.PoseLandmarker.POSE_CONNECTIONS, { color: "#fb923c", lineWidth: 3 });
-				this._drawUtils.drawLandmarks(lms, { color: "#c2660f", fillColor: "#3a2007", lineWidth: 1, radius: 4 });
-			}
-		}
-		if (this._modelState.face.results?.faceLandmarks) {
-			for (const lms of this._modelState.face.results.faceLandmarks) {
-				this._drawUtils.drawConnectors(lms, mod.FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "rgba(79,163,255,0.12)", lineWidth: 1 });
-				this._drawUtils.drawConnectors(lms, mod.FaceLandmarker.FACE_LANDMARKS_CONTOURS, { color: "#4fa3ff", lineWidth: 2 });
-			}
-		}
-
-		ctx.strokeStyle = "#ffffff";
-		ctx.lineWidth = 2.5;
-		for (const entry of this._savedEntries) {
-			for (const m of entry.labelMetas) {
-				const lm = this._landmarkMap.get(m.label);
-				if (!lm) continue;
-				ctx.beginPath();
-				ctx.arc(lm.cx, lm.cy, 12, 0, Math.PI * 2);
-				ctx.stroke();
-			}
-		}
-
-		for (const label of this._activeSelection) {
-			const lm = this._landmarkMap.get(label);
-			if (!lm) continue;
-			ctx.beginPath();
-			ctx.arc(lm.cx, lm.cy, 9, 0, Math.PI * 2);
-			ctx.fillStyle = "#facc15";
-			ctx.fill();
-			ctx.strokeStyle = "#fff";
-			ctx.lineWidth = 2;
-			ctx.stroke();
-		}
+		this._choosing = true;
+		this._updateOverlay();
 	}
 
-	// ── Landmark picking ─────────────────────────────────────────────────
+	_beginAdding(model) {
+		this._choosing = false;
+		this._adding = { model };
+		this._activeSelection = [];
+		this._activeCalib = null;
+		this._calibPhase = "idle";
+		this._calibNote = "";
+		this._activeParticles = [];
+		this._selectionColor = COLOR_PALETTE[this._nextColorIndex % COLOR_PALETTE.length];
+		this._axisSelect.value = "both";
+		this._syncModels();
+		this._updateOverlay();
+	}
+
+	_cancelAdding() {
+		this._choosing = false;
+		this._adding = null;
+		this._activeSelection = [];
+		this._activeCalib = null;
+		this._calibPhase = "idle";
+		this._pendingMap = null;
+		this._updateOverlay();
+	}
+
+	_onCanvasClick(e) {
+		if (!this._adding) return;
+		const lm = this._nearestLandmark(e);
+		if (!lm) return;
+		const i = this._activeSelection.indexOf(lm.label);
+		if (i >= 0) this._activeSelection.splice(i, 1);
+		else this._activeSelection.push(lm.label);
+		// A changed selection measures something else: its range starts over.
+		this._activeCalib = null;
+		this._calibPhase = "idle";
+		this._calibNote = "";
+		this._activeParticles = [];
+		this._updateOverlay();
+	}
+
 	_nearestLandmark(e) {
 		const rect = this._canvas.getBoundingClientRect();
 		const sx = this._canvas.width / rect.width;
@@ -1060,6 +1174,7 @@ export class WaWebcamInput extends HTMLElement {
 		let minDist = Infinity;
 		let nearest = null;
 		for (const lm of this._allLandmarks) {
+			if (lm.model !== this._adding.model) continue;
 			const d = Math.hypot(lm.cx - clickX, lm.cy - clickY);
 			if (d < minDist) {
 				minDist = d;
@@ -1069,164 +1184,246 @@ export class WaWebcamInput extends HTMLElement {
 		return minDist < 40 ? nearest : null;
 	}
 
-	_onCanvasClick(e) {
-		const lm = this._nearestLandmark(e);
-		if (!lm) return;
-		if (this._activeSelection.has(lm.label)) this._activeSelection.delete(lm.label);
-		else this._activeSelection.add(lm.label);
-		this._updateSelectionUI();
+	// Between "Calibrate..." and "Done" the range the picked points cover is
+	// measured.
+	_updateActiveSelection() {
+		if (!this._adding || !this._activeSelection.length || this._calibPhase !== "calibrating") return;
+		const pts = this._activeSelection.map((l) => this._landmarkMap.get(l));
+		if (!pts.every(Boolean)) return;
+		const kind = kindForCount(pts.length);
+		this._activeCalib ??= emptyCalib(kind);
+		const sample = sampleFor(kind, pts, this._aspect());
+		expandCalib(this._activeCalib, kind, sample);
+		if (kind === "point") pushSample(this._activeSamples, sample);
 	}
 
-	// ── Selection UI ─────────────────────────────────────────────────────
-	_updateSelectionUI() {
-		const labels = [...this._activeSelection];
-		const n = labels.length;
-		this._chipContainer.innerHTML = "";
-		if (n === 0) {
-			this._chipContainer.innerHTML = '<span class="hint-text">Select one or more points in the video</span>';
-			this._clearBtn.classList.add("hidden");
-			this._addBtn.classList.add("hidden");
-			this._liveValuesDiv.innerHTML = "";
-			this._liveDisplayType = null;
-			return;
+	// Width over height of the picture — what makes a distance on screen the
+	// same whichever way it points (see sampleFor).
+	_aspect() {
+		return this._canvas.width / (this._canvas.height || 1);
+	}
+
+	// The texts and controls laid over the video.
+	_updateOverlay() {
+		const live = this._running;
+		this._vidUi.hidden = !live;
+		this._canvas.classList.toggle("picking", !!this._adding);
+		this._addBtn.textContent = this._adding || this._choosing ? "×" : "+";
+		this._addBtn.title = this._adding || this._choosing ? "Cancel" : "Add a mapping";
+		this._modelChoices.hidden = !this._choosing;
+		const n = this._activeSelection.length;
+		const mapping = this._adding && this._pendingMap;
+		this._mapWrap.hidden = !(this._adding && n > 0);
+		this._axisSelect.hidden = n !== 1 || !!mapping;
+		// One button, three steps: Calibrate... -> Done -> map...
+		this._mapBtn.textContent = this._calibPhase === "calibrating" ? "Done" : this._calibPhase === "done" ? "map..." : "Calibrate...";
+		this._mapBtn.classList.toggle("armed", !!mapping);
+
+		let text = "";
+		const loading = this._adding && this._modelState[this._adding.model].loading;
+		if (this._adding) {
+			text = loading
+				? `Loading ${MODEL_CHOICES[this._adding.model]} tracking…`
+				: mapping
+					? "Click the parameter to map to"
+					: this._calibNote
+						? this._calibNote
+						: n === 0
+							? "Select one or more points in the video"
+							: this._calibPhase === "idle"
+								? "Click Calibrate..., then move"
+								: this._calibPhase === "calibrating"
+									? "Move the body to calibrate, then click Done"
+									: "Click map..., then the parameter";
 		}
-		labels.forEach((label) => {
-			const meta = { label, model: this._landmarkMap.get(label)?.model ?? "unknown" };
-			const chip = document.createElement("span");
-			chip.className = `sel-chip model-${meta.model}`;
-			const nameSpan = document.createElement("span");
-			nameSpan.textContent = label;
-			const xBtn = document.createElement("button");
-			xBtn.type = "button";
-			xBtn.textContent = "×";
-			xBtn.addEventListener("click", () => {
-				this._activeSelection.delete(label);
-				this._updateSelectionUI();
-			});
-			chip.append(nameSpan, xBtn);
-			this._chipContainer.appendChild(chip);
+		this._subtitle.hidden = !text;
+		this._subtitle.textContent = text;
+	}
+
+	// The button over the video, in its three steps: Calibrate... starts
+	// measuring the range the picked points move through, Done stops it, and
+	// then it is map... (see _beginMap).
+	_onMapButton() {
+		if (!this._adding || !this._activeSelection.length) return;
+		if (this._calibPhase === "idle") {
+			const kind = kindForCount(this._activeSelection.length);
+			this._activeCalib = emptyCalib(kind);
+			this._activeSamples = [];
+			this._calibNote = "";
+			this._calibPhase = "calibrating";
+			this._updateOverlay();
+		} else if (this._calibPhase === "calibrating") {
+			const c = this._activeCalib;
+			const moved = c && ("min" in c ? c.min !== null && c.max > c.min : c.xMin !== null && (c.xMax > c.xMin || c.yMax > c.yMin));
+			if (moved) {
+				finalizeCalib(c, this._activeSamples, this._aspect());
+				this._calibPhase = "done";
+			} else {
+				this._calibPhase = "idle";
+				this._activeCalib = null;
+				this._calibNote = "Nothing moved — try again";
+			}
+			this._updateOverlay();
+		} else {
+			this._beginMap();
+		}
+	}
+
+	// "map..." — freezes the measured range and arms the shared mapping mode;
+	// the row is made when a target is picked. Cancelling leaves the
+	// selection as it was.
+	_beginMap() {
+		if (!this._adding || !this._activeSelection.length || this._calibPhase !== "done") return;
+		const n = this._activeSelection.length;
+		const kind = kindForCount(n);
+		this._pendingMap = {
+			model: this._adding.model,
+			labels: [...this._activeSelection],
+			mode: n === 1 ? this._axisSelect.value : "both",
+			calib: { ...(this._activeCalib ?? emptyCalib(kind)) },
+			color: this._selectionColor
+		};
+		this._armMapping(this._mapBtn, (detail) => {
+			const spec = this._pendingMap;
+			if (!spec) return;
+			const mapping = this._mappingFromPick(detail);
+			const entry = this._createEntry({ ...spec, mappings: [mapping] });
+			this._nextColorIndex++;
+			this._afterMappingAdded(entry, mapping, 0);
+			this._adding = null;
+			this._activeSelection = [];
+			this._activeCalib = null;
+			this._calibPhase = "idle";
+			this._pendingMap = null;
+			this._selectEntry(entry.id);
+			this._syncModels();
+			this._updateOverlay();
 		});
-		this._clearBtn.classList.remove("hidden");
-		this._addBtn.classList.remove("hidden");
-		const newType = typeForCount(n);
-		if (newType !== this._liveDisplayType) {
-			this._liveDisplayType = null;
-			this._liveValuesDiv.innerHTML = "";
-		}
+		this._updateOverlay();
 	}
 
-	_updateActiveLiveValues() {
-		const labels = [...this._activeSelection];
-		const pts = labels.map((l) => this._landmarkMap.get(l)).filter(Boolean);
-		const n = labels.length;
-		if (n === 0) return;
-		const type = typeForCount(n);
-
-		if (type !== this._liveDisplayType) {
-			this._liveDisplayType = type;
-			this._liveSpans = {};
-			this._liveValuesDiv.innerHTML = "";
-			TYPE_KEYS[type].forEach((key) => {
-				const blk = document.createElement("div");
-				blk.className = "coord-block";
-				const lbl = document.createElement("span");
-				lbl.className = "coord-key";
-				lbl.textContent = key;
-				const val = document.createElement("span");
-				val.className = "coord-val";
-				val.textContent = "—";
-				this._liveSpans[key] = val;
-				blk.append(lbl, val);
-				this._liveValuesDiv.appendChild(blk);
-			});
-		}
-
-		if (pts.length === n) {
-			const vals = calcValues(pts, type);
-			for (const [k, span] of Object.entries(this._liveSpans)) span.textContent = fmt(vals[k]);
-		}
+	// Arms input-map-mode.js (the same "arm a mode, let some other element
+	// claim the next click" shape var-map-mode.js uses) and calls
+	// onPick(detail) when a parameter or a root <Var> knob is picked. Used by
+	// the video's "map..." button and by each row's own. A numeric parameter
+	// anywhere gets a new <Var> made for it (see input-mapping.js); a root
+	// <Var> knob maps onto that existing Var.
+	_armMapping(anchorEl, onPick) {
+		if (inputMapMode.armed) inputMapMode.disarm(); // re-arming for a different anchor — see the "change" cleanup below
+		inputMapMode.arm();
+		anchorEl.classList.add("armed");
+		const pick = (e) => onPick(e.detail);
+		const onChange = () => {
+			if (inputMapMode.armed) return;
+			inputMapMode.removeEventListener("pick", pick);
+			inputMapMode.removeEventListener("change", onChange);
+			anchorEl.classList.remove("armed");
+			if (this._pendingMap) {
+				this._pendingMap = null;
+				this._updateOverlay();
+			}
+		};
+		inputMapMode.addEventListener("pick", pick);
+		inputMapMode.addEventListener("change", onChange);
 	}
 
-	// ── Saved entries ────────────────────────────────────────────────────
-	_addToSaved() {
-		const labels = [...this._activeSelection];
-		if (labels.length === 0) return;
-		const labelMetas = labels.map((l) => ({ label: l, model: this._landmarkMap.get(l)?.model ?? "unknown" }));
-		const type = typeForCount(labels.length);
-		const id = ++this._savedEntryCounter;
-		const entry = { id, type, labelMetas, lastValues: {}, mappings: {}, valueEls: {}, mapEls: {}, calibrating: false, bypassed: false };
-		this._buildSavedRow(entry);
+	_mappingFromPick(detail) {
+		return detail.direct ? { varName: detail.varName, direct: true, inputVar: detail.inputVar } : { varName: detail.varName };
+	}
+
+	// A root <Var> target gets "value=$syntheticName" written onto it — the
+	// explicit XML-visible counterpart to the synthetic variable this row
+	// pushes (see _sendValue). A target made straight onto a parameter reads
+	// its own hidden "input_<name>" variable instead and needs nothing here.
+	_afterMappingAdded(entry, mapping, index) {
+		if (mapping.direct) return;
+		this._writeVarReference(mapping.varName, this._syntheticVarName(entry, index));
+	}
+
+	// ── Rows ─────────────────────────────────────────────────────────────
+	// spec: { model, labels, mode, calib, color?, mappings, bypassed?, id? }
+	_createEntry(spec) {
+		const n = spec.labels.length;
+		const kind = kindForCount(n);
+		this._savedEntryCounter = Math.max(this._savedEntryCounter, spec.id || 0);
+		const entry = {
+			id: spec.id || ++this._savedEntryCounter,
+			model: spec.model && spec.model !== "unknown" ? spec.model : modelOfLabel(spec.labels[0]),
+			labels: [...spec.labels],
+			labelMetas: spec.labels.map((label) => ({ label, model: modelOfLabel(label) })),
+			color: spec.color || COLOR_PALETTE[this._nextColorIndex++ % COLOR_PALETTE.length],
+			mode: kind === "point" ? spec.mode || "both" : "both",
+			calib: { ...emptyCalib(kind), ...(spec.calib || {}) },
+			mappings: (spec.mappings || []).map((m) => ({ ...m })),
+			bypassed: !!spec.bypassed,
+			invert: !!spec.invert,
+			calibrating: false,
+			particles: [],
+			norm: undefined
+		};
+		this._buildEntryRow(entry);
 		this._savedEntries.push(entry);
 		this._savedListEl.appendChild(entry.row);
 		this._dispatchStateChange();
+		return entry;
 	}
 
-	// Rebuilds a saved entry (and its row) from persisted state — labelMetas'
-	// own `model` is re-derived once real detection starts (landmarkMap isn't
-	// populated yet at load time); until then it falls back to "unknown"
-	// (same as a metric that currently isn't in frame).
-	_restoreSavedEntry(saved) {
-		const labelMetas = saved.labels.map((label) => ({ label, model: this._landmarkMap.get(label)?.model ?? "unknown" }));
-		const id = Math.max(this._savedEntryCounter, saved.id || 0);
-		this._savedEntryCounter = id;
-		const entry = {
-			id: saved.id || ++this._savedEntryCounter,
-			type: saved.type,
-			labelMetas,
-			lastValues: {},
-			// Normalizes every older mapping shape down to today's list-of-
-			// {varName, min, max} per key: a plain string (before the range
-			// feature), {varName, auto, min, max} (before Hans removed the
-			// manual/auto choice — 2026-09-26), or a single {varName, min,
-			// max} object (before multiple mappings per key — 2026-09-30) —
-			// so an already-saved project never breaks.
-			mappings: Object.fromEntries(
-				Object.entries(saved.mappings || {}).map(([key, m]) => {
-					const list = Array.isArray(m) ? m : [m];
-					return [
-						key,
-						list.map((one) =>
-							typeof one === "string"
-								? { varName: one, min: 0, max: 1 }
-								: {
-										varName: one.varName,
-										min: one.min ?? 0,
-										max: one.max ?? 1,
-										...(one.direct ? { direct: true, inputVar: one.inputVar ?? `input_${one.varName}` } : {})
-									}
-						)
-					];
-				})
-			),
-			valueEls: {},
-			mapEls: {},
-			calibrating: false,
-			bypassed: !!saved.bypassed
-		};
-		this._buildSavedRow(entry);
-		this._savedEntries.push(entry);
-		this._savedListEl.appendChild(entry.row);
-	}
-
-	_removeSavedEntry(id) {
+	_removeEntry(id) {
 		const idx = this._savedEntries.findIndex((e) => e.id === id);
 		if (idx === -1) return;
 		this._savedEntries[idx].row.remove();
 		this._savedEntries.splice(idx, 1);
+		if (this._selectedEntryId === id) this._selectedEntryId = null;
+		this._updateOverlay();
 		this._dispatchStateChange();
 	}
 
-	_buildSavedRow(entry) {
+	_selectEntry(id) {
+		this._selectedEntryId = this._selectedEntryId === id ? null : id;
+		this._savedEntries.forEach((e) => e.row.classList.toggle("selected", e.id === this._selectedEntryId));
+		this._updateOverlay();
+	}
+
+	// The menu over the video, while a one-point row is selected: which of its
+	// movements the row follows. Its range already covers both axes, so
+	// nothing needs measuring again. The name a root-<Var> target is fed under
+	// depends on this (x / y / xy), so such targets are pointed at the new one.
+	// Sets which movement a one-point row follows (the menu is in its row).
+	_setEntryMode(entry, mode) {
+		if (entry.labels.length !== 1 || entry.mode === mode) return;
+		entry.mode = mode;
+		entry.mappings.forEach((mapping, index) => this._afterMappingAdded(entry, mapping, index));
+		if (entry.axisEl) entry.axisEl.value = mode;
+		this._dispatchStateChange();
+	}
+
+	_measureTag(entry) {
+		const n = entry.labels.length;
+		if (n === 1) return entry.mode === "horizontal" ? "horizontal" : entry.mode === "vertical" ? "vertical" : "both axes";
+		return n === 2 ? "distance" : "area";
+	}
+
+	_buildEntryRow(entry) {
 		const row = document.createElement("div");
 		row.className = "saved-row";
+		row.addEventListener("click", () => this._selectEntry(entry.id));
 
-		const rowTop = document.createElement("div");
-		rowTop.className = "saved-row-top";
+		const top = document.createElement("div");
+		top.className = "saved-row-top";
+
+		const picker = document.createElement("wa-color-picker");
+		picker.setAttribute("value", entry.color);
+		picker.addEventListener("change", (e) => {
+			entry.color = e.detail.value;
+			entry.row.style.setProperty("--entry-color", entry.color);
+			this._dispatchStateChange();
+		});
+
 		const lbl = document.createElement("div");
 		lbl.className = "saved-label";
 		entry.labelMetas.forEach((m, i) => {
 			const sp = document.createElement("span");
-			sp.className = `slm slm-${m.model}`;
+			sp.className = `slm-${m.model}`;
 			sp.textContent = m.label;
 			lbl.appendChild(sp);
 			if (i < entry.labelMetas.length - 1) {
@@ -1236,95 +1433,148 @@ export class WaWebcamInput extends HTMLElement {
 				lbl.appendChild(sep);
 			}
 		});
+
+		// Every control is on the row whether it is selected or not: mute and
+		// the × at the top right; below the points, the menu for which movement
+		// a one-point row follows (the others say what they measure),
+		// Calibrate, and invert.
+		const muteBtn = document.createElement("button");
+		muteBtn.type = "button";
+		muteBtn.className = "mute-btn" + (entry.bypassed ? " active" : "");
+		muteBtn.textContent = "mute";
+		muteBtn.title = "Mute — this row stops setting its targets and disappears from the video, without losing anything";
+		muteBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			entry.bypassed = !entry.bypassed;
+			muteBtn.classList.toggle("active", entry.bypassed);
+			if (entry.bypassed) {
+				entry.particles.length = 0;
+				entry.numEl.textContent = "—";
+				entry.fillEl.style.width = "0%";
+			}
+			this._dispatchStateChange();
+		});
+
 		const del = document.createElement("button");
 		del.type = "button";
 		del.className = "saved-del";
 		del.textContent = "×";
 		del.title = "Remove";
-		del.addEventListener("click", () => this._removeSavedEntry(entry.id));
+		del.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._removeEntry(entry.id);
+		});
+
+		top.append(picker, lbl, muteBtn, del);
+
+		const controls = document.createElement("div");
+		controls.className = "saved-controls";
+		controls.addEventListener("click", (e) => e.stopPropagation());
+
+		if (entry.labels.length === 1) {
+			const axis = document.createElement("select");
+			axis.className = "row-axis";
+			axis.title = "Which movement to follow";
+			[
+				["horizontal", "Horizontal"],
+				["vertical", "Vertical"],
+				["both", "Both"]
+			].forEach(([value, text]) => {
+				const o = document.createElement("option");
+				o.value = value;
+				o.textContent = text;
+				axis.appendChild(o);
+			});
+			axis.value = entry.mode;
+			axis.addEventListener("change", () => this._setEntryMode(entry, axis.value));
+			entry.axisEl = axis;
+			controls.appendChild(axis);
+		} else {
+			const tag = document.createElement("span");
+			tag.className = "measure-tag";
+			tag.textContent = this._measureTag(entry);
+			controls.appendChild(tag);
+		}
+
 		const calibrateBtn = document.createElement("button");
 		calibrateBtn.type = "button";
 		calibrateBtn.className = "calibrate-btn";
 		calibrateBtn.textContent = "Calibrate";
-		calibrateBtn.title = "While active, every 'auto' range below expands to fit whatever raw values this entry sees";
-		calibrateBtn.addEventListener("click", () => this._toggleEntryCalibrate(entry));
+		calibrateBtn.title = "While active, the range expands to fit whatever this row measures";
+		calibrateBtn.addEventListener("click", () => this._toggleCalibrate(entry));
 		entry.calibrateBtn = calibrateBtn;
+		controls.appendChild(calibrateBtn);
 
-		const bypassLabel = document.createElement("label");
-		bypassLabel.className = "bypass-toggle";
-		bypassLabel.title = "Bypass — stop this entry from setting its mapped Var(s), without losing its mappings";
-		const bypassInput = document.createElement("input");
-		bypassInput.type = "checkbox";
-		bypassInput.checked = !entry.bypassed;
-		const bypassTrack = document.createElement("span");
-		bypassTrack.className = "toggle-track";
-		bypassLabel.append(bypassInput, bypassTrack);
-		bypassInput.addEventListener("change", () => {
-			entry.bypassed = !bypassInput.checked;
+		// Invert: 0–1 becomes 1–0.
+		const invertBtn = document.createElement("button");
+		invertBtn.type = "button";
+		invertBtn.className = "icon-btn" + (entry.invert ? " active" : "");
+		invertBtn.title = "Invert — the value runs 1 to 0 instead of 0 to 1";
+		invertBtn.setAttribute("aria-label", "Invert");
+		invertBtn.innerHTML =
+			'<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13V3M2.5 5.5L5 3l2.5 2.5M11 3v10M8.5 10.5L11 13l2.5-2.5"/></svg>';
+		invertBtn.addEventListener("click", () => {
+			entry.invert = !entry.invert;
+			invertBtn.classList.toggle("active", entry.invert);
 			this._dispatchStateChange();
 		});
-		entry.bypassInput = bypassInput;
+		controls.appendChild(invertBtn);
 
-		rowTop.append(lbl, calibrateBtn, bypassLabel, del);
+		const hint = document.createElement("div");
+		hint.className = "calibrate-hint";
+		hint.hidden = true;
+		hint.textContent = "Move to cover the full range you want, then click Calibrate again to lock it in.";
+		entry.calibrateHint = hint;
 
-		const calibrateHint = document.createElement("div");
-		calibrateHint.className = "calibrate-hint";
-		calibrateHint.hidden = true;
-		calibrateHint.textContent = "Move to cover the full range you want, then click Calibrate again to lock it in.";
-		entry.calibrateHint = calibrateHint;
+		const valueRow = document.createElement("div");
+		valueRow.className = "value-row";
+		const bar = document.createElement("div");
+		bar.className = "value-bar";
+		const fill = document.createElement("div");
+		fill.className = "value-fill";
+		bar.appendChild(fill);
+		const num = document.createElement("span");
+		num.className = "value-num";
+		num.textContent = "—";
+		valueRow.append(bar, num);
+		entry.fillEl = fill;
+		entry.numEl = num;
 
-		const vals = document.createElement("div");
-		vals.className = "saved-vals";
-		TYPE_KEYS[entry.type].forEach((key) => {
-			const blk = document.createElement("div");
-			blk.className = "sv-block";
-			const k = document.createElement("span");
-			k.className = "sv-key";
-			k.textContent = key;
-			const v = document.createElement("span");
-			v.className = "sv-val";
-			v.textContent = "—";
-			entry.valueEls[key] = v;
-			blk.append(k, v);
-			blk.appendChild(this._buildMapControl(entry, key));
-			vals.appendChild(blk);
-		});
+		const targets = document.createElement("div");
+		targets.className = "targets";
+		targets.addEventListener("click", (e) => e.stopPropagation());
+		entry.targetsEl = targets;
 
-		row.append(rowTop, calibrateHint, vals);
+		row.style.setProperty("--entry-color", entry.color);
+		row.append(top, controls, hint, valueRow, targets);
 		entry.row = row;
+		this._refreshTargets(entry);
 		return row;
 	}
 
-	_buildMapControl(entry, key) {
-		const wrap = document.createElement("span");
-		wrap.className = "sv-map-wrap";
-		this._refreshMapControl(wrap, entry, key);
-		entry.mapEls[key] = wrap;
-		return wrap;
-	}
-
-	// entry.mappings[key] is a list now, not a single mapping (per Hans,
-	// 2026-09-30: one metric can drive several <Var>s at once) — one pill
-	// per mapping, plus a trailing "Map..." button that always adds another
-	// rather than replacing anything.
-	_refreshMapControl(wrap, entry, key) {
+	// One pill per target (click to point it somewhere else, × to remove it)
+	// and a "Map..." that adds another.
+	_refreshTargets(entry) {
+		const wrap = entry.targetsEl;
 		wrap.innerHTML = "";
-		const mappings = entry.mappings[key] || [];
-		mappings.forEach((mapping, index) => {
+		entry.mappings.forEach((mapping, index) => {
 			const pill = document.createElement("span");
 			pill.className = "sv-mapped";
 			pill.title = "Click to remap";
 			const nameSpan = document.createElement("span");
 			nameSpan.textContent = mapping.varName;
-			nameSpan.style.cursor = "pointer";
 			nameSpan.addEventListener("click", (e) => {
-				// Without this, the very click that arms input-map-mode.js
-				// keeps bubbling to document afterward, where its own
-				// "unclaimed click disarms" listener immediately undoes the
-				// arm() this line just did. Same reasoning as var-map-mode.js's
-				// own Map button (wa-var-knobs.js).
+				// Without this, the very click that arms input-map-mode.js keeps
+				// bubbling to document, where its "unclaimed click disarms"
+				// listener would immediately undo the arm.
 				e.stopPropagation();
-				this._mapKey(entry, key, e.currentTarget, index);
+				this._armMapping(pill, (detail) => {
+					const next = this._mappingFromPick(detail);
+					entry.mappings[index] = next;
+					this._afterMappingAdded(entry, next, index);
+					this._refreshTargets(entry);
+					this._dispatchStateChange();
+				});
 			});
 			const xBtn = document.createElement("button");
 			xBtn.type = "button";
@@ -1332,9 +1582,8 @@ export class WaWebcamInput extends HTMLElement {
 			xBtn.textContent = "×";
 			xBtn.title = "Unmap";
 			xBtn.addEventListener("click", () => {
-				mappings.splice(index, 1);
-				if (mappings.length === 0) delete entry.mappings[key];
-				this._refreshMapControl(wrap, entry, key);
+				entry.mappings.splice(index, 1);
+				this._refreshTargets(entry);
 				this._dispatchStateChange();
 			});
 			pill.append(nameSpan, xBtn);
@@ -1345,89 +1594,33 @@ export class WaWebcamInput extends HTMLElement {
 		btn.className = "sv-map-btn";
 		btn.textContent = "Map...";
 		btn.addEventListener("click", (e) => {
-			e.stopPropagation(); // see the nameSpan click listener's own comment above
-			this._mapKey(entry, key, e.currentTarget, null);
+			e.stopPropagation();
+			this._armMapping(btn, (detail) => {
+				const mapping = this._mappingFromPick(detail);
+				entry.mappings.push(mapping);
+				this._afterMappingAdded(entry, mapping, entry.mappings.length - 1);
+				this._refreshTargets(entry);
+				this._dispatchStateChange();
+			});
 		});
 		wrap.appendChild(btn);
 	}
 
-	// index === null adds a new mapping; a number remaps the pill already at
-	// that index (keeping its existing calibrated range) — same "remapping
-	// keeps the range, a fresh mapping starts at 0-1" reasoning as before,
-	// just per-pill instead of per-key now.
-	//
-	// Arms input-map-mode.js instead of opening wa-var-picker.js's old popup
-	// menu — per Hans (2026-10-03): "när man ska mappa ett entry dyker det
-	// nu upp en popup-meny. Ändra det så att det fungerar som när man
-	// mappar en <Var>knob." wa-var-knobs.js's own ROOT-scoped knobs are the
-	// only valid targets (that component enforces the root-only rule
-	// itself — see its own isInputMapTarget); clicking one resolves via
-	// input-map-mode's "pick" event. A root with no <Var> at all has
-	// nothing to arm toward, so this shows an explanatory notice instead
-	// (per Hans: "Om det inte finns någon <Var> i rooten ska det komma upp
-	// en instruktion om att man behöver skapa en").
-	_mapKey(entry, key, anchorEl, index) {
-		// Armed for two kinds of target (per Hans, 2026-10-09): a numeric
-		// parameter anywhere (Inspector row, Chain/Mixer knob) gets a brand
-		// new <Var> made for it — see input-mapping.js — and a root <Var>
-		// knob maps onto that existing Var as before.
-		if (inputMapMode.armed) inputMapMode.disarm(); // re-arming for a different anchor — see the "change" cleanup below
-		inputMapMode.arm();
-		const visualEl = anchorEl.closest(".sv-mapped") || anchorEl;
-		visualEl.classList.add("armed");
-		const onPick = (e) => {
-			if (!entry.mappings[key]) entry.mappings[key] = [];
-			const list = entry.mappings[key];
-			const mappingIndex = index === null || index === undefined ? list.length : index;
-			// `direct`: the Var was created for an attribute (see
-			// input-mapping.js). It reads the hidden variable `inputVar`
-			// ("input_<name>"), which this entry sets with waxml.set() — no root
-			// Var gets a "value" reference written onto it.
-			const direct = !!e.detail.direct;
-			const directFields = direct ? { direct: true, inputVar: e.detail.inputVar } : {};
-			if (index === null || index === undefined) {
-				list.push({ varName: e.detail.varName, min: 0, max: 1, ...directFields });
-			} else {
-				const { direct: _d, inputVar: _i, ...rest } = list[index];
-				list[index] = { ...rest, varName: e.detail.varName, ...directFields };
-			}
-			if (!direct) this._writeVarReference(e.detail.varName, this._syntheticVarName(entry, key, mappingIndex));
-			this._refreshMapControl(entry.mapEls[key], entry, key);
-			this._dispatchStateChange();
-		};
-		const onChange = () => {
-			if (inputMapMode.armed) return;
-			inputMapMode.removeEventListener("pick", onPick);
-			inputMapMode.removeEventListener("change", onChange);
-			visualEl.classList.remove("armed");
-		};
-		inputMapMode.addEventListener("pick", onPick);
-		inputMapMode.addEventListener("change", onChange);
-	}
-
-	// A stable, deterministic name for one (entry, key, mapping) triple —
-	// e.g. a single-point entry tracking landmark "rightHand8"'s own "x"
-	// becomes "rightHand8x" (matches Hans's own example exactly); a
-	// multi-point entry (dist2d/dist3d/angle) concatenates every landmark
-	// label involved instead, since it has no single one of its own. A
-	// second+ mapping of the SAME key (per Hans, 2026-09-30: several <Var>s
-	// can share one metric, each with its own calibrated range) gets its
-	// own distinct name (_2, _3, ...) so its independent calibration never
-	// collides with the first mapping's.
-	_syntheticVarName(entry, key, mappingIndex) {
-		const base = entry.labelMetas.map((m) => m.label).join("") + key;
+	// A stable name for what a root-<Var> target of this row is fed under —
+	// e.g. a single point tracking "rightHand8" in Horizontal mode becomes
+	// "rightHand8x" (the names of the earlier version are kept, so a root
+	// <Var> referring to one keeps working); a second target gets "_2", ...
+	_syntheticVarName(entry, mappingIndex) {
+		const n = entry.labels.length;
+		const key = n === 1 ? (entry.mode === "horizontal" ? "x" : entry.mode === "vertical" ? "y" : "xy") : n === 2 ? "dist2d" : "area2d";
+		const base = entry.labels.join("") + key;
 		return mappingIndex > 0 ? `${base}_${mappingIndex + 1}` : base;
 	}
 
 	// Writes "$syntheticName" onto `targetVarName`'s own "value" attribute —
-	// the explicit XML-visible counterpart to _sendMappedValues' own
-	// playerStore.setVariable(syntheticName, ...) push, so the document
-	// itself shows what's driving this Var instead of it happening only as
-	// an invisible side channel. Per Hans (2026-10-05): "value='$rightHand8x'
-	// ska skrivas in på var1.value... Det blir bara lite mer explicit... för
-	// hur systemet fungerar." wa-var-knobs.js's own pushFromTarget (see its
-	// comment) is what actually keeps the target Var's live value following
-	// along afterward — this call only ever touches the XML attribute.
+	// the explicit XML-visible counterpart to _sendValue's own
+	// playerStore.setVariable(syntheticName, ...) push. wa-var-knobs.js's own
+	// pushFromTarget keeps that Var's live value following along afterward.
 	_writeVarReference(targetVarName, syntheticName) {
 		if (!xmlStore.root) return;
 		const targetNode = xmlStore.root.children.find((c) => c.tagName === "Var" && (c.attributes.name || c.attributes.id) === targetVarName);
@@ -1435,99 +1628,269 @@ export class WaWebcamInput extends HTMLElement {
 		xmlStore.updateAttributes(targetNode.id, { ...targetNode.attributes, value: `$${syntheticName}` });
 	}
 
-	// Toggles a calibration pass for one saved entry (per Hans, 2026-09-23:
-	// calibration happens entry by entry, not globally) — while active,
-	// every mapped key *within this entry* expands its own min/max to fit
-	// whatever raw values it sees (see expandRange, called from
-	// _sendMappedValues); turning it off just freezes wherever it ended up.
-	// Starting a *new* pass resets each mapping's range first —
-	// recalibrating should never just widen an old, possibly stale range
-	// further. Another entry's mappings are never touched. Per Hans
-	// (2026-09-26): calibration is now the only way a mapping's input range
-	// is ever set — there's no manual min/max entry to leave alone instead.
-	_toggleEntryCalibrate(entry) {
+	// Calibration of a row: while on, its range is measured anew (starting
+	// empty) and widens to everything the row sees; turning it off keeps it.
+	_toggleCalibrate(entry) {
 		entry.calibrating = !entry.calibrating;
-		entry.calibrateBtn.classList.toggle("active", entry.calibrating);
-		entry.calibrateBtn.textContent = entry.calibrating ? "Calibrating…" : "Calibrate";
-		entry.calibrateHint.hidden = !entry.calibrating;
 		if (entry.calibrating) {
-			Object.values(entry.mappings)
-				.flat()
-				.forEach((mapping) => {
-					mapping.min = undefined;
-					mapping.max = undefined;
-				});
+			entry.calib = emptyCalib(kindForCount(entry.labels.length));
+			entry.samples = [];
 		} else {
-			this._dispatchStateChange(); // persist the just-finished calibration
+			finalizeCalib(entry.calib, entry.samples || [], this._aspect());
 		}
+		entry.calibrateBtn.classList.toggle("active", entry.calibrating);
+		entry.calibrateBtn.textContent = entry.calibrating ? "Done" : "Calibrate";
+		entry.calibrateHint.hidden = !entry.calibrating;
+		if (!entry.calibrating) this._dispatchStateChange();
 	}
 
-	_updateSavedEntryValues() {
+	// One frame of one row: measure, (while calibrating) widen the range,
+	// normalize to 0–1 and send it to every target. Only a calibrated row
+	// sends, and only when not bypassed. Values outside the range are clamped.
+	_updateEntryValue(entry) {
+		const pts = entry.labels.map((l) => this._landmarkMap.get(l));
+		if (!pts.every(Boolean)) {
+			entry.norm = undefined;
+			entry.numEl.textContent = "—";
+			entry.fillEl.style.width = "0%";
+			return;
+		}
+		const kind = kindForCount(entry.labels.length);
+		const aspect = this._aspect();
+		const sample = sampleFor(kind, pts, aspect);
+		if (entry.calibrating) {
+			expandCalib(entry.calib, kind, sample);
+			if (kind === "point") pushSample((entry.samples ??= []), sample);
+		}
+		const measured = normalizeSample(kind, entry.mode, entry.calib, sample, aspect);
+		// Inverted: 0–1 becomes 1–0.
+		const norm = measured === undefined ? undefined : entry.invert ? 1 - measured : measured;
+		entry.norm = norm;
+		// A muted row shows nothing: its value and bar are blank (and its
+		// effect is not drawn, see _renderCanvas).
+		const shown = norm !== undefined && !entry.bypassed;
+		entry.numEl.textContent = shown ? norm.toFixed(2) : "—";
+		entry.fillEl.style.width = shown ? `${norm * 100}%` : "0%";
+		if (!shown) return;
+		entry.mappings.forEach((mapping, index) => {
+			if (!mapping?.varName) return;
+			// A target made straight onto a parameter (see input-mapping.js) is
+			// fed through the hidden "input_<name>" variable its <Var> reads.
+			playerStore.setVariable(mapping.direct ? mapping.inputVar : this._syntheticVarName(entry, index), norm);
+		});
+	}
+
+	// ── Drawing ──────────────────────────────────────────────────────────
+	_renderCanvas(now, spawn = true) {
+		const ctx = this._ctx;
+		ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+		if (this._adding) this._drawSkeleton(this._adding.model);
+
 		for (const entry of this._savedEntries) {
-			const pts = entry.labelMetas.map((m) => this._landmarkMap.get(m.label));
-			if (pts.every(Boolean)) entry.lastValues = calcValues(pts, entry.type);
-			const v = entry.lastValues;
-			for (const [key, el] of Object.entries(entry.valueEls)) el.textContent = fmt(v[key]);
-			this._sendMappedValues(entry);
+			// A muted row is not drawn at all. While a row is being calibrated
+			// its spray is free, so every line the point moves along shows;
+			// it is held to the row's axis or line only once Done is clicked.
+			if (entry.bypassed) continue;
+			this._drawEffect(ctx, entry.labels, entry.color, entry.particles, now, entry.calibrating ? null : { mode: entry.mode, calib: entry.calib }, spawn);
+		}
+
+		if (this._adding && this._activeSelection.length) {
+			// Free until Done: the spray is held to the chosen axis or line only
+			// once the calibration is finished, so that it is open to every line
+			// the point is moved along while measuring.
+			const view = this._activeSelection.length === 1 && this._calibPhase === "done" ? { mode: this._axisSelect.value, calib: this._activeCalib } : null;
+			this._drawEffect(ctx, this._activeSelection, this._selectionColor, this._activeParticles, now, view, spawn);
+			ctx.lineWidth = 2.5;
+			for (const label of this._activeSelection) {
+				const lm = this._landmarkMap.get(label);
+				if (!lm) continue;
+				ctx.beginPath();
+				ctx.arc(lm.cx, lm.cy, 9, 0, Math.PI * 2);
+				ctx.fillStyle = this._selectionColor;
+				ctx.fill();
+				ctx.strokeStyle = "#fff";
+				ctx.stroke();
+			}
+		}
+
+		// A selected row's points are ringed.
+		const selected = this._savedEntries.find((e) => e.id === this._selectedEntryId);
+		if (selected) {
+			ctx.strokeStyle = "#fff";
+			ctx.lineWidth = 3;
+			for (const label of selected.labels) {
+				const lm = this._landmarkMap.get(label);
+				if (!lm) continue;
+				ctx.beginPath();
+				ctx.arc(lm.cx, lm.cy, 13, 0, Math.PI * 2);
+				ctx.stroke();
+			}
 		}
 	}
 
-	// Only a mapped key is ever actually sent — an unmapped one is
-	// display-only (per Hans, 2026-09-22). The raw metric is normalized to
-	// 0-1 via its own mapping's calibrated input range before being sent —
-	// never the raw value itself, and never scaled into the target <Var>'s
-	// own musical range, which is WAXML's own job (per Hans, 2026-09-23).
-	// Values outside the calibrated range are clamped (truncated) to 0-1,
-	// never sent unclamped — per Hans (2026-09-26), confirming
-	// normalizeToUnit's own existing Math.max(0, Math.min(1, ...)).
-	_sendMappedValues(entry) {
-		const v = entry.lastValues;
-		if (!v) return;
-		for (const [key, mappings] of Object.entries(entry.mappings)) {
-			if (v[key] === undefined) continue;
-			const raw = v[key];
-			// Each mapping keeps its own independently calibrated range (per
-			// Hans, 2026-09-30: several <Var>s can share one metric now) —
-			// they usually converge to the same range when calibrated
-			// together, but nothing forces that if one was added later.
-			mappings.forEach((mapping, index) => {
-				if (!mapping?.varName) return;
-				if (entry.calibrating) expandRange(mapping, raw);
-				// Bypass stops this entry from driving its mapped Var(s) — e.g.
-				// so a manual knob drag isn't immediately fought by the next
-				// incoming frame — but keeps calibrating/tracking (and the
-				// mapping itself) intact for whenever it's switched back on.
-				// Per Hans (2026-09-27).
-				if (entry.bypassed) return;
-				const normalized = normalizeToUnit(raw, mapping.min, mapping.max);
-				if (normalized === undefined) return; // never calibrated yet — nothing usable to send
-				// Pushed under this (entry, key, mapping)'s own synthetic name,
-				// never mapping.varName directly — the target Var's own XML
-				// "value" attribute (written once, at pick time — see
-				// _writeVarReference) is what actually references this name;
-				// wa-var-knobs.js's own pushFromTarget polls it from there. Per
-				// Hans (2026-10-05).
-				// A mapping made straight onto a parameter (see input-mapping.js)
-				// sets the hidden "input_<name>" variable its <Var> reads, wherever
-				// in the document that Var sits.
-				playerStore.setVariable(mapping.direct ? mapping.inputVar : this._syntheticVarName(entry, key, index), normalized);
-			});
+	// The tracker's own skeleton, drawn only while points are being picked in
+	// it — the rows' effects are what shows otherwise.
+	_drawSkeleton(model) {
+		const mod = this._visionModule;
+		if (!mod || !this._drawUtils) return;
+		const results = this._modelState[model].results;
+		if (model === "hands" && results?.landmarks) {
+			for (const lms of results.landmarks) {
+				this._drawUtils.drawConnectors(lms, mod.HandLandmarker.HAND_CONNECTIONS, { color: "#45b58c", lineWidth: 3 });
+				this._drawUtils.drawLandmarks(lms, { color: "#2f8f6e", fillColor: "#12362a", lineWidth: 1, radius: 4 });
+			}
+		} else if (model === "pose" && results?.landmarks) {
+			for (const lms of results.landmarks) {
+				this._drawUtils.drawConnectors(lms, mod.PoseLandmarker.POSE_CONNECTIONS, { color: "#fb923c", lineWidth: 3 });
+				this._drawUtils.drawLandmarks(lms, { color: "#c2660f", fillColor: "#3a2007", lineWidth: 1, radius: 4 });
+			}
+		} else if (model === "face" && results?.faceLandmarks) {
+			for (const lms of results.faceLandmarks) {
+				this._drawUtils.drawConnectors(lms, mod.FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "rgba(79,163,255,0.12)", lineWidth: 1 });
+				this._drawUtils.drawConnectors(lms, mod.FaceLandmarker.FACE_LANDMARKS_CONTOURS, { color: "#4fa3ff", lineWidth: 2 });
+				// The contours leave out most of the 478 points, so the ones the
+				// click can land on are dotted in to be findable.
+				ctx_dots(this._ctx, lms, this._canvas);
+			}
 		}
+	}
+
+	// One point sprays its color along its path (dots that follow it and fade
+	// in 200 ms, like a tail), two points are joined by a line and three or more
+	// enclose a surface — all in the given color, in real time.
+	//
+	// `view` ({ mode, calib }, one point only): the spray is held to what the
+	// row follows, so the limitation shows in the picture. With Horizontal it
+	// runs along a horizontal line at the average height the calibration saw,
+	// from the calibrated minimum to the maximum x and no further (Vertical:
+	// a vertical line at the average x, between the calibrated y); with both
+	// axes it runs
+	// along the line the value follows, from end to end, at the point's place
+	// on it. The line is drawn faintly. Until there is a calibration the
+	// spray runs along where the point first was.
+	_drawEffect(ctx, labels, color, particles, now, view = null, spawn = true) {
+		const pts = labels.map((l) => this._landmarkMap.get(l));
+		const all = pts.length > 0 && pts.every(Boolean);
+		if (labels.length === 1) {
+			let at = all ? { x: pts[0].cx, y: pts[0].cy } : null;
+			if (at && view && (view.mode === "horizontal" || view.mode === "vertical" || view.mode === "both")) {
+				const W = this._canvas.width;
+				const H = this._canvas.height;
+				const c = view.calib;
+				particles.anchor ??= { x: at.x, y: at.y };
+				// Canvas x is the unmirrored picture and y runs downwards; a
+				// calibration's x is as shown (mirrored) and its y runs upwards.
+				const toX = (sx) => (1 - sx) * W;
+				const toY = (sy) => (1 - sy) * H;
+				const guide = (x1, y1, x2, y2) => {
+					ctx.save();
+					ctx.strokeStyle = color;
+					ctx.globalAlpha = 0.35;
+					ctx.lineWidth = 2;
+					ctx.setLineDash([6, 5]);
+					ctx.beginPath();
+					ctx.moveTo(x1, y1);
+					ctx.lineTo(x2, y2);
+					ctx.stroke();
+					ctx.restore();
+				};
+				if (view.mode === "horizontal") {
+					const mean = c ? axisMean(c, "y") : null;
+					const y = mean !== null ? toY(mean) : particles.anchor.y;
+					if (c && c.xMin !== null) guide(toX(c.xMax), y, toX(c.xMin), y);
+					// The spray stops at the ends of the calibrated range.
+					const sx = c && c.xMin !== null ? Math.max(c.xMin, Math.min(c.xMax, 1 - pts[0].x)) : 1 - pts[0].x;
+					at = { x: toX(sx), y };
+				} else if (view.mode === "vertical") {
+					const mean = c ? axisMean(c, "x") : null;
+					const x = mean !== null ? toX(mean) : particles.anchor.x;
+					if (c && c.yMin !== null) guide(x, toY(c.yMax), x, toY(c.yMin));
+					const sy = c && c.yMin !== null ? Math.max(c.yMin, Math.min(c.yMax, 1 - pts[0].y)) : 1 - pts[0].y;
+					at = { x, y: toY(sy) };
+				} else {
+					const line = c ? linePosition(c, { sx: 1 - pts[0].x, sy: 1 - pts[0].y }, this._aspect()) : null;
+					if (line) {
+						guide(toX(line.a.x), toY(line.a.y), toX(line.b.x), toY(line.b.y));
+						at = { x: toX(line.a.x + line.t * (line.b.x - line.a.x)), y: toY(line.a.y + line.t * (line.b.y - line.a.y)) };
+					}
+				}
+			}
+			// A steady trail: the position is smoothed a little, and the gap from
+			// where the point was last time is filled in with dots along the way
+			// — so the trail is continuous however fast the point moves and at
+			// whatever rate the camera delivers pictures. The dots are small and
+			// hardly scatter; the axis a locked spray is limited to is not
+			// scattered across at all.
+			if (spawn) {
+				if (!at) {
+					particles.last = null;
+				} else {
+					const prev = particles.last;
+					const now2 = prev ? { x: prev.x + (at.x - prev.x) * 0.6, y: prev.y + (at.y - prev.y) * 0.6 } : at;
+					const gap = prev ? Math.hypot(now2.x - prev.x, now2.y - prev.y) : 0;
+					const steps = Math.max(1, Math.min(30, Math.round(gap / 3)));
+					const lockedY = view?.mode === "horizontal";
+					const lockedX = view?.mode === "vertical";
+					for (let k = 1; k <= steps; k++) {
+						const t = k / steps;
+						const x = prev ? prev.x + (now2.x - prev.x) * t : now2.x;
+						const y = prev ? prev.y + (now2.y - prev.y) * t : now2.y;
+						particles.push({
+							x: x + (lockedX ? 0 : (Math.random() - 0.5) * 3),
+							y: y + (lockedY ? 0 : (Math.random() - 0.5) * 3),
+							r: 2.5 + Math.random() * 2,
+							born: now
+						});
+					}
+					particles.last = now2;
+				}
+			}
+			for (let i = particles.length - 1; i >= 0; i--) {
+				const p = particles[i];
+				const age = now - p.born;
+				if (age >= SPRAY_MS) {
+					particles.splice(i, 1);
+					continue;
+				}
+				const life = 1 - age / SPRAY_MS;
+				ctx.globalAlpha = life * 0.9;
+				ctx.fillStyle = color;
+				ctx.beginPath();
+				ctx.arc(p.x, p.y, p.r * (0.5 + life * 0.5), 0, Math.PI * 2);
+				ctx.fill();
+			}
+			ctx.globalAlpha = 1;
+			return;
+		}
+		if (!all) return;
+		// An area goes round its points in order, whatever order they were picked.
+		const ring = pts.length >= 3 ? angularOrder(pts, this._aspect()) : pts;
+		ctx.save();
+		ctx.strokeStyle = color;
+		ctx.lineWidth = 5;
+		ctx.lineJoin = "round";
+		ctx.lineCap = "round";
+		ctx.beginPath();
+		ring.forEach((p, i) => (i === 0 ? ctx.moveTo(p.cx, p.cy) : ctx.lineTo(p.cx, p.cy)));
+		if (pts.length >= 3) {
+			ctx.closePath();
+			ctx.globalAlpha = 0.35;
+			ctx.fillStyle = color;
+			ctx.fill();
+			ctx.globalAlpha = 1;
+		}
+		ctx.stroke();
+		ctx.restore();
 	}
 }
 
-// Widens `mapping`'s own min/max to include `raw` — the first value seen
-// (min/max both still undefined) becomes both bounds, same "single point ->
-// zero-width range" starting condition waxml.js's own native mapin="auto"
-// calibration (Variable.autoAdjustInputRange) uses.
-function expandRange(mapping, raw) {
-	mapping.min = mapping.min === undefined ? raw : Math.min(mapping.min, raw);
-	mapping.max = mapping.max === undefined ? raw : Math.max(mapping.max, raw);
-}
-
-function normalizeToUnit(raw, min, max) {
-	if (!Number.isFinite(raw) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return undefined;
-	return Math.max(0, Math.min(1, (raw - min) / (max - min)));
+// The landmarks of a face as small dots (a face has hundreds, so most are
+// only visible as tracked points when picking).
+function ctx_dots(ctx, lms, canvas) {
+	ctx.fillStyle = "rgba(255,255,255,0.35)";
+	for (let i = 0; i < lms.length; i += 1) {
+		ctx.fillRect(lms[i].x * canvas.width - 1, lms[i].y * canvas.height - 1, 2, 2);
+	}
 }
 
 customElements.define("wa-webcam-input", WaWebcamInput);
