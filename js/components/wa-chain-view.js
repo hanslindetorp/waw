@@ -632,11 +632,15 @@ template.innerHTML = `
 		}
 		/* Vertical volume fader — the same look as the Mixer view's (a GainNode
 		   is its channel fader there). */
+		/* On the same backdrop as the Mixer's channel strips (#3c4650), so the
+		   fader reads the way it does there instead of floating on the black. */
 		.fader-wrap {
 			display: flex;
 			flex-direction: column;
 			align-items: center;
-			padding: 0.4rem 0 0.2rem;
+			padding: 0.6rem 0.4rem 0.5rem;
+			background: #3c4650;
+			border-radius: 6px;
 		}
 		.fader-track {
 			position: relative;

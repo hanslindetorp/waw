@@ -1,4 +1,4 @@
-import { createDefaultProject, openProjectFromFile, saveProject, saveProjectAs } from "../project/project-manager.js";
+import { createDefaultProject, openProjectFromFile, saveProject, saveProjectAs, isProjectDirty, loadTemplate, listTemplates } from "../project/project-manager.js";
 import { resetWebcamInputForNewProject } from "../project/workstation-state.js";
 
 const IS_MAC = /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -113,6 +113,10 @@ template.innerHTML = `
 			     internal wiring string, never shown) — per Hans (2026-09-27):
 			     "Share" is reserved for a different, future feature. -->
 			<button class="menu-item" type="button" data-action="share">Export...</button>
+			<!-- Filled from templates/manifest.json (see _loadTemplateList). -->
+			<div class="templates" hidden>
+				<div class="menu-divider"></div>
+			</div>
 		</div>
 		<div class="confirm-view" hidden>
 			<p class="confirm-message"></p>
@@ -135,6 +139,7 @@ export class WaFileMenu extends HTMLElement {
 		this._menuItems = this.shadowRoot.querySelector(".menu-items");
 		this._confirmView = this.shadowRoot.querySelector(".confirm-view");
 		this._fileInput = this.shadowRoot.querySelector(".file-input");
+		this._templates = this.shadowRoot.querySelector(".templates");
 		this._onKeyDown = this._onKeyDown.bind(this);
 	}
 
@@ -267,8 +272,7 @@ export class WaFileMenu extends HTMLElement {
 			// reopened here, or the confirm prompt renders invisibly and the
 			// whole flow appears to silently do nothing. Bug per Hans
 			// (2026-09-04): "File Open... öppnar inte någonting".
-			this._open();
-			this._confirmThen("Discard the current project and open another one?", async () => {
+			this._confirmDiscardThen(async () => {
 				this._close();
 				try {
 					const file = await picked.getFile();
@@ -283,17 +287,68 @@ export class WaFileMenu extends HTMLElement {
 	}
 
 	_startOpenViaInput() {
-		this._open();
-		this._confirmThen("Discard the current project and open another one?", () => {
+		this._confirmDiscardThen(() => {
 			this._close();
 			this._fileInput.click();
 		});
+	}
+
+	// Opening a project replaces the current one: if its latest version is
+	// not saved, that is asked about first; otherwise it just goes ahead.
+	// Per Hans (2026-10-12).
+	_confirmDiscardThen(onConfirm) {
+		if (!isProjectDirty()) {
+			this._close();
+			onConfirm();
+			return;
+		}
+		this._open();
+		this._confirmThen("The current project has changes that are not saved. Discard them and open another one?", onConfirm);
 	}
 
 	_open() {
 		this._dropdown.hidden = false;
 		this.classList.add("open");
 		this._resetToMenuItems();
+		this._loadTemplateList();
+	}
+
+	// The zips in templates/, one menu item each under a divider below
+	// "Export...". Re-read each time the menu opens, so a template added
+	// while the app is running shows up without a reload; the section stays
+	// hidden when there are none.
+	async _loadTemplateList() {
+		const templates = await listTemplates();
+		const key = templates.map((t) => t.fileName).join("|");
+		if (key === this._templatesKey) return;
+		this._templatesKey = key;
+		this._templates.querySelectorAll(".menu-item").forEach((b) => b.remove());
+		this._templates.hidden = templates.length === 0;
+		templates.forEach(({ name, fileName }) => {
+			const item = document.createElement("button");
+			item.className = "menu-item";
+			item.type = "button";
+			item.dataset.template = fileName;
+			item.innerHTML = "<span></span>";
+			item.firstChild.textContent = name;
+			item.addEventListener("click", (e) => {
+				e.stopPropagation();
+				this._startTemplate(fileName);
+			});
+			this._templates.appendChild(item);
+		});
+	}
+
+	_startTemplate(fileName) {
+		this._confirmDiscardThen(async () => {
+			this._close();
+			try {
+				resetWebcamInputForNewProject();
+				await loadTemplate(fileName);
+			} catch (err) {
+				console.error("Open template failed:", err);
+			}
+		});
 	}
 
 	_close() {

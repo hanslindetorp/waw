@@ -3,7 +3,7 @@ import { inputMapMode } from "../state/input-map-mode.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { isVariableControlled, variableNameFromValue } from "../xml-editor/variable-references.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
-import { isNumericAttributeSchema } from "../xml-editor/schema-parser.js";
+import { isMappableTarget } from "../xml-editor/input-mapping.js";
 
 // A bare plain number (no "$name" reference, no unit suffix like "XdB", no
 // math expression) — the shape where the committed string IS the node's own
@@ -103,7 +103,7 @@ export function wireMapClaim(el, { getNode, attrName }) {
 	// chip's own attrName/node tagName never change across its lifetime.
 	const nodeForSchema = getNode();
 	const attrSchema = nodeForSchema && xmlStore.schema?.elements[nodeForSchema.tagName]?.allowedAttributes.find((a) => a.name === attrName);
-	const isNumericTarget = isNumericAttributeSchema(attrSchema);
+	const isNumericTarget = isMappableTarget(nodeForSchema, attrSchema);
 	if (isNumericTarget) el.classList.add("map-target-armed");
 	el.addEventListener("pointerdown", (e) => {
 		if (!isNumericTarget) return;

@@ -4,6 +4,15 @@
 
 export const ROOT_ID = "root";
 
+// Files and folders the operating system keeps for itself — a name starting
+// with a dot (.DS_Store, ._kick.wav, .git, ...), macOS's __MACOSX, Windows'
+// Thumbs.db and desktop.ini, macOS's "Icon\r". They are never imported and
+// never shown (see zip-import.js and wa-file-manager.js), however they came
+// along with a dropped folder or archive. Per Hans (2026-10-12).
+export function isHiddenName(name) {
+	return typeof name === "string" && (name.startsWith(".") || name === "__MACOSX" || name === "Thumbs.db" || name === "desktop.ini" || name === "Icon\r");
+}
+
 let idCounter = 1;
 function nextId() {
 	return `n${idCounter++}`;

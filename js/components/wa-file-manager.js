@@ -1,5 +1,7 @@
-import { vfs, ROOT_ID } from "../vfs/VFS.js";
+import { vfs, ROOT_ID, isHiddenName } from "../vfs/VFS.js";
 import { importZip } from "../vfs/zip-import.js";
+import { isProjectDirty, zipHoldsProject, openProjectFromFile, openProjectFromFiles, findProjectFolderAmong } from "../project/project-manager.js";
+import { confirmDialog } from "./wa-confirm-dialog.js";
 import { selection } from "../state/selection.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
 import { STATE_FILE_NAME } from "../project/workstation-state.js";
@@ -263,11 +265,20 @@ export class WaFileManager extends HTMLElement {
 	// anything this way — it's extracted (importZip), never itself placed in
 	// the folder under that name — so zips skip the conflict check entirely.
 	async _handleFiles(fileList, parentId) {
-		const files = Array.from(fileList);
+		// What the operating system keeps for itself is never taken in.
+		const files = Array.from(fileList).filter((f) => !isHiddenName(f.name));
 		const zipFiles = files.filter((f) => f.name.toLowerCase().endsWith(".zip"));
 		const plainFiles = files.filter((f) => !f.name.toLowerCase().endsWith(".zip"));
 
-		for (const file of zipFiles) await importZip(vfs, parentId, file);
+		for (const file of zipFiles) {
+			// A zip with a WAW json file in it is a project: it is opened as
+			// one (replacing the current project), not unpacked into a folder.
+			if (await zipHoldsProject(file)) {
+				await this._openDroppedProject(() => openProjectFromFile(file));
+				return;
+			}
+			await importZip(vfs, parentId, file);
+		}
 		if (plainFiles.length === 0) return;
 
 		const existingNames = new Set(
@@ -346,8 +357,11 @@ export class WaFileManager extends HTMLElement {
 	async _handleDataTransfer(dataTransfer, parentId) {
 		const items = dataTransfer.items;
 		if (items && items.length > 0 && typeof items[0]?.webkitGetAsEntry === "function") {
-			const entries = [...items].map((item) => item.webkitGetAsEntry()).filter(Boolean);
+			const entries = [...items]
+				.map((item) => item.webkitGetAsEntry())
+				.filter((entry) => entry && !isHiddenName(entry.name));
 			if (entries.length > 0) {
+				if (await this._openDroppedFolderProject(entries)) return;
 				await this._importEntries(entries, parentId);
 				return;
 			}
@@ -361,6 +375,7 @@ export class WaFileManager extends HTMLElement {
 	// together, so a single drop that touches several folders at once still
 	// gets exactly one conflict dialog per folder level, not one per file.
 	async _importEntries(entries, parentId) {
+		entries = entries.filter((entry) => !isHiddenName(entry.name));
 		const fileEntries = entries.filter((entry) => entry.isFile);
 		const dirEntries = entries.filter((entry) => entry.isDirectory);
 
@@ -372,6 +387,54 @@ export class WaFileManager extends HTMLElement {
 			const folder = vfs.createFolder(parentId, dirEntry.name);
 			const children = await this._readAllEntries(dirEntry.createReader());
 			await this._importEntries(children, folder.id);
+		}
+	}
+
+	// A dropped folder with a WAW json file in it (workstation-state.json,
+	// anywhere inside) is a project: the folder the json is in becomes the
+	// project's top level, and it replaces the current project. Returns
+	// whether one was found and opened. Per Hans (2026-10-12).
+	async _openDroppedFolderProject(entries) {
+		for (const entry of entries) {
+			if (!entry.isDirectory) continue;
+			const found = await this._listFolderFiles(entry, "");
+			const folder = findProjectFolderAmong(found.map((f) => f.path));
+			if (folder === null) continue;
+			const prefix = folder ? `${folder}/` : "";
+			await this._openDroppedProject(async () => {
+				const files = await Promise.all(
+					found
+						.filter((f) => f.path.startsWith(prefix))
+						.map(async (f) => ({ path: f.path.slice(prefix.length), file: await new Promise((resolve, reject) => f.entry.file(resolve, reject)) }))
+				);
+				await openProjectFromFiles(files);
+			});
+			return true;
+		}
+		return false;
+	}
+
+	// Every file under a dropped folder, as { path (from that folder), entry } —
+	// hidden files and folders left out.
+	async _listFolderFiles(dirEntry, base) {
+		const out = [];
+		for (const child of await this._readAllEntries(dirEntry.createReader())) {
+			if (isHiddenName(child.name)) continue;
+			const path = base ? `${base}/${child.name}` : child.name;
+			if (child.isDirectory) out.push(...(await this._listFolderFiles(child, path)));
+			else out.push({ path, entry: child });
+		}
+		return out;
+	}
+
+	// Opening a project replaces the current one, so a project with changes
+	// that are not saved is asked about first.
+	async _openDroppedProject(open) {
+		if (isProjectDirty() && !(await confirmDialog("The current project has changes that are not saved. Discard them and open the dropped project?"))) return;
+		try {
+			await open();
+		} catch (err) {
+			console.error("Open Project failed:", err);
 		}
 	}
 
@@ -426,7 +489,7 @@ export class WaFileManager extends HTMLElement {
 	// workstation-state.js) but per Hans users shouldn't see or touch it
 	// here: it's Workstation's own editor state, not project content.
 	_visibleChildren(folderId) {
-		return vfs.listFolder(folderId).filter((n) => !(folderId === ROOT_ID && n.name === STATE_FILE_NAME));
+		return vfs.listFolder(folderId).filter((n) => !isHiddenName(n.name) && !(folderId === ROOT_ID && n.name === STATE_FILE_NAME));
 	}
 
 	// Same ordering _renderChildren lays rows out in (folders first, then

@@ -714,6 +714,7 @@ export class WaWebcamInput extends HTMLElement {
 		this._selectedEntryId = null;
 
 		this._onVarLinkChanged = (e) => this._followVarLink(e.detail);
+		this._onProjectReset = () => this._clearEntries();
 		this._tick = this._tick.bind(this);
 		this._onCanvasClick = this._onCanvasClick.bind(this);
 		this._onKeyDown = (e) => {
@@ -726,6 +727,7 @@ export class WaWebcamInput extends HTMLElement {
 
 	connectedCallback() {
 		xmlStore.addEventListener("var-link-changed", this._onVarLinkChanged);
+		xmlStore.addEventListener("project-reset", this._onProjectReset);
 		document.addEventListener("keydown", this._onKeyDown, true);
 		this._startBtn.addEventListener("click", () => (this._running ? this._stop() : this._start()));
 		this._cameraSelect.addEventListener("change", () => {
@@ -745,6 +747,7 @@ export class WaWebcamInput extends HTMLElement {
 
 	disconnectedCallback() {
 		xmlStore.removeEventListener("var-link-changed", this._onVarLinkChanged);
+		xmlStore.removeEventListener("project-reset", this._onProjectReset);
 		document.removeEventListener("keydown", this._onKeyDown, true);
 		this._stop();
 	}
@@ -780,6 +783,16 @@ export class WaWebcamInput extends HTMLElement {
 			}
 		});
 		if (changed) this._dispatchStateChange();
+	}
+
+	// A different project is being opened or started: the rows of the last one
+	// go (the new project's own come in with its saved state).
+	_clearEntries() {
+		this._cancelAdding();
+		this._savedEntries.forEach((e) => e.row.remove());
+		this._savedEntries = [];
+		this._selectedEntryId = null;
+		this._nextColorIndex = 0;
 	}
 
 	// Public wrapper so outside code (workstation-state.js's

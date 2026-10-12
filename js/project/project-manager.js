@@ -1,12 +1,12 @@
-import { vfs, ROOT_ID } from "../vfs/VFS.js";
-import { importZip } from "../vfs/zip-import.js";
+import { vfs, ROOT_ID, isHiddenName } from "../vfs/VFS.js";
+import { importZip, findProjectFolder } from "../vfs/zip-import.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { createXmlNode } from "../xml-editor/xml-tree-ops.js";
 import { selection } from "../state/selection.js";
 import { bindCurrentFile, getCurrentFileId } from "./document-sync.js";
 import { STATE_FILE_NAME, initWorkstationState, flushWorkstationState } from "./workstation-state.js";
 import { resetEditHistory } from "./edit-history.js";
-import { listTemplates, importTemplateFiles } from "./template-loader.js";
+import { listTemplates, fetchTemplateZip } from "./template-loader.js";
 
 // A "project" = the VFS's files/folders + the XML document currently open in
 // xmlStore. The schema (waxml.xsd) is an app-level constant, not project
@@ -23,6 +23,45 @@ export const PROJECT_FILE_NAME = "wa.xml";
 // or went to" is project state, not view state.
 let savedFileHandle = null;
 
+// "Is the latest version saved?" — the project as it is now (the files and
+// folders with their sizes, and the open document) against how it was when
+// it was last opened, created or saved. Only a real difference counts, so
+// undoing back to what was saved is clean again, and the editor's own
+// layout (workstation-state.json) never makes a project "changed". Used to
+// decide whether opening another project has to warn first.
+let savedSignature = null;
+
+function projectSignature() {
+	const parts = [];
+	const walk = (folderId, path) => {
+		vfs.listFolder(folderId).forEach((node) => {
+			const full = path + node.name;
+			if (node.type === "folder") {
+				parts.push(`d:${full}`);
+				walk(node.id, `${full}/`);
+			} else if (!(path === "" && node.name === STATE_FILE_NAME)) {
+				parts.push(`f:${full}:${node.file?.size}`);
+			}
+		});
+	};
+	walk(ROOT_ID, "");
+	return `${parts.sort().join("|")}\n${xmlStore.root ? xmlStore.codeValue : ""}`;
+}
+
+export function markProjectSaved() {
+	savedSignature = projectSignature();
+}
+
+// A project that has never been saved (a template just opened): changed by
+// definition, until the first save.
+export function markProjectUnsaved() {
+	savedSignature = "";
+}
+
+export function isProjectDirty() {
+	return savedSignature !== null && projectSignature() !== savedSignature;
+}
+
 export function createDefaultProject() {
 	vfs.clear();
 	xmlStore.resetIdCounters();
@@ -34,6 +73,7 @@ export function createDefaultProject() {
 	initWorkstationState();
 	resetEditHistory();
 	savedFileHandle = null;
+	markProjectSaved();
 }
 
 // The root tag name comes from the active schema (its own root element
@@ -68,22 +108,8 @@ export async function openProjectFromFile(file, handle = null) {
 	const lower = file.name.toLowerCase();
 
 	if (lower.endsWith(".zip")) {
-		await importZip(vfs, ROOT_ID, file);
-		const entryPoint = findXmlEntryPoint();
-		if (entryPoint) {
-			const text = await entryPoint.file.text();
-			xmlStore.setCodeValue(text);
-			bindCurrentFile(entryPoint.id, text);
-			selection.select(entryPoint.id);
-		} else {
-			xmlStore.setRoot(null);
-		}
-		// After the document (if any) is loaded, so a saved selectedElementId
-		// can actually resolve against the real tree — looks for an imported
-		// workstation-state.json and applies it, or creates a fresh default
-		// one if this zip never had one (e.g. not authored by Workstation).
-		initWorkstationState();
-		resetEditHistory();
+		await importProjectZip(file);
+		await finishProjectLoad();
 		return;
 	}
 
@@ -94,25 +120,27 @@ export async function openProjectFromFile(file, handle = null) {
 	selection.select(fileNode.id);
 	initWorkstationState();
 	resetEditHistory();
+	markProjectSaved();
 }
 
-// Loads one of templates/manifest.json's projects by name (see
-// template-loader.js) — same idea as opening a .zip, but fetched from a
-// folder of loose files instead of unzipped from one, so Hans can author a
-// template directly on disk rather than through a zip. Never remembers a
-// save-back handle (loading a template must never let a plain Save
-// overwrite the template's own source files under templates/).
-export async function loadTemplate(name) {
-	const manifest = await listTemplates();
-	const relativePaths = manifest[name];
-	if (!relativePaths) throw new Error(`Unknown template "${name}"`);
+// A .zip that has a WAW json file (workstation-state.json) in it, anywhere,
+// is a project: its folder is the top level (so a zip made by compressing a
+// project's folder opens the same as one made from inside it). Otherwise the
+// archive's structure is mirrored as it is.
+async function importProjectZip(file) {
+	if (typeof JSZip === "undefined") {
+		throw new Error("JSZip is not loaded (check the <script> tag in index.html).");
+	}
+	const zip = await JSZip.loadAsync(file);
+	const folder = findProjectFolder(Object.keys(zip.files), STATE_FILE_NAME);
+	await importZip(vfs, ROOT_ID, file, { zip, stripPrefix: folder || "" });
+}
 
-	vfs.clear();
-	xmlStore.resetIdCounters();
-	savedFileHandle = null;
-
-	const nodesByPath = await importTemplateFiles(vfs, ROOT_ID, name, relativePaths);
-	const entryPoint = nodesByPath.get(PROJECT_FILE_NAME) || findXmlEntryPoint();
+// After the files of a project are in the VFS: opens its main document and
+// the editor layout saved with it, or creates a default layout for a project
+// that never had one (not authored by Workstation).
+async function finishProjectLoad() {
+	const entryPoint = findXmlEntryPoint();
 	if (entryPoint) {
 		const text = await entryPoint.file.text();
 		xmlStore.setCodeValue(text);
@@ -121,8 +149,74 @@ export async function loadTemplate(name) {
 	} else {
 		xmlStore.setRoot(null);
 	}
+	// After the document (if any) is loaded, so a saved selectedElementId can
+	// actually resolve against the real tree.
 	initWorkstationState();
 	resetEditHistory();
+	markProjectSaved();
+}
+
+// Whether an archive holds a project (see importProjectZip) — what a .zip
+// dropped in the File Manager is checked with.
+export async function zipHoldsProject(file) {
+	if (typeof JSZip === "undefined") return false;
+	try {
+		const zip = await JSZip.loadAsync(file);
+		return findProjectFolder(Object.keys(zip.files), STATE_FILE_NAME) !== null;
+	} catch {
+		return false;
+	}
+}
+
+// The folder (among a dropped folder's files, as { path, ... }, paths
+// relative to it) a project lives in, or null — see findProjectFolder.
+export function findProjectFolderAmong(paths) {
+	return findProjectFolder(paths, STATE_FILE_NAME);
+}
+
+// Opens a project from loose files (a dropped folder): `files` is
+// [{ path, file }] with `path` relative to the project's top folder, so what
+// lies outside it has already been left out. Hidden files are skipped.
+export async function openProjectFromFiles(files) {
+	vfs.clear();
+	xmlStore.resetIdCounters();
+	savedFileHandle = null;
+	const folderIds = new Map([["", ROOT_ID]]);
+	const folderFor = (dirPath) => {
+		if (folderIds.has(dirPath)) return folderIds.get(dirPath);
+		const parts = dirPath.split("/");
+		let current = "";
+		let parentId = ROOT_ID;
+		for (const part of parts) {
+			current = current ? `${current}/${part}` : part;
+			if (!folderIds.has(current)) folderIds.set(current, vfs.createFolder(parentId, part).id);
+			parentId = folderIds.get(current);
+		}
+		return parentId;
+	};
+	for (const { path, file } of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+		const parts = path.split("/");
+		if (parts.some(isHiddenName)) continue;
+		const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
+		if (![".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml", ".json"].includes(ext)) continue;
+		vfs.uploadFile(folderFor(parts.slice(0, -1).join("/")), file);
+	}
+	await finishProjectLoad();
+}
+
+// Opens one of the zips in templates/ (see template-loader.js) as a new,
+// unsaved project: it is not tied to any file (a plain Save asks where to
+// save, so the template's own zip can never be overwritten) and counts as
+// having unsaved changes, so leaving it warns until it has been saved.
+// Per Hans (2026-10-12).
+export async function loadTemplate(fileName) {
+	const file = await fetchTemplateZip(fileName);
+	vfs.clear();
+	xmlStore.resetIdCounters();
+	savedFileHandle = null;
+	await importProjectZip(file);
+	await finishProjectLoad();
+	markProjectUnsaved();
 }
 
 export { listTemplates };
@@ -265,6 +359,7 @@ export async function saveProject() {
 		await writable.write(xmlStore.codeValue);
 	}
 	await writable.close();
+	markProjectSaved();
 }
 
 // Always prompts for a new location, and remembers it (when the picker
@@ -273,15 +368,19 @@ export async function saveProject() {
 export async function saveProjectAs() {
 	const blob = await buildProjectZipBlob();
 	const handle = await pickSaveLocation(blob, "waw-project.zip");
+	if (handle === false) return; // cancelled — nothing was saved
 	if (handle) savedFileHandle = { handle, kind: "zip" };
+	// A download (no handle) counts as saved too — the file has been written
+	// out; "Export" never does, since that one is for handing a copy away.
+	markProjectSaved();
 }
 
 // Chrome/Edge (not Safari/Firefox) can show a real native "Save As" dialog
 // via the File System Access API — used when available, per Hans
 // (2026-09-03). Returns the resulting handle (so saveProjectAs can remember
-// it), or null if the picker isn't available, was cancelled (in which case
-// nothing else happens either — cancelling shouldn't fall back to a silent
-// download the user didn't ask for), or some other error left it unusable,
+// it); false if the picker was cancelled (nothing else happens either —
+// cancelling shouldn't fall back to a silent download the user didn't ask
+// for); or null if the picker isn't available or some other error left it unusable,
 // in which case this instead falls back to the classic <a download> trick
 // (always saves silently to the browser's own default download location —
 // no handle to remember there).
@@ -297,7 +396,7 @@ async function pickSaveLocation(blob, filename) {
 			await writable.close();
 			return handle;
 		} catch (err) {
-			if (err.name === "AbortError") return null; // user cancelled the picker — not a failure
+			if (err.name === "AbortError") return false; // user cancelled the picker — not a failure, and nothing was saved
 			// Anything else (e.g. a browser that lies about supporting the
 			// API): fall through to the classic download below instead.
 		}

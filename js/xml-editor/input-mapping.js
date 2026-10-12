@@ -5,9 +5,26 @@ import { isNumericAttributeSchema } from "./schema-parser.js";
 
 const BARE_NUMBER_RE = /^-?\d+(\.\d+)?$/;
 
-export function isMappableAttribute(tagName, attrName) {
-	const attrSchema = xmlStore.schema?.elements[tagName]?.allowedAttributes.find((a) => a.name === attrName);
-	return isNumericAttributeSchema(attrSchema);
+// TEMPORARY (Hans, 2026-10-12): nothing in a <Composition> — the element
+// itself and everything inside it (Section, Layer, Segment, Option, Stinger,
+// ...) — can be mapped for now. waxml.js's music engine does not drive those
+// attributes from a <Var> yet (see the musicGain note in schemas/waxml.xsd),
+// so offering them as mapping targets would promise something that doesn't
+// work. Remove the Composition check below once waxml.js is updated.
+function isInsideComposition(node) {
+	const root = xmlStore.root;
+	for (let n = node; n; n = n.parent ? findNodeById(root, n.parent) : null) {
+		if (n.tagName === "Composition") return true;
+	}
+	return false;
+}
+
+// Whether `attrName` of `node` can be the target of a mapping (a <Var> or an
+// INPUT entry): a numeric attribute (per the schema) outside <Composition>.
+// The one gate every mapping site — the Inspector's attribute rows, the
+// parameter chips, createVarForAttribute — goes through.
+export function isMappableTarget(node, attrSchema) {
+	return !!node && isNumericAttributeSchema(attrSchema) && !isInsideComposition(node);
 }
 
 // Maps an INPUT entry straight onto one attribute (per Hans, 2026-10-09)
@@ -36,6 +53,7 @@ export function createVarForAttribute(nodeId, attrName) {
 	if (!parent) return null;
 
 	const attrSchema = xmlStore.schema?.elements[node.tagName]?.allowedAttributes.find((a) => a.name === attrName);
+	if (!isMappableTarget(node, attrSchema)) return null;
 	const [outMin, outMax] = mapoutRangeFor(node.tagName, attrName, attrSchema);
 	const lastVarIndex = parent.children.reduce((last, c, i) => (c.tagName === "Var" ? i : last), -1);
 

@@ -8,7 +8,7 @@ import { openIoPicker } from "./wa-io-picker.js";
 import { openVoicePicker } from "./wa-voice-picker.js";
 import { varMapMode } from "../state/var-map-mode.js";
 import { inputMapMode } from "../state/input-map-mode.js";
-import { isNumericAttributeSchema } from "../xml-editor/schema-parser.js";
+import { isMappableTarget } from "../xml-editor/input-mapping.js";
 
 // Showing/editing an element's own tag name here is turned off per Hans
 // (2026-09-03) — _renderTagNameField (and xmlStore.updateTagName) are left
@@ -606,7 +606,7 @@ export class WaNodeInspector extends HTMLElement {
 		// isNumericAttributeSchema's own comment) — everything else (label,
 		// id, class, an enum-only union, ...) never gets the ring, and the
 		// click listener below bails out for the same reason.
-		const isNumericTarget = isNumericAttributeSchema(attrSchema);
+		const isNumericTarget = isMappableTarget(node, attrSchema);
 		row.className = isNumericTarget ? "attr-row map-target-armed" : "attr-row";
 
 		// While a <Var> knob's "Map..." is armed (see wa-var-knobs.js /
