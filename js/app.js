@@ -84,8 +84,8 @@ xmlStore.addEventListener("notice", (e) => showNotice(e.detail.message));
 // own, reused <wa-player-bar> instance — see wa-library-view.js) so it hides
 // along with <main> in the other views.
 const VIEW_TITLES = {
-	workstation: "WAXML Workstation — BETA",
-	library: "WAXML Library (DEMO)"
+	workstation: "Web Audio Workstation — BETA",
+	library: "WAW Library (DEMO)"
 };
 const appTitleEl = document.getElementById("appTitle");
 const bottomBarEl = document.getElementById("bottomBar");

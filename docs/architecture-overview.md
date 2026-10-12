@@ -14,7 +14,7 @@ ska fungera live — värt att läsa om du jobbar vidare på Mixern.
 
 ## Vad appen är
 
-WAW ("WAXML Workstation") är ett rent klient-baserat verktyg (Steg 0 —
+WAW ("Web Audio Workstation") är ett rent klient-baserat verktyg (Steg 0 —
 inget backend än) för att bygga och förhandslyssna på "transmutable"/
 adaptiv musik i formatet WAXML, som sen spelas upp av ett separat,
 fristående bibliotek (`waxml.js`, i projektroten) som Hans bygger parallellt.

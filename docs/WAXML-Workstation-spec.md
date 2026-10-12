@@ -1,4 +1,4 @@
-# WAXML Workstation — Teknisk spec
+# Web Audio Workstation (WAW) — Teknisk spec
 
 Version: utkast efter arkitektur-genomgång i Claude web chat.
 Nästa steg: implementation i Claude Code (Steg 0 / Demo).
