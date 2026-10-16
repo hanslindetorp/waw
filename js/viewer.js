@@ -41,7 +41,7 @@ function showMessage(text) {
 
 async function loadSchema() {
 	const res = await fetch(DEFAULT_SCHEMA_PATH);
-	if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+	if (!res.ok) throw new Error(`the schema file (${DEFAULT_SCHEMA_PATH}) answered ${res.status}`);
 	const schema = parseXsdSchema(await res.text());
 	if (schema) xmlStore.setSchema(schema, "waxml.xsd");
 }
@@ -128,14 +128,16 @@ async function main() {
 	try {
 		await loadSchema();
 		const res = await fetch(project, { cache: "no-store" });
-		if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+		if (!res.ok) throw new Error(`the project file (${project}) was not found or could not be read: the server answered ${res.status}`);
 		const file = new File([await res.blob()], project.split("/").pop(), { type: "application/zip" });
 		await openProjectFromFile(file);
 		stageEl.style.display = "";
 		setUpDone(view, ltiLaunch(params));
 	} catch (err) {
 		console.error("Viewer: could not open the project:", err);
-		showMessage("The project could not be loaded.");
+		// The reason is shown (it holds no secrets: a file name and a status) so a
+		// person setting this up can tell a missing file from a broken one.
+		showMessage(`The project could not be loaded: ${err.message || err}`);
 	}
 }
 
