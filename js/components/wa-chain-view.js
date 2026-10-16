@@ -13,6 +13,7 @@ import {
 } from "../waxml-integration/gain-units.js";
 import { isEditableContext } from "../project/edit-history.js";
 import { stageStore } from "../project/stage-store.js";
+import { engineDefault } from "../xml-editor/default-attributes.js";
 import { showNotice } from "./wa-notice-dialog.js";
 import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
@@ -113,9 +114,13 @@ const GAIN_FADER_TRACK_HEIGHT = 130;
 const GAIN_FADER_TICKS_DB = [9, 0, -6, -12, -24, -48];
 const KNOB_PX_PER_RANGE = 160; // dragging this many px sweeps a knob's full range, same feel as wa-mixer-view.js
 
+// A parameter's value for display: what is written, else what the engine
+// does with a missing attribute (see default-attributes.js) — `fallback` only
+// for parameters that aren't tracked there.
 function readNum(node, attrName, fallback) {
 	const n = parseFloat(node.attributes[attrName]);
-	return Number.isFinite(n) ? n : fallback;
+	if (Number.isFinite(n)) return n;
+	return engineDefault(node.tagName, attrName) ?? fallback;
 }
 
 function displayTagName(tag) {

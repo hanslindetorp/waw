@@ -2,6 +2,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { isVariableControlled } from "../xml-editor/variable-references.js";
 import { getLiveProperty } from "../waxml-integration/live-property.js";
 import { parseGainAttributeToDb, isDbNativeGain, linearRatioToDb } from "../waxml-integration/gain-units.js";
+import { engineDefault } from "../xml-editor/default-attributes.js";
 import { readKey } from "./evaluate.js";
 
 // Measures what an assessment (see evaluate.js) asks about, in the running
@@ -32,6 +33,15 @@ function readOne(read) {
 		if (asDb && read.attr === "gain") return parseGainAttributeToDb(node.tagName, raw);
 		const n = parseFloat(raw);
 		if (Number.isFinite(n)) return n;
+	}
+	// Not written out: the engine's default (a $variable-driven one has no
+	// written number either, so it is read live below).
+	if (raw === undefined || raw === "") {
+		const fallback = engineDefault(node.tagName, read.attr);
+		if (fallback !== undefined) {
+			if (asDb && read.attr === "gain" && !isDbNativeGain(node.tagName)) return linearRatioToDb(fallback);
+			return fallback;
+		}
 	}
 	const live = getLiveProperty(read.ref, read.attr);
 	if (!Number.isFinite(live)) return undefined;

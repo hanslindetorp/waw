@@ -1,4 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
+import { withEngineDefaults } from "../xml-editor/default-attributes.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { applyLiveProperty, applyLiveMethodCall, getLiveProperty } from "../waxml-integration/live-property.js";
@@ -3112,7 +3113,9 @@ export class WaMixerView extends HTMLElement {
 		const addCommands = (node) => {
 			const nodeId = node.attributes.id;
 			if (!nodeId) return;
-			for (const [name, value] of Object.entries(node.attributes)) {
+			// The element's effective state: what is written, plus the engine's
+			// default for the parameters that never were (see default-attributes.js).
+			for (const [name, value] of Object.entries(withEngineDefaults(node))) {
 				if (name === "id" || name === "class" || name === "label") continue;
 				commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${nodeId}`, variable: name, value: String(value) } });
 			}

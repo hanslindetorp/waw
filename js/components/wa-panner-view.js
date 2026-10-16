@@ -1,4 +1,5 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
+import { engineDefault } from "../xml-editor/default-attributes.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { applyLiveProperty } from "../waxml-integration/live-property.js";
 import { playerStore } from "../waxml-integration/player-store.js";
@@ -395,8 +396,8 @@ export class WaPannerView extends HTMLElement {
 			node,
 			x: parseFloat(node.attributes.positionX) || 0,
 			y: parseFloat(node.attributes.positionY) || 0,
-			// -1 only when the attribute is absent/unparseable — a real 0 must stay 0.
-			z: Number.isFinite(parseFloat(node.attributes.positionZ)) ? parseFloat(node.attributes.positionZ) : -1
+			// the engine's default only when the attribute is absent/unparseable — a real 0 must stay 0.
+			z: Number.isFinite(parseFloat(node.attributes.positionZ)) ? parseFloat(node.attributes.positionZ) : engineDefault("PannerNode", "positionZ") ?? 0
 		}));
 		if (positionOverrides) {
 			for (const p of this._panners) {

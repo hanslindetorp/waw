@@ -1,4 +1,5 @@
 import * as ops from "./xml-tree-ops.js";
+import { creationAttributes } from "./default-attributes.js";
 import { isVariableControlled } from "./variable-references.js";
 import { findChainOrderProblems } from "./chain-rules.js";
 
@@ -222,6 +223,11 @@ class XmlStore extends EventTarget {
 				if (Object.keys(copied).length) attributes = { ...copied, ...attributes };
 			}
 		}
+		// A new element with parameters you turn (a filter, a compressor, a
+		// delay, ...) gets them written out from the start — see
+		// default-attributes.js. A value the caller supplies always wins.
+		const creation = creationAttributes(tagName);
+		if (Object.keys(creation).length) attributes = { ...creation, ...attributes };
 		// Every new <Var> gets a name (see generateVarName — required for
 		// setVariable()/"$name" to reach it at all) plus a sensible starting
 		// mapin/default, so a freshly-created one is immediately usable as a

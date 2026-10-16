@@ -1022,3 +1022,25 @@ redigeringshjälpmedel) och senare av LTI-lagret.
   skickar `waw:done` på `document` (för LTI-lagret senare).
 - **Inte med än:** Mixer-kanalremsor, omdöpta `id`:n följs inte, LTI-lagret,
   riktig separation mellan vyer (kräver server).
+
+## Standardvärden för parametrar (nytt, 2026-10-16)
+
+`js/xml-editor/default-attributes.js` är enda stället som säger vad ett
+elements parametrar är när inget satts:
+
+- **`ENGINE_DEFAULTS`** — vad ett *saknat* attribut betyder (vad motorn gör),
+  i attributets egen enhet (GainNode.gain linjärt, BiquadFilterNode.gain dB).
+  Kontrollerat mot live-motorn 2026-10-16 där den exponerar egenskapen,
+  annars Web Audios egna värden (kompressorn).
+- **`CREATION_VALUES`** — vad som *skrivs* som attribut när användaren skapar
+  elementet (`xmlStore.insertNewChild`; anroparens egna värden vinner): de
+  värden kortet alltid startat på, bara för parametrar med kontroll på kortet.
+  Så syns det man vrider på i dokumentet från början (Snapshots, Stage,
+  bedömning).
+- Läsande kod använder `engineDefault()`/`withEngineDefaults()` för det som
+  saknas: kortens visning (`readNum` i `wa-chain-view.js`), Panner-vyns
+  `positionZ`, Snapshot-fångsten i Mixern och bedömningens mätning. Befintliga
+  dokument skrivs aldrig om; de visar nu det motorn faktiskt spelar (t.ex. ett
+  filter utan `frequency` visar 350 Hz, inte 1000).
+- Mixerns egna kanalremsor skriver sina värden explicit sedan tidigare och
+  läser fortfarande med egna reservvärden.
