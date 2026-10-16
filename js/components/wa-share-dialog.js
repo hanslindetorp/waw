@@ -1,4 +1,5 @@
 import "./wa-api-view.js";
+import "./wa-public-links.js";
 
 // The "Export..." dialog (File menu, labeled "Share..." until 2026-09-27 —
 // per Hans, "Share" is reserved for a different, future feature; the
@@ -62,9 +63,39 @@ template.innerHTML = `
 		.close-btn:hover {
 			background: rgba(255, 255, 255, 0.08);
 		}
-		wa-api-view {
+		.tabs {
+			flex: 0 0 auto;
+			display: flex;
+			gap: 2px;
+			padding: 0.4rem 0.9rem 0;
+			border-bottom: 1px solid var(--waw-border, #2f2f2f);
+		}
+		.tab {
+			font: 0.78rem system-ui, sans-serif;
+			color: var(--waw-muted, #8a8a8a);
+			background: none;
+			border: 1px solid transparent;
+			border-bottom: none;
+			border-radius: 5px 5px 0 0;
+			padding: 0.3rem 0.8rem;
+			cursor: pointer;
+		}
+		.tab:hover {
+			color: var(--waw-fg, #e8e8e8);
+		}
+		.tab.active {
+			color: var(--waw-fg, #e8e8e8);
+			background: var(--waw-panel-bg, #1a1a1a);
+			border-color: var(--waw-border, #2f2f2f);
+			margin-bottom: -1px;
+		}
+		wa-api-view,
+		wa-public-links {
 			flex: 1 1 auto;
 			min-height: 0;
+		}
+		[hidden] {
+			display: none !important;
 		}
 	</style>
 	<div class="backdrop">
@@ -73,7 +104,12 @@ template.innerHTML = `
 				<span>Export</span>
 				<button class="close-btn" type="button" title="Close">✕</button>
 			</div>
+			<div class="tabs">
+				<button class="tab active" type="button" data-tab="embed">Embed</button>
+				<button class="tab" type="button" data-tab="public">Public pages</button>
+			</div>
 			<wa-api-view></wa-api-view>
+			<wa-public-links hidden></wa-public-links>
 		</div>
 	</div>
 `;
@@ -98,6 +134,15 @@ export class WaShareDialog extends HTMLElement {
 			if (e.target === e.currentTarget) this.close();
 		});
 		document.addEventListener("keydown", this._onKeyDown);
+		this.shadowRoot.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => this._showTab(tab.dataset.tab)));
+	}
+
+	_showTab(name) {
+		this.shadowRoot.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+		this.shadowRoot.querySelector("wa-api-view").hidden = name !== "embed";
+		const links = this.shadowRoot.querySelector("wa-public-links");
+		links.hidden = name !== "public";
+		if (name === "public") links.refresh();
 	}
 
 	disconnectedCallback() {
@@ -106,6 +151,7 @@ export class WaShareDialog extends HTMLElement {
 
 	open() {
 		this.hidden = false;
+		this._showTab("embed");
 	}
 
 	close() {

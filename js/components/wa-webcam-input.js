@@ -1,6 +1,8 @@
 import { playerStore } from "../waxml-integration/player-store.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { inputMapMode } from "../state/input-map-mode.js";
+import { inputSources } from "../state/input-sources.js";
+import { stageStore, STAGE_INPUT_DRAG_TYPE } from "../project/stage-store.js";
 import "./wa-color-picker.js";
 import { COLOR_PALETTE } from "./wa-color-picker.js";
 
@@ -33,9 +35,16 @@ import { COLOR_PALETTE } from "./wa-color-picker.js";
 // and picking a row shows its points in the video.
 //
 // Rows (with the points, color, mode, calibrated range and targets) are
-// persisted via getState()/applyState() — see workstation-state.js's own
-// registerLayoutExtras wiring — never as WAXML document content. Rows saved
-// by the earlier version are converted when the project opens.
+// project content, saved in inputs.json (getEntries()/applyEntries() — see
+// project/inputs-store.js); the camera choice and whether it was running are
+// editor state (getState()/applyState() — see workstation-state.js's own
+// registerLayoutExtras wiring). None of it is WAXML document content. Rows
+// saved by earlier versions (in workstation-state.json) are converted when
+// the project opens.
+//
+// Other parts of the app reach this element through input-sources.js: the
+// Stage shows a row (and a Start button) as one of its items, and the viewer
+// page keeps an instance out of sight as the engine behind them.
 //
 // Ported from Hans's own reference implementation (https://msw.waxml.org/,
 // fetched 2026-09-22): the landmark rebuild and click-to-select hit-test.
@@ -480,6 +489,34 @@ template.innerHTML = `
 			padding: 0.15rem 0.45rem;
 			font-size: 0.7rem;
 		}
+		/* "Add to Stage": click puts the row on the current Stage view, dragging
+		   it carries it onto the Stage panel (see wa-stage-view.js). */
+		.stage-pin {
+			flex: 0 0 auto;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 18px;
+			height: 18px;
+			border-radius: 3px;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: grab;
+			opacity: 0.6;
+		}
+		.stage-pin:hover {
+			opacity: 1;
+			color: var(--waw-accent, #4fa3ff);
+			background: rgba(79, 163, 255, 0.15);
+		}
+		.stage-pin svg {
+			width: 12px;
+			height: 12px;
+			pointer-events: none;
+		}
+		.stage-pin.added {
+			color: var(--waw-teal, #45b58c);
+			opacity: 1;
+		}
 		.icon-btn {
 			display: inline-flex;
 			align-items: center;
@@ -729,6 +766,7 @@ export class WaWebcamInput extends HTMLElement {
 		xmlStore.addEventListener("var-link-changed", this._onVarLinkChanged);
 		xmlStore.addEventListener("project-reset", this._onProjectReset);
 		document.addEventListener("keydown", this._onKeyDown, true);
+		inputSources.register("webcam", this);
 		this._startBtn.addEventListener("click", () => (this._running ? this._stop() : this._start()));
 		this._cameraSelect.addEventListener("change", () => {
 			this._cameraDeviceId = this._cameraSelect.value || null;
@@ -749,6 +787,7 @@ export class WaWebcamInput extends HTMLElement {
 		xmlStore.removeEventListener("var-link-changed", this._onVarLinkChanged);
 		xmlStore.removeEventListener("project-reset", this._onProjectReset);
 		document.removeEventListener("keydown", this._onKeyDown, true);
+		inputSources.unregister("webcam", this);
 		this._stop();
 	}
 
@@ -802,33 +841,18 @@ export class WaWebcamInput extends HTMLElement {
 		this._stop();
 	}
 
-	// ── Persistence (workstation-state.json) ─────────────────────────────
+	// ── Persistence ──────────────────────────────────────────────────────
+	// Editor state (workstation-state.json): which camera, and whether it was
+	// running when the project was saved.
 	getState() {
-		return {
-			version: 2,
-			cameraDeviceId: this._cameraDeviceId,
-			running: this._running,
-			entries: this._savedEntries.map((e) => ({
-				id: e.id,
-				model: e.model,
-				labels: [...e.labels],
-				color: e.color,
-				mode: e.mode,
-				invert: e.invert,
-				calib: { ...e.calib },
-				mappings: e.mappings.map((m) => ({ ...m })),
-				bypassed: e.bypassed
-			}))
-		};
+		return { version: 2, cameraDeviceId: this._cameraDeviceId, running: this._running };
 	}
 
 	applyState(state) {
 		if (!state || typeof state !== "object") return;
 		if (typeof state.cameraDeviceId === "string") this._cameraDeviceId = state.cameraDeviceId;
-		if (Array.isArray(state.entries)) {
-			this._migrateEntries(state.entries).forEach((e) => this._createEntry(e));
-			this._syncModels();
-		}
+		// Rows saved by versions that kept them here (see applyEntries).
+		if (Array.isArray(state.entries)) this.applyEntries(state.entries);
 		// Per Hans (2026-09-26): a project saved with the camera running
 		// should have it running again as soon as the project opens, rather
 		// than making the user click Start every time. Not a "resume audio
@@ -836,6 +860,57 @@ export class WaWebcamInput extends HTMLElement {
 		// opening a project (via a real file-picker interaction) is itself
 		// the user gesture, same as it already is for saved panel layout.
 		if (state.running) this._start();
+	}
+
+	// Project content (inputs.json): the rows.
+	getEntries() {
+		return this._savedEntries.map((e) => ({
+			id: e.id,
+			model: e.model,
+			labels: [...e.labels],
+			color: e.color,
+			mode: e.mode,
+			invert: e.invert,
+			calib: { ...e.calib },
+			mappings: e.mappings.map((m) => ({ ...m })),
+			bypassed: e.bypassed
+		}));
+	}
+
+	applyEntries(entries) {
+		if (!Array.isArray(entries)) return;
+		this._migrateEntries(entries)
+			.filter((e) => !e.id || !this._savedEntries.some((x) => x.id === e.id))
+			.forEach((e) => this._createEntry(e));
+		this._syncModels();
+	}
+
+	// ── For the Stage and the viewer (see input-sources.js) ──────────────
+	get running() {
+		return this._running;
+	}
+
+	get statusText() {
+		return this._statusError || "";
+	}
+
+	start() {
+		return this._running ? Promise.resolve() : this._start();
+	}
+
+	getEntrySummaries() {
+		return this._savedEntries.map((e) => ({
+			id: e.id,
+			color: e.color,
+			label: e.labels.join(" + "),
+			measure: this._measureTag(e),
+			bypassed: e.bypassed
+		}));
+	}
+
+	getEntryNorm(id) {
+		const e = this._savedEntries.find((x) => x.id === id);
+		return e && !e.bypassed ? e.norm : undefined;
 	}
 
 	// Rows saved before the 2026-10-12 redesign had a metric per key (x, y, z,
@@ -911,10 +986,13 @@ export class WaWebcamInput extends HTMLElement {
 			this._syncModels();
 			this._updateOverlay();
 			this._rafId = requestAnimationFrame(this._tick);
+			this._statusError = "";
 		} catch (err) {
 			this._setStatus(`Error: ${err.message}\nCheck camera access and network connection.`, true);
+			this._statusError = `Camera: ${err.message}`;
 		} finally {
 			this._startBtn.disabled = false;
+			this.dispatchEvent(new CustomEvent("run-change"));
 		}
 	}
 
@@ -937,6 +1015,7 @@ export class WaWebcamInput extends HTMLElement {
 		Object.values(this._modelState).forEach((s) => (s.results = null));
 		this._setStatus("Camera is off. Click Start to begin tracking.", false);
 		this._updateOverlay();
+		this.dispatchEvent(new CustomEvent("run-change"));
 	}
 
 	_setStatus(text, isError) {
@@ -1478,7 +1557,25 @@ export class WaWebcamInput extends HTMLElement {
 			this._removeEntry(entry.id);
 		});
 
-		top.append(picker, lbl, muteBtn, del);
+		const pin = document.createElement("span");
+		pin.className = "stage-pin";
+		pin.draggable = true;
+		pin.title = "Add to the Stage (click, or drag it there)";
+		pin.innerHTML =
+			'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>';
+		pin.addEventListener("click", (e) => {
+			e.stopPropagation();
+			stageStore.addInput("webcam", entry.id);
+			pin.classList.add("added");
+			setTimeout(() => pin.classList.remove("added"), 900);
+		});
+		pin.addEventListener("dragstart", (e) => {
+			e.stopPropagation();
+			e.dataTransfer.effectAllowed = "move";
+			e.dataTransfer.setData(STAGE_INPUT_DRAG_TYPE, JSON.stringify({ source: "webcam", entryId: entry.id }));
+		});
+
+		top.append(picker, lbl, muteBtn, pin, del);
 
 		const controls = document.createElement("div");
 		controls.className = "saved-controls";

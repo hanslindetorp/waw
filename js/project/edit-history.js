@@ -1,5 +1,7 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { vfs } from "../vfs/VFS.js";
+import { stageStore } from "./stage-store.js";
+import { assessmentStore } from "./assessment-store.js";
 
 // App-wide undo/redo, per Hans: one combined in-memory history across the
 // XML document *and* the file manager (VFS), spanning every "change" event
@@ -9,7 +11,10 @@ import { vfs } from "../vfs/VFS.js";
 // deliberately does NOT ride along here — only xmlStore.selectedNodeId does
 // (bundled into every snapshot below), since restoring *what's selected*
 // alongside a document edit is expected, but undo silently resizing/opening
-// panels would not be.
+// panels would not be. The Stage (stage.json — its views and what is on
+// them) is project content, so it IS part of every snapshot (see
+// stage-store.js: its data is never mutated, so a snapshot is a reference) —
+// and so are the Stage views' assessments (assessment-store.js).
 //
 // Coalescing: xmlStore fires one "change" event per keystroke/drag-tick (see
 // wa-xml-code.js's textarea "input" handler and the Mixer/Inspector sliders'
@@ -89,6 +94,11 @@ export function initEditHistory() {
 	wired = true;
 	xmlStore.addEventListener("change", onChange);
 	vfs.addEventListener("change", onChange);
+	// "edit", not "change": the Stage also announces "change" for things that
+	// are not edits (the computed defaults following the document, a project
+	// being loaded).
+	stageStore.addEventListener("edit", onChange);
+	assessmentStore.addEventListener("edit", onChange);
 	document.addEventListener("keydown", onKeyDown);
 }
 
@@ -96,7 +106,9 @@ function captureSnapshot() {
 	return {
 		xmlRoot: xmlStore.root,
 		selectedNodeId: xmlStore.selectedNodeId,
-		vfsNodes: vfs.snapshot()
+		vfsNodes: vfs.snapshot(),
+		stage: stageStore.snapshot(),
+		assessment: assessmentStore.snapshot()
 	};
 }
 
@@ -105,6 +117,8 @@ function applyRestore(snapshot) {
 	try {
 		xmlStore.restoreSnapshot(snapshot.xmlRoot, snapshot.selectedNodeId);
 		vfs.restore(snapshot.vfsNodes);
+		stageStore.restore(snapshot.stage);
+		assessmentStore.restore(snapshot.assessment);
 	} finally {
 		applyingHistory = false;
 	}

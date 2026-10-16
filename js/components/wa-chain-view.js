@@ -12,6 +12,8 @@ import {
 	faderPositionToDb
 } from "../waxml-integration/gain-units.js";
 import { isEditableContext } from "../project/edit-history.js";
+import { stageStore } from "../project/stage-store.js";
+import { showNotice } from "./wa-notice-dialog.js";
 import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
 import { computeMapPoints, mapStage1 } from "../xml-editor/var-mapper-math.js";
@@ -92,7 +94,7 @@ const ANALYSER_DEFAULT_MIN_DB = -60;
 // Anything a drag should belong to rather than start moving the card — see
 // _wireCardReorder.
 const CARD_INTERACTIVE_SELECTOR =
-	"canvas, .knob, select, input, textarea, button, a, wa-panner-view, .param-chip, .param-chip-input, .mode-toggle, [contenteditable]";
+	"canvas, .knob, select, input, textarea, button, a, wa-panner-view, .param-chip, .param-chip-input, .mode-toggle, .stage-pin, [contenteditable]";
 const CHAIN_CARD_DRAG_TYPE = "application/x-waw-chain-card";
 // A <Var> card shown beside the element it drives (see _buildVarCard): every
 // card is exactly this tall, so the arrows joining them to the element can be
@@ -290,6 +292,20 @@ template.innerHTML = `
 		.chain-viewport > * {
 			margin-left: auto;
 			margin-right: auto;
+		}
+		/* One element's card on its own — what the Stage panel puts in each
+		   element item (see setCardNode): no scroll area, arrows or margins, the
+		   card fills whatever room the item gives it. */
+		:host([card-only]) {
+			height: auto;
+		}
+		:host([card-only]) .chain-viewport {
+			height: auto;
+			overflow: visible;
+			padding: 0;
+		}
+		:host([card-only]) .chain-stack {
+			max-width: none;
 		}
 		.centered {
 			color: var(--waw-muted, #8a8a8a);
@@ -546,6 +562,36 @@ template.innerHTML = `
 		}
 		.var-card:hover {
 			border-color: #5a6068;
+		}
+		/* "Add to Stage": a small handle in a card's header — click it to put
+		   the element on the current Stage view, or drag it onto the Stage
+		   panel. (The card itself is already draggable, for reordering.) */
+		.stage-pin {
+			flex: 0 0 auto;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 16px;
+			height: 14px;
+			margin-left: 0.3rem;
+			border-radius: 3px;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: grab;
+			opacity: 0.55;
+		}
+		.stage-pin:hover {
+			opacity: 1;
+			color: var(--waw-accent, #4fa3ff);
+			background: rgba(79, 163, 255, 0.15);
+		}
+		.stage-pin svg {
+			width: 11px;
+			height: 11px;
+			pointer-events: none;
+		}
+		.stage-pin.added {
+			color: var(--waw-teal, #45b58c);
+			opacity: 1;
 		}
 		.var-card-head {
 			display: flex;
@@ -943,6 +989,47 @@ export class WaChainView extends HTMLElement {
 		this._render();
 	}
 
+	// "Card only" mode, used by the Stage panel: this instance shows just the
+	// card of ONE element — found by its XML `id` attribute, which is the
+	// durable reference (the tree's own ids change on every reparse) — and
+	// never follows the selection. Same cards, same live editing, but no
+	// chain around them (no arrows, <Var> columns, reordering or keyboard
+	// delete). Pass null to go back to following the selection.
+	setCardNode(elementId) {
+		this._cardElementId = elementId || null;
+		this.toggleAttribute("card-only", !!this._cardElementId);
+		this._render();
+	}
+
+	_findElementByAttributeId(elementId) {
+		const walk = (n) => {
+			if (n.attributes.id === elementId) return n;
+			for (const c of n.children) {
+				const f = walk(c);
+				if (f) return f;
+			}
+			return null;
+		};
+		return xmlStore.root ? walk(xmlStore.root) : null;
+	}
+
+	_renderCardOnly() {
+		this._stackEl.innerHTML = "";
+		this._activeAnalyserTicks = new Set();
+		this._activeRemoteControlTicks = new Set();
+		this._renderedChildIds = new Set(); // nothing here may be deleted from this view's own keyboard handler
+		const node = this._findElementByAttributeId(this._cardElementId);
+		const builder = node && NODE_BUILDERS[node.tagName];
+		if (!node || !builder) {
+			const hint = document.createElement("p");
+			hint.className = "centered";
+			hint.textContent = node ? `No preview for ${node.tagName} yet.` : `Missing element "${this._cardElementId}".`;
+			this._stackEl.appendChild(hint);
+			return;
+		}
+		this._stackEl.appendChild(builder(this, node));
+	}
+
 	// Commits on every drag tick (not just release), same wiring as
 	// wa-mixer-view.js's own knobs — this component's own re-render is
 	// skipped while `_isLocalEdit` is true so the card being dragged never
@@ -1013,6 +1100,10 @@ export class WaChainView extends HTMLElement {
 		}
 		this._rendering = true;
 		try {
+			if (this._cardElementId) {
+				this._renderCardOnly();
+				return;
+			}
 			const node = xmlStore.getSelectedNode();
 			const plan = this._planRender(node);
 			const resolved = plan?.resolved ?? null;
@@ -1420,6 +1511,7 @@ export class WaChainView extends HTMLElement {
 		name.className = "var-card-name";
 		name.textContent = varNode.attributes.name || varNode.attributes.id || "";
 		head.append(title, name);
+		if (!this._cardElementId) head.appendChild(this._buildStagePin(varNode));
 		card.appendChild(head);
 
 		const graph = document.createElement("div");
@@ -1546,8 +1638,40 @@ export class WaChainView extends HTMLElement {
 		idLabel.className = "node-card-id";
 		idLabel.textContent = displayLabel(node);
 		header.appendChild(idLabel);
+		if (!this._cardElementId) header.appendChild(this._buildStagePin(node));
 
 		return header;
+	}
+
+	// The "Add to Stage" handle (see .stage-pin). Dragging it carries the
+	// node's tree id as plain text — the same payload as a drag from the XML
+	// tree, so the Stage has one way of receiving both.
+	_buildStagePin(node) {
+		const pin = document.createElement("span");
+		pin.className = "stage-pin";
+		pin.draggable = true;
+		pin.title = "Add to the Stage (click, or drag it there)";
+		pin.innerHTML =
+			'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>';
+		pin.addEventListener("pointerdown", (e) => e.stopPropagation());
+		pin.addEventListener("dragstart", (e) => {
+			// Not the card's own reorder drag (its dragstart listener is on the card).
+			e.stopPropagation();
+			e.dataTransfer.effectAllowed = "move";
+			e.dataTransfer.setData("text/plain", node.id);
+		});
+		pin.addEventListener("dragend", (e) => e.stopPropagation());
+		pin.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const result = stageStore.addNode(node);
+			if (result.error) {
+				showNotice(result.error);
+				return;
+			}
+			pin.classList.add("added");
+			setTimeout(() => pin.classList.remove("added"), 900);
+		});
+		return pin;
 	}
 
 	_buildEnumSelect(node, attrName, options, defaultValue, onChange) {
@@ -2791,5 +2915,6 @@ const NODE_BUILDERS = {
 };
 
 export const SUPPORTED_CHAIN_NODE_TAGS = new Set(Object.keys(NODE_BUILDERS));
+stageStore.setElementTags(SUPPORTED_CHAIN_NODE_TAGS);
 
 customElements.define("wa-chain-view", WaChainView);

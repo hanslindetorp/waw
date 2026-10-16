@@ -209,7 +209,9 @@ export function initWorkstationState() {
 	const existing = vfs.listFolder(ROOT_ID).find((n) => n.type === "file" && n.name === STATE_FILE_NAME);
 	if (existing) {
 		stateFileId = existing.id;
-		existing.file
+		// Resolves once the state is applied (project-manager.js waits for it:
+		// rows an older version kept in this file are read from it).
+		return existing.file
 			.text()
 			.then((text) => applyState(JSON.parse(text)))
 			.catch(() => {
@@ -217,11 +219,11 @@ export function initWorkstationState() {
 				// the project itself (per the instructions doc), just keep
 				// Workstation's current default state.
 			});
-		return;
 	}
 
 	const fileNode = vfs.uploadFile(ROOT_ID, new File([JSON.stringify(captureState(), null, 2)], STATE_FILE_NAME, { type: "application/json" }));
 	stateFileId = fileNode.id;
+	return Promise.resolve();
 }
 
 xmlStore.addEventListener("change", scheduleSave);

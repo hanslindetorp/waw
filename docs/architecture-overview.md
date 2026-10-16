@@ -962,3 +962,63 @@ appen redigerar aldrig `waxml.js` själv):
   etablerade svaret på "dra i en kontroll → committa varje tick → höras
   live → utan att draget går sönder". Kopiera det mönstret för nya
   drag-baserade kontroller istället för att uppfinna nåt eget.
+
+## Stage (nytt, 2026-10-15)
+
+`<wa-panel id="stagePanel">` med `<wa-stage-view>` (`js/components/wa-stage-view.js`):
+hierarkifria sidor ("vyer") där projektets författare lägger det en användare
+ska se och spela med — rubrik, instruktion och valda objekt ur audio-grafen —
+på x/y-positioner i en fast logisk scen (960 px bred, skalas till panelen).
+Ett projekt har valfritt antal vyer (flikar överst; t.ex. en per uppgift) som
+delar projektets enda audio-graf. Tänkt att återanvändas av en separat
+viewer-sida (`view-id`-attributet låser en instans till en vy och slår av alla
+redigeringshjälpmedel) och senare av LTI-lagret.
+
+- **Data:** `stage.json` i projektets rot (`js/project/stage-store.js`,
+  singleton `stageStore`), `{ version: 2, views: [{ id, name, items }] }`.
+  Vyns `id` är slumpmässigt (hamnar i dess URL, får aldrig härledas ur namnet).
+  Filen skapas först när författaren ändrat Stage; innan dess beräknas en
+  default-vy = root-nivåns `<Command>`s och `<Var>`s. Elementen refereras med
+  sitt `id`-*attribut* (aldrig trädets interna id). Höjd lagras aldrig. Data
+  behandlas som oföränderlig (varje ändring bygger nya objekt).
+- **Undo/dirty:** Stage är projektinnehåll — ingår i undo-ögonblicksbilden
+  (`edit-history.js`, via storens `snapshot()`/`restore()` och händelsen
+  `"edit"`) och i "osparade ändringar" (till skillnad från
+  `workstation-state.json`, som är editorlayout och medvetet undantaget).
+- **Item-typer:** `heading`, `text`, `command` (knapp), `var` (ratt via
+  `wa-var-knobs` `setOnlyElementId`), `element` (kort via `wa-chain-view`
+  `setCardNode` — samma kort som Chain-previewn, men utan kedja runt).
+- **Lägga till:** dra från XML-trädet, eller från "add to Stage"-greppet i
+  rubriken på ett Preview-kort (klick = lägg på aktuell vy, dra = släpp var du
+  vill; samma `text/plain`-nyttolast som trädet). En Chain ger sina element
+  sida vid sida. `stageStore.addNode()` är den enda vägen in.
+- **Redigering:** `+ Heading`/`+ Instruction`, flytta via greppet, bredd via
+  högerkanten, dubbelklick = redigera text (flikar: byta namn, duplicera,
+  ta bort), Backspace = ta bort.
+- **INPUT på Stage:** en INPUT-rad (kameran) kan läggas på scenen via greppet
+  i raden (`input`-item: rad + Start/Stop-knapp + live-mätare). Raderna är
+  projektinnehåll och sparas i `inputs.json` (`js/project/inputs-store.js`;
+  gamla projekt migreras från `workstation-state.json`); kameraval och "körde"
+  ligger kvar i `workstation-state.json`. `js/state/input-sources.js` är
+  registret Stage/viewer hittar källan i (framtida MIDI/OSC registrerar sig
+  där med samma gränssnitt).
+- **Viewer:** `viewer.html?project=<zip>&view=<vy-id>` (`js/viewer.js`) öppnar
+  ett projekt ur `public/` och visar *en* vy i `wa-stage-view[view-id]` — inga
+  menyer/paneler, ingen vybytare, URL utan `view` visar ingenting. Hela zipen
+  laddas i webbläsaren, så "kan inte nå andra vyer" gäller sidan, inte säkerhet.
+  Ingångsmotorn (`wa-webcam-input`) monteras utom synhåll. `public/manifest.json`
+  byggs av `scripts/build-template-manifest.js` (samma skript som för
+  `templates/`); Export-dialogens flik "Public pages" listar adresserna.
+- **Bedömning:** `assessment.json` (`js/project/assessment-store.js`), en post
+  per vy-id — *egen* fil så en server kan ta bort den ur det som serveras. Ren,
+  deklarativ modell i `js/assessment/evaluate.js` (viktade kriterier: match,
+  target, range, relation, spread; skala linear/log2; full/zero-tolerans;
+  band för övergripande kommentar; `reveal` styr vad kommentarerna avslöjar).
+  Inga DOM-/app-importer → samma fil kan köras på servern. `collect.js` mäter
+  värdena i dokumentet (attribut, eller live-grafen vid default/`$var`),
+  `run.js` kör det hela. Editor: knappen "Assessment" i Stage-verktygsfältet
+  (`wa-assessment-editor.js`), "Test run" visar resultatet
+  (`wa-assessment-result.js`). Viewern visar en Done-knapp för bedömda vyer och
+  skickar `waw:done` på `document` (för LTI-lagret senare).
+- **Inte med än:** Mixer-kanalremsor, omdöpta `id`:n följs inte, LTI-lagret,
+  riktig separation mellan vyer (kräver server).

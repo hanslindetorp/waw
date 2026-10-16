@@ -5,6 +5,9 @@ import { createXmlNode } from "../xml-editor/xml-tree-ops.js";
 import { selection } from "../state/selection.js";
 import { bindCurrentFile, getCurrentFileId } from "./document-sync.js";
 import { STATE_FILE_NAME, initWorkstationState, flushWorkstationState } from "./workstation-state.js";
+import { stageStore } from "./stage-store.js";
+import { assessmentStore } from "./assessment-store.js";
+import { initInputs, flushInputs } from "./inputs-store.js";
 import { resetEditHistory } from "./edit-history.js";
 import { listTemplates, fetchTemplateZip } from "./template-loader.js";
 
@@ -48,6 +51,13 @@ function projectSignature() {
 	return `${parts.sort().join("|")}\n${xmlStore.root ? xmlStore.codeValue : ""}`;
 }
 
+// What every way of getting a project in place ends with: the editor layout
+// saved with it and the Stage (stage.json) are read from the VFS.
+async function initProjectState() {
+	await Promise.all([initWorkstationState(), stageStore.init(), assessmentStore.init()]);
+	await initInputs();
+}
+
 export function markProjectSaved() {
 	savedSignature = projectSignature();
 }
@@ -70,7 +80,7 @@ export function createDefaultProject() {
 	const fileNode = vfs.uploadFile(ROOT_ID, new File([xmlStore.codeValue], PROJECT_FILE_NAME, { type: "application/xml" }));
 	bindCurrentFile(fileNode.id, xmlStore.codeValue);
 	selection.select(fileNode.id);
-	initWorkstationState();
+	initProjectState();
 	resetEditHistory();
 	savedFileHandle = null;
 	markProjectSaved();
@@ -118,7 +128,7 @@ export async function openProjectFromFile(file, handle = null) {
 	xmlStore.setCodeValue(text);
 	bindCurrentFile(fileNode.id, text);
 	selection.select(fileNode.id);
-	initWorkstationState();
+	await initProjectState(); // the Stage is read before the undo baseline is taken
 	resetEditHistory();
 	markProjectSaved();
 }
@@ -151,7 +161,7 @@ async function finishProjectLoad() {
 	}
 	// After the document (if any) is loaded, so a saved selectedElementId can
 	// actually resolve against the real tree.
-	initWorkstationState();
+	await initProjectState(); // the Stage is read before the undo baseline is taken
 	resetEditHistory();
 	markProjectSaved();
 }
@@ -268,6 +278,9 @@ async function buildProjectZipBlob() {
 	// panel/selection state rather than whatever was true up to its own save
 	// debounce ago (same reasoning as document-sync.js's flushPendingSync).
 	flushWorkstationState();
+	stageStore.flush();
+	assessmentStore.flush();
+	flushInputs();
 
 	const zip = new JSZip();
 	const addFolder = (folderId, zipFolder) => {

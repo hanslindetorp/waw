@@ -110,6 +110,11 @@ template.innerHTML = `
 			align-items: center;
 			gap: 0.3rem;
 		}
+		/* Set by the Stage when it is a read-only page (the viewer): mapping a
+		   Var to a parameter is authoring, not something a user of the page does. */
+		:host([hide-map]) .map-btn {
+			display: none;
+		}
 		.map-btn {
 			flex: 0 0 auto;
 			background: none;
@@ -355,6 +360,26 @@ export class WaVarKnobs extends HTMLElement {
 		this._render();
 	}
 
+	// Shows just ONE <Var> — found by its XML `id` attribute, wherever it sits
+	// in the document — instead of a scope's whole list. Used by the Stage
+	// panel, where every Var is its own item. null goes back to the scope.
+	setOnlyElementId(elementId) {
+		this._onlyElementId = elementId || null;
+		this._render();
+	}
+
+	_findVarByElementId(elementId) {
+		const walk = (n) => {
+			if (n.tagName === "Var" && n.attributes.id === elementId) return n;
+			for (const c of n.children) {
+				const f = walk(c);
+				if (f) return f;
+			}
+			return null;
+		};
+		return xmlStore.root ? walk(xmlStore.root) : null;
+	}
+
 	_getScopeNode() {
 		if (!xmlStore.root) return null;
 		if (!this._scopeNodeId) return xmlStore.root;
@@ -480,8 +505,14 @@ export class WaVarKnobs extends HTMLElement {
 		// so the shared loop (see _ensureLiveLoop) never calls into a knob
 		// that's no longer in the DOM. Re-populated by _buildKnob as it runs.
 		this._activeRemoteControlTicks = new Set();
-		const scopeNode = this._getScopeNode();
-		const varNodes = scopeNode ? scopeNode.children.filter((c) => c.tagName === "Var") : [];
+		let varNodes;
+		if (this._onlyElementId) {
+			const only = this._findVarByElementId(this._onlyElementId);
+			varNodes = only ? [only] : [];
+		} else {
+			const scopeNode = this._getScopeNode();
+			varNodes = scopeNode ? scopeNode.children.filter((c) => c.tagName === "Var") : [];
+		}
 		this.hidden = varNodes.length === 0;
 
 		const liveIds = new Set(varNodes.map((n) => n.id));

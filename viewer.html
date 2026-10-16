@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Web Audio Workstation</title>
+	<link rel="stylesheet" href="css/main.css" />
+	<style>
+		body {
+			margin: 0;
+			background: var(--waw-bg, #121212);
+			color: var(--waw-fg, #e8e8e8);
+			font: 0.9rem/1.4 system-ui, sans-serif;
+		}
+		body {
+			display: flex;
+			flex-direction: column;
+			height: 100vh;
+		}
+		wa-stage-view {
+			flex: 1 1 auto;
+			min-height: 0;
+			height: auto;
+		}
+		/* Shown only for a view that is assessed. */
+		.done-bar {
+			flex: 0 0 auto;
+			display: flex;
+			justify-content: flex-end;
+			padding: 0.6rem 1rem;
+			border-top: 1px solid var(--waw-border, #2f2f2f);
+			background: var(--waw-panel-bg, #1a1a1a);
+		}
+		.done-bar[hidden] {
+			display: none;
+		}
+		.done-bar button {
+			font: inherit;
+			font-weight: 600;
+			background: var(--waw-accent, #4fa3ff);
+			color: #06121f;
+			border: none;
+			border-radius: 6px;
+			padding: 0.45rem 1.6rem;
+			cursor: pointer;
+		}
+		.done-bar button:hover {
+			filter: brightness(1.1);
+		}
+		/* The input engine (the camera) has to exist for the Stage's input
+		   items to work, but its own panel is never shown. Off-screen, not
+		   display:none, so the video keeps decoding. */
+		wa-webcam-input {
+			position: fixed;
+			left: -10000px;
+			top: 0;
+			width: 320px;
+			height: 240px;
+		}
+		.viewer-message {
+			margin: 3rem auto;
+			max-width: 32rem;
+			padding: 0 1rem;
+			text-align: center;
+			color: var(--waw-muted, #8a8a8a);
+		}
+	</style>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+	<!-- data-source is a throwaway placeholder just to satisfy waxml.js's
+	     load-gated init — see index.html. -->
+	<script src="waxml.js" data-source="data:text/xml,%3Cwaxml%20version%3D%221.0%22%3E%3C%2Fwaxml%3E" defer></script>
+</head>
+<body>
+	<!-- The viewer: one Stage view of a published project and nothing else — no
+	     menus, no way to open other panels or views. Opened as
+	     viewer.html?project=<zip, relative to this page>&view=<view id>
+	     (see js/viewer.js). -->
+	<wa-stage-view></wa-stage-view>
+	<wa-webcam-input></wa-webcam-input>
+	<div class="done-bar" hidden><button type="button" class="done-btn">Done</button></div>
+	<script type="module" src="js/viewer.js"></script>
+</body>
+</html>

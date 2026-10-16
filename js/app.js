@@ -6,6 +6,7 @@ import "./components/wa-bottom-bar.js";
 import "./components/wa-input-panel.js";
 import "./components/wa-file-manager.js";
 import "./components/wa-preview.js";
+import "./components/wa-stage-view.js";
 import "./components/wa-xml-editor.js";
 import "./components/wa-xml-code.js";
 import "./components/wa-library-view.js";
