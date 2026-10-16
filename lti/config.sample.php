@@ -11,15 +11,16 @@ return [
     ],
 
     // Where this folder is served from (no trailing slash).
-    'base_url' => 'https://waxml.org/lti',
+    'base_url' => 'https://waxml.org/waw/lti',
 
     // The page a student is sent to after a launch (the viewer), and the
-    // folder beside it that holds the project zips.
-    'viewer_url' => 'https://workstation.waxml.org/viewer.html',
+    // folder beside it that holds the project zips (here: waxml.org/waw/public/NAME.zip).
+    'viewer_url' => 'https://waxml.org/waw/viewer.html',
     'project_dir' => 'public',
 
-    // Pages that may call done.php from the browser.
-    'allowed_origins' => ['https://workstation.waxml.org', 'https://hanslindetorp.github.io'],
+    // Pages that may call done.php from the browser (just the address up to the first
+    // single slash — with the viewer on waxml.org that is the same site as this tool).
+    'allowed_origins' => ['https://waxml.org'],
 
     // Two long random strings (e.g. from https://www.random.org/strings/ or `openssl rand -hex 32`).
     // token_secret signs the short tokens given to the viewer; admin_key opens admin.php.

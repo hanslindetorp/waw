@@ -26,7 +26,7 @@ const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
 // the gradebook. The server's address comes in the page's own address, so only
 // these servers are accepted (a made-up address must not be able to collect
 // what the page sends).
-const LTI_API_PREFIXES = ["https://waxml.org/lti/"];
+const LTI_API_PREFIXES = ["https://waxml.org/waw/lti/"];
 
 const stageEl = document.querySelector("wa-stage-view");
 const doneBar = document.querySelector(".done-bar");
@@ -102,9 +102,10 @@ function showToolNote(text) {
 function ltiLaunch(params) {
 	const token = params.get("lti");
 	const api = params.get("api");
+	if (!token || !api) return null;
 	// (A viewer opened from localhost, while developing, may also use a tool server on localhost.)
 	const local = location.hostname === "localhost" && api.startsWith("http://localhost");
-	if (!token || !api || !(local || LTI_API_PREFIXES.some((prefix) => api.startsWith(prefix)))) return null;
+	if (!local && !LTI_API_PREFIXES.some((prefix) => api.startsWith(prefix))) return null;
 	return { token, api };
 }
 

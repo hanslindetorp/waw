@@ -43,7 +43,7 @@ Vad som ligger var:
    upp: `login.php`, `launch.php`, `jwks.php`, `done.php`, `admin.php`, `config.php` och mappen
    `lib/` (med dess dolda fil `.htaccess` – slå på "visa dolda filer" i FileZilla under *Server*-menyn
    om den inte syns). `tests/` och `config.sample.php` behövs inte.
-4. **Öppna kontrollsidan:** `https://waxml.org/lti/admin.php?key=DIN_ADMIN_KEY`. Första gången
+4. **Öppna kontrollsidan:** `https://waxml.org/waw/lti/admin.php?key=DIN_ADMIN_KEY`. Första gången
    skapas tabellerna och verktygets nyckel. Spara adressen till kontrollsidan privat.
 5. **Canvas.** (Kräver att någon har rätt att skapa en *Developer Key*.)
    - Admin → Developer Keys → + Developer Key → + LTI Key → *Method: Paste JSON*, klistra in
@@ -60,8 +60,24 @@ Vad som ligger var:
    `node scripts/build-template-manifest.js`, committa och släpp (så att sidan som viewern ligger på
    har både `viewer.html` och zippen).
 8. **Länken till uppgiften** (det läraren skriver i Canvas) är
-   `https://waxml.org/lti/launch.php?project=NAMN&view=VY-ID`. VY-ID syns i adressen på
+   `https://waxml.org/waw/lti/launch.php?project=NAMN&view=VY-ID`. VY-ID syns i adressen på
    fliken *Public pages*.
+
+## Viewern: var ligger den?
+
+Eleven skickas till `viewer_url` i `config.php`, och zippen hämtas från `public/` bredvid den.
+Två sätt:
+
+- **En kopia på waxml.org** (rekommenderas för provning): ladda upp `viewer.html`, `waxml.js`,
+  mapparna `css/`, `js/` och `schemas/` samt `public/` (med uppgifternas zip-filer) till
+  `waxml.org/waw/`. Då är viewern och verktyget på samma sida, och studenternas sida på GitHub
+  berörs inte. Kopian måste uppdateras för hand när viewerns kod ändras.
+- **GitHub Pages:** sätt `viewer_url` till viewerns adress där, och lägg dess adress i
+  `allowed_origins`. Kräver att `viewer.html` och zippen finns i den gren som Pages visar
+  (`release`).
+
+Adressen till verktyget är `base_url` (här `https://waxml.org/waw/lti`); den står också i
+`js/viewer.js` (`LTI_API_PREFIXES`) och måste vara densamma.
 
 ## Bra att veta
 
