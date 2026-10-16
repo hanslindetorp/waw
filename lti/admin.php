@@ -38,12 +38,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     throw new RuntimeException("\"$f\" must be an https address.");
                 }
             }
-            $pdo->prepare('DELETE FROM lti_platforms WHERE issuer = ? AND client_id = ?')->execute([$fields['issuer'], $fields['client_id']]);
-            $pdo->prepare('INSERT INTO lti_platforms (name, issuer, client_id, deployment_id, auth_url, token_url, jwks_url) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            $pdo->prepare('DELETE FROM waw_lti_platforms WHERE issuer = ? AND client_id = ?')->execute([$fields['issuer'], $fields['client_id']]);
+            $pdo->prepare('INSERT INTO waw_lti_platforms (name, issuer, client_id, deployment_id, auth_url, token_url, jwks_url) VALUES (?, ?, ?, ?, ?, ?, ?)')
                 ->execute([$fields['name'], $fields['issuer'], $fields['client_id'], $fields['deployment_id'] ?: null, $fields['auth_url'], $fields['token_url'], $fields['jwks_url']]);
             $notice = 'Platform saved.';
         } elseif ($action === 'delete_platform') {
-            $pdo->prepare('DELETE FROM lti_platforms WHERE id = ?')->execute([(int) ($_POST['id'] ?? 0)]);
+            $pdo->prepare('DELETE FROM waw_lti_platforms WHERE id = ?')->execute([(int) ($_POST['id'] ?? 0)]);
             $notice = 'Platform removed.';
         } elseif ($action === 'save_assessments') {
             $project = trim((string) ($_POST['project'] ?? ''));
@@ -59,14 +59,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (!preg_match('/^[A-Za-z0-9._-]{1,120}$/', (string) $viewId) || !is_array($assessment)) {
                     continue;
                 }
-                $pdo->prepare('DELETE FROM lti_assessments WHERE project = ? AND view_id = ?')->execute([$project, (string) $viewId]);
-                $pdo->prepare('INSERT INTO lti_assessments (project, view_id, body, updated) VALUES (?, ?, ?, ?)')
+                $pdo->prepare('DELETE FROM waw_lti_assessments WHERE project = ? AND view_id = ?')->execute([$project, (string) $viewId]);
+                $pdo->prepare('INSERT INTO waw_lti_assessments (project, view_id, body, updated) VALUES (?, ?, ?, ?)')
                     ->execute([$project, (string) $viewId, json_encode($assessment, JSON_UNESCAPED_UNICODE), time()]);
                 $count++;
             }
             $notice = "Saved $count view(s) for $project.";
         } elseif ($action === 'delete_assessment') {
-            $pdo->prepare('DELETE FROM lti_assessments WHERE project = ? AND view_id = ?')->execute([(string) ($_POST['project'] ?? ''), (string) ($_POST['view_id'] ?? '')]);
+            $pdo->prepare('DELETE FROM waw_lti_assessments WHERE project = ? AND view_id = ?')->execute([(string) ($_POST['project'] ?? ''), (string) ($_POST['view_id'] ?? '')]);
             $notice = 'Assessment removed.';
         }
     } catch (Throwable $e) {
@@ -74,9 +74,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     }
 }
 
-$platforms = $pdo->query('SELECT * FROM lti_platforms ORDER BY id')->fetchAll();
-$assessments = $pdo->query('SELECT project, view_id, updated FROM lti_assessments ORDER BY project, view_id')->fetchAll();
-$submissions = $pdo->query('SELECT project, view_id, user_sub, score, max_score, passed, ags_status, created FROM lti_submissions ORDER BY id DESC LIMIT 30')->fetchAll();
+$platforms = $pdo->query('SELECT * FROM waw_lti_platforms ORDER BY id')->fetchAll();
+$assessments = $pdo->query('SELECT project, view_id, updated FROM waw_lti_assessments ORDER BY project, view_id')->fetchAll();
+$submissions = $pdo->query('SELECT project, view_id, user_sub, score, max_score, passed, ags_status, created FROM waw_lti_submissions ORDER BY id DESC LIMIT 30')->fetchAll();
 
 $canvas = [
     'title' => 'WAW — Web Audio Workstation',

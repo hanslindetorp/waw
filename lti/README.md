@@ -40,7 +40,7 @@ Vad som ligger var:
    - `allowed_origins` – adressen (utan sökväg) till sidan där `viewer.html` ligger.
    - `viewer_url` – hela adressen till `viewer.html`.
 3. **Ladda upp.** Skapa mappen `lti` i den publika mappen (`httpd.www`) på servern och ladda
-   upp: `login.php`, `launch.php`, `jwks.php`, `done.php`, `admin.php`, `config.php` och mappen
+   upp: `.htaccess`, `login.php`, `launch.php`, `jwks.php`, `done.php`, `admin.php`, `config.php` och mappen
    `lib/` (med dess dolda fil `.htaccess` – slå på "visa dolda filer" i FileZilla under *Server*-menyn
    om den inte syns). `tests/` och `config.sample.php` behövs inte.
 4. **Öppna kontrollsidan:** `https://waxml.org/waw/lti/admin.php?key=DIN_ADMIN_KEY`. Första gången
@@ -63,14 +63,23 @@ Vad som ligger var:
    `https://waxml.org/waw/lti/launch.php?project=NAMN&view=VY-ID`. VY-ID syns i adressen på
    fliken *Public pages*.
 
+## Config.php: hemligt men på servern
+
+`config.php` innehåller databaslösenordet och två hemliga nycklar, och den *måste* ligga på
+servern. "Privat" betyder att den inte får hamna någon annanstans: inte i GitHub (den är
+undantagen i `.gitignore`), inte i ett mejl eller i en chatt, och inte i en kopia du delar med
+någon. `.htaccess` i `lti/` gör dessutom att webbservern vägrar visa filen om någon försöker öppna
+den.
+
 ## Viewern: var ligger den?
 
 Eleven skickas till `viewer_url` i `config.php`, och zippen hämtas från `public/` bredvid den.
 Två sätt:
 
 - **En kopia på waxml.org** (rekommenderas för provning): ladda upp `viewer.html`, `waxml.js`,
-  mapparna `css/`, `js/` och `schemas/` samt `public/` (med uppgifternas zip-filer) till
-  `waxml.org/waw/`. Då är viewern och verktyget på samma sida, och studenternas sida på GitHub
+  mapparna `css/`, `js/` (hela, inte bara `viewer.js`: viewern använder nästan alla filer där) och
+  `schemas/` samt `public/` (med uppgifternas zip-filer) till `waxml.org/waw/`. Editorn
+  (`index.html`) och mapparna `templates/`, `docs/`, `scripts/` behövs inte. Då är viewern och verktyget på samma sida, och studenternas sida på GitHub
   berörs inte. Kopian måste uppdateras för hand när viewerns kod ändras.
 - **GitHub Pages:** sätt `viewer_url` till viewerns adress där, och lägg dess adress i
   `allowed_origins`. Kräver att `viewer.html` och zippen finns i den gren som Pages visar

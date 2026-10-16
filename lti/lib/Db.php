@@ -1,4 +1,8 @@
 <?php
+// The tables are all called waw_lti_*, so the tool can share a database with
+// something else (waxml.org's WordPress): it creates only its own tables, with
+// IF NOT EXISTS, and never touches any other.
+//
 // The database: one PDO connection and the tables, made the same way on MySQL
 // (waxml.org) and SQLite (the local tests). Times are Unix seconds in plain
 // integer columns so nothing depends on the database's own date types.
@@ -25,7 +29,7 @@ final class Db
         $tail = $mysql ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' : '';
         $tables = [
             // The LMS installations (Canvas accounts) that may launch the tool.
-            "CREATE TABLE IF NOT EXISTS lti_platforms (
+            "CREATE TABLE IF NOT EXISTS waw_lti_platforms (
                 id $id,
                 name VARCHAR(190) NOT NULL,
                 issuer VARCHAR(190) NOT NULL,
@@ -37,14 +41,14 @@ final class Db
                 UNIQUE (issuer, client_id)
             )$tail",
             // A login that has started and waits for its launch (single use).
-            "CREATE TABLE IF NOT EXISTS lti_states (
+            "CREATE TABLE IF NOT EXISTS waw_lti_states (
                 state VARCHAR(64) NOT NULL PRIMARY KEY,
                 nonce VARCHAR(64) NOT NULL,
                 platform_id INT NOT NULL,
                 target_link_uri TEXT NULL,
                 created INT NOT NULL
             )$tail",
-            "CREATE TABLE IF NOT EXISTS lti_launches (
+            "CREATE TABLE IF NOT EXISTS waw_lti_launches (
                 id $id,
                 platform_id INT NOT NULL,
                 user_sub VARCHAR(190) NOT NULL,
@@ -58,14 +62,14 @@ final class Db
                 created INT NOT NULL
             )$tail",
             // How each view of each project is assessed (what assessment.json holds).
-            "CREATE TABLE IF NOT EXISTS lti_assessments (
+            "CREATE TABLE IF NOT EXISTS waw_lti_assessments (
                 project VARCHAR(190) NOT NULL,
                 view_id VARCHAR(190) NOT NULL,
                 body TEXT NOT NULL,
                 updated INT NOT NULL,
                 PRIMARY KEY (project, view_id)
             )$tail",
-            "CREATE TABLE IF NOT EXISTS lti_submissions (
+            "CREATE TABLE IF NOT EXISTS waw_lti_submissions (
                 id $id,
                 launch_id INT NOT NULL,
                 user_sub VARCHAR(190) NOT NULL,
@@ -80,13 +84,13 @@ final class Db
                 created INT NOT NULL
             )$tail",
             // This tool's own signing key (the public half is served by jwks.php).
-            "CREATE TABLE IF NOT EXISTS lti_keys (
+            "CREATE TABLE IF NOT EXISTS waw_lti_keys (
                 kid VARCHAR(64) NOT NULL PRIMARY KEY,
                 private_pem TEXT NOT NULL,
                 jwk TEXT NOT NULL,
                 created INT NOT NULL
             )$tail",
-            "CREATE TABLE IF NOT EXISTS lti_jwks_cache (
+            "CREATE TABLE IF NOT EXISTS waw_lti_jwks_cache (
                 platform_id INT NOT NULL PRIMARY KEY,
                 body TEXT NOT NULL,
                 fetched INT NOT NULL
@@ -100,7 +104,7 @@ final class Db
     /** The tool's signing key, made on first use: [kid, private PEM, public JWK]. */
     public static function toolKey(\PDO $pdo): array
     {
-        $row = $pdo->query('SELECT kid, private_pem, jwk FROM lti_keys ORDER BY created DESC LIMIT 1')->fetch();
+        $row = $pdo->query('SELECT kid, private_pem, jwk FROM waw_lti_keys ORDER BY created DESC LIMIT 1')->fetch();
         if ($row) {
             return [$row['kid'], $row['private_pem'], json_decode($row['jwk'], true)];
         }
@@ -111,7 +115,7 @@ final class Db
         $details = openssl_pkey_get_details($res);
         $kid = substr(hash('sha256', $details['rsa']['n']), 0, 16);
         $jwk = Jwt::publicJwk($pem, $kid);
-        $stmt = $pdo->prepare('INSERT INTO lti_keys (kid, private_pem, jwk, created) VALUES (?, ?, ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO waw_lti_keys (kid, private_pem, jwk, created) VALUES (?, ?, ?, ?)');
         $stmt->execute([$kid, $pem, json_encode($jwk), time()]);
         return [$kid, $pem, $jwk];
     }

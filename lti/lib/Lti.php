@@ -42,10 +42,10 @@ final class Lti
     public function platformFor(string $issuer, ?string $clientId): ?array
     {
         if ($clientId !== null && $clientId !== '') {
-            $stmt = $this->pdo->prepare('SELECT * FROM lti_platforms WHERE issuer = ? AND client_id = ?');
+            $stmt = $this->pdo->prepare('SELECT * FROM waw_lti_platforms WHERE issuer = ? AND client_id = ?');
             $stmt->execute([$issuer, $clientId]);
         } else {
-            $stmt = $this->pdo->prepare('SELECT * FROM lti_platforms WHERE issuer = ? LIMIT 1');
+            $stmt = $this->pdo->prepare('SELECT * FROM waw_lti_platforms WHERE issuer = ? LIMIT 1');
             $stmt->execute([$issuer]);
         }
         $row = $stmt->fetch();
@@ -67,7 +67,7 @@ final class Lti
         $this->purgeStates();
         $state = bin2hex(random_bytes(24));
         $nonce = bin2hex(random_bytes(24));
-        $stmt = $this->pdo->prepare('INSERT INTO lti_states (state, nonce, platform_id, target_link_uri, created) VALUES (?, ?, ?, ?, ?)');
+        $stmt = $this->pdo->prepare('INSERT INTO waw_lti_states (state, nonce, platform_id, target_link_uri, created) VALUES (?, ?, ?, ?, ?)');
         $stmt->execute([$state, $nonce, $platform['id'], (string) ($params['target_link_uri'] ?? ''), time()]);
         $query = [
             'scope' => 'openid',
@@ -94,7 +94,7 @@ final class Lti
 
     private function purgeStates(): void
     {
-        $stmt = $this->pdo->prepare('DELETE FROM lti_states WHERE created < ?');
+        $stmt = $this->pdo->prepare('DELETE FROM waw_lti_states WHERE created < ?');
         $stmt->execute([time() - self::STATE_TTL]);
     }
 
@@ -105,15 +105,15 @@ final class Lti
         if ($idToken === '' || $state === '') {
             throw new LtiException('The launch is incomplete.');
         }
-        $stmt = $this->pdo->prepare('SELECT * FROM lti_states WHERE state = ?');
+        $stmt = $this->pdo->prepare('SELECT * FROM waw_lti_states WHERE state = ?');
         $stmt->execute([$state]);
         $login = $stmt->fetch();
         // Single use: gone whatever happens next.
-        $this->pdo->prepare('DELETE FROM lti_states WHERE state = ?')->execute([$state]);
+        $this->pdo->prepare('DELETE FROM waw_lti_states WHERE state = ?')->execute([$state]);
         if (!$login || $login['created'] < time() - self::STATE_TTL) {
             throw new LtiException('This launch has expired or was already used. Open it again from the course.');
         }
-        $stmt = $this->pdo->prepare('SELECT * FROM lti_platforms WHERE id = ?');
+        $stmt = $this->pdo->prepare('SELECT * FROM waw_lti_platforms WHERE id = ?');
         $stmt->execute([$login['platform_id']]);
         $platform = $stmt->fetch();
         if (!$platform) {
@@ -126,7 +126,7 @@ final class Lti
         [$project, $view] = $this->projectAndView($claims, (string) $login['target_link_uri']);
         $ags = $claims[self::AGS] ?? [];
         $stmt = $this->pdo->prepare(
-            'INSERT INTO lti_launches (platform_id, user_sub, context_id, resource_link_id, lineitem, scopes, roles, project, view_id, created)
+            'INSERT INTO waw_lti_launches (platform_id, user_sub, context_id, resource_link_id, lineitem, scopes, roles, project, view_id, created)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
@@ -229,7 +229,7 @@ final class Lti
     // ── The platform's keys ──────────────────────────────────────────────
     public function jwks(array $platform, bool $force): array
     {
-        $stmt = $this->pdo->prepare('SELECT body, fetched FROM lti_jwks_cache WHERE platform_id = ?');
+        $stmt = $this->pdo->prepare('SELECT body, fetched FROM waw_lti_jwks_cache WHERE platform_id = ?');
         $stmt->execute([$platform['id']]);
         $cached = $stmt->fetch();
         if ($cached && !$force && $cached['fetched'] > time() - self::JWKS_TTL) {
@@ -246,8 +246,8 @@ final class Lti
             }
             throw new LtiException("The platform's public keys could not be fetched.");
         }
-        $this->pdo->prepare('DELETE FROM lti_jwks_cache WHERE platform_id = ?')->execute([$platform['id']]);
-        $this->pdo->prepare('INSERT INTO lti_jwks_cache (platform_id, body, fetched) VALUES (?, ?, ?)')->execute([$platform['id'], $response['body'], time()]);
+        $this->pdo->prepare('DELETE FROM waw_lti_jwks_cache WHERE platform_id = ?')->execute([$platform['id']]);
+        $this->pdo->prepare('INSERT INTO waw_lti_jwks_cache (platform_id, body, fetched) VALUES (?, ?, ?)')->execute([$platform['id'], $response['body'], time()]);
         return $keys;
     }
 
@@ -268,13 +268,13 @@ final class Lti
         if (!$payload) {
             throw new LtiException('This session has expired. Open the task again from the course.');
         }
-        $stmt = $this->pdo->prepare('SELECT * FROM lti_launches WHERE id = ?');
+        $stmt = $this->pdo->prepare('SELECT * FROM waw_lti_launches WHERE id = ?');
         $stmt->execute([(int) $payload['lid']]);
         $launch = $stmt->fetch();
         if (!$launch) {
             throw new LtiException('This session is not known.');
         }
-        $stmt = $this->pdo->prepare('SELECT body FROM lti_assessments WHERE project = ? AND view_id = ?');
+        $stmt = $this->pdo->prepare('SELECT body FROM waw_lti_assessments WHERE project = ? AND view_id = ?');
         $stmt->execute([$launch['project'], $launch['view_id']]);
         $row = $stmt->fetch();
         $assessment = $row ? json_decode($row['body'], true) : null;
@@ -313,7 +313,7 @@ final class Lti
         $result['hasPass'] = is_int($assessment['pass'] ?? null) || is_float($assessment['pass'] ?? null); // for the page: does a pass level exist?
         $ags = $this->sendScore($launch, $result);
         $stmt = $this->pdo->prepare(
-            'INSERT INTO lti_submissions (launch_id, user_sub, project, view_id, values_json, score, max_score, passed, feedback, ags_status, created)
+            'INSERT INTO waw_lti_submissions (launch_id, user_sub, project, view_id, values_json, score, max_score, passed, feedback, ags_status, created)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
@@ -330,7 +330,7 @@ final class Lti
         if (empty($launch['lineitem']) || !in_array(self::SCOPE_SCORE, $scopes, true)) {
             return ['sent' => false, 'status' => 'not sent: this launch has no gradebook entry'];
         }
-        $stmt = $this->pdo->prepare('SELECT * FROM lti_platforms WHERE id = ?');
+        $stmt = $this->pdo->prepare('SELECT * FROM waw_lti_platforms WHERE id = ?');
         $stmt->execute([$launch['platform_id']]);
         $platform = $stmt->fetch();
         if (!$platform) {

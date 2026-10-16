@@ -1,0 +1,6 @@
+# The settings file (it holds the database password) and the notes are never served,
+# even if PHP stopped running files in this folder. The tool itself reads
+# config.php from disk, which this does not affect.
+<FilesMatch "^(config\.php|config\.sample\.php|README\.md)$">
+    Require all denied
+</FilesMatch>

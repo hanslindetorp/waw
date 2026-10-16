@@ -26,7 +26,7 @@ openssl_pkey_export($strangerKey, $strangerPem);
 
 $ISS = 'https://canvas.example';
 $CLIENT = '10000000000001';
-$pdo->prepare('INSERT INTO lti_platforms (name, issuer, client_id, deployment_id, auth_url, token_url, jwks_url) VALUES (?, ?, ?, ?, ?, ?, ?)')
+$pdo->prepare('INSERT INTO waw_lti_platforms (name, issuer, client_id, deployment_id, auth_url, token_url, jwks_url) VALUES (?, ?, ?, ?, ?, ?, ?)')
     ->execute(['Test', $ISS, $CLIENT, 'dep-1', 'https://canvas.example/auth', 'https://canvas.example/token', 'https://canvas.example/jwks']);
 
 $requests = [];
@@ -98,7 +98,7 @@ check('lti login: goes to the platform with the right parameters',
 $idToken = Jwt::signRs256(launchClaims($q['nonce']), $platformPem, 'p1');
 $launch = $lti->completeLaunch($idToken, $q['state']);
 check('lti launch: accepted, project and view read from the link', $launch['project'] === 'filter-task' && $launch['view'] === 'vabc123' && $launch['launch_id'] > 0);
-$row = $pdo->query('SELECT * FROM lti_launches')->fetch();
+$row = $pdo->query('SELECT * FROM waw_lti_launches')->fetch();
 check('lti launch: recorded with user, gradebook entry and scopes', $row['user_sub'] === 'user-77' && str_contains($row['lineitem'], 'line_items/5') && in_array('https://purl.imsglobal.org/spec/lti-ags/scope/score', json_decode($row['scopes'], true), true));
 check('lti launch: the state is single use', throws(fn() => $lti->completeLaunch($idToken, $q['state'])) !== null);
 check('lti launch: the platform keys were fetched once', $jwksFetches === 1);
@@ -128,7 +128,7 @@ $refused('a project name with path characters', fn($n) => $sign(launchClaims($n,
 [, $q2] = begin($lti);
 check('lti launch refused: a state that never existed', throws(fn() => $lti->completeLaunch($sign(launchClaims($q2['nonce'])), 'nonexistent')) !== null);
 [, $q3] = begin($lti);
-$pdo->exec('UPDATE lti_states SET created = ' . (time() - 3600));
+$pdo->exec('UPDATE waw_lti_states SET created = ' . (time() - 3600));
 check('lti launch refused: an old login', throws(fn() => $lti->completeLaunch($sign(launchClaims($q3['nonce'])), $q3['state'])) !== null);
 
 // custom parameters win over the link's address
@@ -153,7 +153,7 @@ $assessment = [
     ],
 ];
 check('lti done: no assessment on the server is refused', throws(fn() => $lti->submit($token, [])) !== null);
-$pdo->prepare('INSERT INTO lti_assessments (project, view_id, body, updated) VALUES (?, ?, ?, ?)')->execute(['filter-task', 'vabc123', json_encode($assessment), time()]);
+$pdo->prepare('INSERT INTO waw_lti_assessments (project, view_id, body, updated) VALUES (?, ?, ?, ?)')->execute(['filter-task', 'vabc123', json_encode($assessment), time()]);
 $reads = $lti->reads($token);
 check('lti reads: only what the criteria measure', count($reads) === 2 && $reads[0]['ref'] === 'B' && !array_key_exists('full', $reads[0]));
 check('lti done: a bad token is refused', throws(fn() => $lti->submit('x.y', [])) !== null);
@@ -182,7 +182,7 @@ check('lti ags: the score has user, points, comment and progress',
     && str_contains($scoreBody['comment'] ?? '', 'Excellent.') && preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00$/', $scoreBody['timestamp'] ?? '') === 1);
 check('lti ags: the request is authorised and typed',
     in_array('Authorization: Bearer access-123', $score_req['headers'] ?? [], true) && in_array('Content-Type: application/vnd.ims.lis.v1.score+json', $score_req['headers'] ?? [], true));
-$sub = $pdo->query('SELECT * FROM lti_submissions ORDER BY id DESC LIMIT 1')->fetch();
+$sub = $pdo->query('SELECT * FROM waw_lti_submissions ORDER BY id DESC LIMIT 1')->fetch();
 check('lti done: stored with only the values asked for', $sub['score'] == 10 && $sub['passed'] == 1 && json_decode($sub['values_json'], true) === ['B.frequency.number' => 410, 'A.frequency.number' => 400] && $sub['ags_status'] === 'sent');
 
 $out = $lti->submit($token, ['B.frequency.number' => 100, 'A.frequency.number' => 400]);
