@@ -5,6 +5,7 @@ import { parseXsdSchema } from "./xml-editor/schema-parser.js";
 import { openProjectFromFile } from "./project/project-manager.js";
 import { assessmentStore } from "./project/assessment-store.js";
 import { runAssessment } from "./assessment/run.js";
+import { collectValues } from "./assessment/collect.js";
 import { showAssessmentResult } from "./components/wa-assessment-result.js";
 
 // The viewer page (viewer.html): opens one published project (a zip) and
@@ -18,6 +19,14 @@ import { showAssessmentResult } from "./components/wa-assessment-result.js";
 // that takes a server that only sends the requested view (see the LTI plan).
 
 const DEFAULT_SCHEMA_PATH = "schemas/waxml.xsd";
+
+// When the page is opened by a learning platform (LTI), Done does not judge
+// anything itself: it asks the tool's server what to measure, measures it, and
+// sends the values back — the server works out the score and passes it on to
+// the gradebook. The server's address comes in the page's own address, so only
+// these servers are accepted (a made-up address must not be able to collect
+// what the page sends).
+const LTI_API_PREFIXES = ["https://waxml.org/lti/"];
 
 const stageEl = document.querySelector("wa-stage-view");
 const doneBar = document.querySelector(".done-bar");
@@ -41,7 +50,27 @@ async function loadSchema() {
 // evaluates it and shows the outcome. The outcome is also announced on the
 // document ("waw:done") for whatever hosts the page (the LTI layer, later) —
 // the page itself sends nothing anywhere.
-function setUpDone(viewId) {
+function setUpDone(viewId, lti) {
+	if (lti) {
+		doneBar.hidden = false;
+		const button = doneBar.querySelector(".done-btn");
+		button.addEventListener("click", async () => {
+			button.disabled = true;
+			try {
+				const reads = (await postToTool(lti, { token: lti.token, action: "reads" })).reads;
+				const outcome = await postToTool(lti, { token: lti.token, values: collectValues(reads) });
+				showAssessmentResult(outcome.result, { pass: outcome.result.hasPass ? 0 : undefined });
+				if (outcome.ags && !outcome.ags.sent) showToolNote(`Your result was not sent to the gradebook (${outcome.ags.status}).`);
+				document.dispatchEvent(new CustomEvent("waw:done", { detail: { viewId, result: outcome.result } }));
+			} catch (err) {
+				console.error("Viewer: Done failed:", err);
+				showToolNote(err.message || "The result could not be sent. Try again.");
+			} finally {
+				button.disabled = false;
+			}
+		});
+		return;
+	}
 	if (!assessmentStore.has(viewId)) return;
 	doneBar.hidden = false;
 	doneBar.querySelector(".done-btn").addEventListener("click", () => {
@@ -50,6 +79,33 @@ function setUpDone(viewId) {
 		showAssessmentResult(run.result, run.assessment);
 		document.dispatchEvent(new CustomEvent("waw:done", { detail: run }));
 	});
+}
+
+async function postToTool(lti, body) {
+	const res = await fetch(lti.api, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+	const data = await res.json().catch(() => ({}));
+	if (!res.ok) throw new Error(data.error || `The server answered ${res.status}.`);
+	return data;
+}
+
+function showToolNote(text) {
+	let note = document.querySelector(".tool-note");
+	if (!note) {
+		note = document.createElement("div");
+		note.className = "tool-note";
+		doneBar.prepend(note);
+	}
+	note.textContent = text;
+}
+
+// The launch the learning platform handed over, if any: { token, api }.
+function ltiLaunch(params) {
+	const token = params.get("lti");
+	const api = params.get("api");
+	// (A viewer opened from localhost, while developing, may also use a tool server on localhost.)
+	const local = location.hostname === "localhost" && api.startsWith("http://localhost");
+	if (!token || !api || !(local || LTI_API_PREFIXES.some((prefix) => api.startsWith(prefix)))) return null;
+	return { token, api };
 }
 
 async function main() {
@@ -75,7 +131,7 @@ async function main() {
 		const file = new File([await res.blob()], project.split("/").pop(), { type: "application/zip" });
 		await openProjectFromFile(file);
 		stageEl.style.display = "";
-		setUpDone(view);
+		setUpDone(view, ltiLaunch(params));
 	} catch (err) {
 		console.error("Viewer: could not open the project:", err);
 		showMessage("The project could not be loaded.");

@@ -1044,3 +1044,26 @@ elements parametrar är när inget satts:
   filter utan `frequency` visar 350 Hz, inte 1000).
 - Mixerns egna kanalremsor skriver sina värden explicit sedan tidigare och
   läser fortfarande med egna reservvärden.
+
+## LTI-lagret (nytt, 2026-10-16)
+
+`lti/` är serversidan (PHP 8, MySQL) för att öppna en uppgift ur Canvas (LTI 1.3) och skicka
+poäng + kommentar tillbaka — se `lti/README.md` för installation på waxml.org. Inget i
+webbappen kräver den; viewern fungerar fristående.
+
+- **Flöde:** Canvas → `login.php` → Canvas → `launch.php` (kontrollerar den signerade launchen
+  mot plattformens JWKS, `iss`/`aud`/`exp`/`nonce`/deployment, engångs-`state`) → redirect till
+  `viewer.html?project=…&view=…&lti=<token>&api=…/done.php` → Done i viewern → `done.php`
+  (räknar om poängen på servern, sparar, postar poäng via Assignment and Grade Services med en
+  signerad client assertion).
+- **Viewerns LTI-läge** (`js/viewer.js`): Done frågar servern *vad som ska mätas* (bara läsningarna,
+  aldrig toleranser/mål), mäter och skickar värdena. Servern får bara tala med adresser i
+  `LTI_API_PREFIXES`.
+- **Bedömningen finns i två versioner** — `js/assessment/evaluate.js` och
+  `lti/lib/Evaluate.php` — som hålls i takt av `lti/tests/assessment-vectors.json`
+  (genereras av `scripts/make-assessment-vectors.mjs`, testas av `lti/tests/run.php`).
+- **Publicera utan facit:** Export-dialogen → Public pages → *Export for publishing* ger
+  `namn.zip` utan `assessment.json` plus `namn.assessment.json` som laddas upp på `lti/admin.php`.
+- **Tester:** `php lti/tests/run.php` (95 kontroller: JWT/JWK, hela launch-flödet mot en låtsas-Canvas,
+  poäng och betygsboksanrop, bedömningen mot JS-resultaten). Provat med PHP 8.5 i Docker; en
+  provkörning av alla sidor över HTTP gick igenom, men inget är provat mot ett riktigt Canvas ännu.

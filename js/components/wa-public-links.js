@@ -1,3 +1,5 @@
+import { exportForPublishing } from "../project/project-manager.js";
+
 // The Export dialog's "Public pages" tab: for every project zip in the
 // public/ folder (listed in public/manifest.json — see
 // scripts/build-template-manifest.js), the address of each of its Stage views
@@ -74,6 +76,35 @@ template.innerHTML = `
 		button:hover {
 			border-color: var(--waw-accent, #4fa3ff);
 		}
+		.publish {
+			display: flex;
+			gap: 0.4rem;
+			margin-bottom: 0.4rem;
+		}
+		.publish-name {
+			flex: 1 1 auto;
+			font: 0.8rem var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			background: #101010;
+			color: #cdd3d8;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			border-radius: 4px;
+			padding: 0.25rem 0.4rem;
+		}
+		.publish-keep {
+			display: block;
+			font-size: 0.74rem;
+			color: var(--waw-muted, #8a8a8a);
+			margin-bottom: 0.4rem;
+		}
+		.publish-msg {
+			min-height: 1.2em;
+			margin-bottom: 1rem;
+			font-size: 0.74rem;
+			color: var(--waw-teal, #45b58c);
+		}
+		.publish-msg.error {
+			color: var(--waw-danger, #e5484d);
+		}
 		.empty, .error {
 			color: var(--waw-muted, #8a8a8a);
 		}
@@ -81,6 +112,14 @@ template.innerHTML = `
 			color: var(--waw-danger, #e5484d);
 		}
 	</style>
+	<h3>Publish this project</h3>
+	<p>Makes the zip to put in the <code>public/</code> folder, and — kept apart — the assessments (the facit) for the grading server, so a graded task doesn't hand them to everyone who opens the page.</p>
+	<div class="publish">
+		<input class="publish-name" type="text" placeholder="project-name" spellcheck="false" />
+		<button class="publish-btn" type="button">Export for publishing</button>
+	</div>
+	<label class="publish-keep"><input class="publish-keep-box" type="checkbox" /> Keep the assessments in the zip (a practice page without a grade — anyone can read them)</label>
+	<div class="publish-msg"></div>
 	<h3>Public pages</h3>
 	<p>One address per view of each project in the <code>public/</code> folder. The address opens just that view — no menus, no other views.</p>
 	<div class="list"></div>
@@ -92,6 +131,21 @@ export class WaPublicLinks extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 		this._list = this.shadowRoot.querySelector(".list");
+		const msg = this.shadowRoot.querySelector(".publish-msg");
+		this.shadowRoot.querySelector(".publish-btn").addEventListener("click", async () => {
+			const name = this.shadowRoot.querySelector(".publish-name").value.trim();
+			const keep = this.shadowRoot.querySelector(".publish-keep-box").checked;
+			msg.classList.remove("error");
+			try {
+				await exportForPublishing(name, { keepAssessment: keep });
+				msg.textContent = keep
+					? `${name}.zip is downloaded. Put it in public/ and run scripts/build-template-manifest.js.`
+					: `${name}.zip (put it in public/) and ${name}.assessment.json (paste it into the grading server's control page) are downloaded.`;
+			} catch (err) {
+				msg.classList.add("error");
+				msg.textContent = err.message;
+			}
+		});
 	}
 
 	// Re-reads public/ — called each time the tab is shown, so a project added

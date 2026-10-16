@@ -1,0 +1,2741 @@
+[
+	{
+		"name": "filter exact, reveal score",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "score",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 400,
+			"B.gain.db": -9,
+			"B.Q.number": 5
+		},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": null
+				}
+			]
+		}
+	},
+	{
+		"name": "filter untouched, reveal score",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "score",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 350,
+			"B.gain.db": 0,
+			"B.Q.number": 1
+		},
+		"expected": {
+			"total": 0.22426525612711215,
+			"score": 2.2,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.8970610245084486,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0,
+					"missing": false,
+					"text": null
+				}
+			]
+		}
+	},
+	{
+		"name": "filter near, reveal score",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "score",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 430,
+			"B.gain.db": -8,
+			"B.Q.number": 4.5
+		},
+		"expected": {
+			"total": 0.9987953722736849,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.9951814890947396,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": null
+				}
+			]
+		}
+	},
+	{
+		"name": "filter too high, reveal score",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "score",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 900,
+			"B.gain.db": 4,
+			"B.Q.number": 12
+		},
+		"expected": {
+			"total": 0.09114061314084848,
+			"score": 0.9,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": null
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0.18228122628169696,
+					"missing": false,
+					"text": null
+				}
+			]
+		}
+	},
+	{
+		"name": "filter exact, reveal distance",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "distance",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 400,
+			"B.gain.db": -9,
+			"B.Q.number": 5
+		},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent. Frequency: spot on. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter untouched, reveal distance",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "distance",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 350,
+			"B.gain.db": 0,
+			"B.Q.number": 1
+		},
+		"expected": {
+			"total": 0.22426525612711215,
+			"score": 2.2,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: close. Gain: far off. Q: far off.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.8970610245084486,
+					"missing": false,
+					"text": "Frequency: close."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Gain: far off."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0,
+					"missing": false,
+					"text": "Q: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter near, reveal distance",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "distance",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 430,
+			"B.gain.db": -8,
+			"B.Q.number": 4.5
+		},
+		"expected": {
+			"total": 0.9987953722736849,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent. Frequency: spot on. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.9951814890947396,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter too high, reveal distance",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "distance",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 900,
+			"B.gain.db": 4,
+			"B.Q.number": 12
+		},
+		"expected": {
+			"total": 0.09114061314084848,
+			"score": 0.9,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: far off. Gain: far off. Q: far off.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Frequency: far off."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Gain: far off."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0.18228122628169696,
+					"missing": false,
+					"text": "Q: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter exact, reveal direction",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "direction",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 400,
+			"B.gain.db": -9,
+			"B.Q.number": 5
+		},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent. Frequency: spot on. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter untouched, reveal direction",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "direction",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 350,
+			"B.gain.db": 0,
+			"B.Q.number": 1
+		},
+		"expected": {
+			"total": 0.22426525612711215,
+			"score": 2.2,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: close — too low. Gain: far off — too high. Q: far off — too low.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.8970610245084486,
+					"missing": false,
+					"text": "Frequency: close — too low."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Gain: far off — too high."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0,
+					"missing": false,
+					"text": "Q: far off — too low."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter near, reveal direction",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "direction",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 430,
+			"B.gain.db": -8,
+			"B.Q.number": 4.5
+		},
+		"expected": {
+			"total": 0.9987953722736849,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent. Frequency: spot on. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.9951814890947396,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter too high, reveal direction",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "direction",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 900,
+			"B.gain.db": 4,
+			"B.Q.number": 12
+		},
+		"expected": {
+			"total": 0.09114061314084848,
+			"score": 0.9,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: far off — too high. Gain: far off — too high. Q: far off — too high.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Frequency: far off — too high."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Gain: far off — too high."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0.18228122628169696,
+					"missing": false,
+					"text": "Q: far off — too high."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter exact, reveal undefined",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 400,
+			"B.gain.db": -9,
+			"B.Q.number": 5
+		},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent. Frequency: spot on. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter untouched, reveal undefined",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 350,
+			"B.gain.db": 0,
+			"B.Q.number": 1
+		},
+		"expected": {
+			"total": 0.22426525612711215,
+			"score": 2.2,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: close. Gain: far off. Q: far off.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.8970610245084486,
+					"missing": false,
+					"text": "Frequency: close."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Gain: far off."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0,
+					"missing": false,
+					"text": "Q: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter near, reveal undefined",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 430,
+			"B.gain.db": -8,
+			"B.Q.number": 4.5
+		},
+		"expected": {
+			"total": 0.9987953722736849,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "Excellent.",
+			"feedback": "Excellent. Frequency: spot on. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0.9951814890947396,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter too high, reveal undefined",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 900,
+			"B.gain.db": 4,
+			"B.Q.number": 12
+		},
+		"expected": {
+			"total": 0.09114061314084848,
+			"score": 0.9,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: far off. Gain: far off. Q: far off.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Frequency: far off."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Gain: far off."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0.18228122628169696,
+					"missing": false,
+					"text": "Q: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter with a missing value",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "direction",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 400,
+			"B.gain.db": -9,
+			"B.Q.number": null
+		},
+		"expected": {
+			"total": 0.5,
+			"score": 5,
+			"max": 10,
+			"passed": false,
+			"comment": "Not yet — try again.",
+			"feedback": "Not yet — try again. Frequency: spot on. Gain: spot on. Q could not be measured.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Frequency: spot on."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 0,
+					"missing": true,
+					"text": "Q could not be measured."
+				}
+			]
+		}
+	},
+	{
+		"name": "filter with a non-positive log value",
+		"assessment": {
+			"max": 10,
+			"pass": 0.6,
+			"reveal": "distance",
+			"bands": [
+				{
+					"min": 0.9,
+					"text": "Excellent."
+				},
+				{
+					"min": 0.6,
+					"text": "Getting there."
+				},
+				{
+					"min": 0,
+					"text": "Not yet — try again."
+				}
+			],
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "frequency"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"scale": "log2",
+					"full": 0.1,
+					"zero": 1
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"full": 1,
+					"zero": 6
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"type": "match",
+					"a": {
+						"ref": "B",
+						"attr": "Q"
+					},
+					"b": {
+						"ref": "A",
+						"attr": "Q"
+					},
+					"scale": "log2",
+					"full": 0.2,
+					"zero": 1.5
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 400,
+			"A.gain.db": -9,
+			"A.Q.number": 5,
+			"B.frequency.number": 0,
+			"B.gain.db": -9,
+			"B.Q.number": 5
+		},
+		"expected": {
+			"total": 0.75,
+			"score": 7.5,
+			"max": 10,
+			"passed": true,
+			"comment": "Getting there.",
+			"feedback": "Getting there. Frequency could not be measured. Gain: spot on. Q: spot on.",
+			"criteria": [
+				{
+					"id": "freq",
+					"label": "Frequency",
+					"weight": 1,
+					"score": 0,
+					"missing": true,
+					"text": "Frequency could not be measured."
+				},
+				{
+					"id": "gain",
+					"label": "Gain",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "Gain: spot on."
+				},
+				{
+					"id": "q",
+					"label": "Q",
+					"weight": 2,
+					"score": 1,
+					"missing": false,
+					"text": "Q: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "no criteria",
+		"assessment": {
+			"max": 5
+		},
+		"values": {},
+		"expected": {
+			"total": 1,
+			"score": 5,
+			"max": 5,
+			"passed": true,
+			"comment": "",
+			"feedback": "",
+			"criteria": []
+		}
+	},
+	{
+		"name": "no criteria with pass level",
+		"assessment": {
+			"max": 5,
+			"pass": 0.5,
+			"criteria": []
+		},
+		"values": {},
+		"expected": {
+			"total": 1,
+			"score": 5,
+			"max": 5,
+			"passed": true,
+			"comment": "",
+			"feedback": "",
+			"criteria": []
+		}
+	},
+	{
+		"name": "target",
+		"assessment": {
+			"max": 20,
+			"criteria": [
+				{
+					"type": "target",
+					"a": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"target": 1000,
+					"scale": "log2",
+					"full": 0,
+					"zero": 2
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 1500
+		},
+		"expected": {
+			"total": 0.707518749639422,
+			"score": 14.2,
+			"max": 20,
+			"passed": true,
+			"comment": "",
+			"feedback": "target: close.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 1,
+					"score": 0.707518749639422,
+					"missing": false,
+					"text": "target: close."
+				}
+			]
+		}
+	},
+	{
+		"name": "target linear low",
+		"assessment": {
+			"criteria": [
+				{
+					"id": "t",
+					"type": "target",
+					"a": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"target": -6,
+					"scale": "linear",
+					"full": 1,
+					"zero": 4,
+					"label": "Level"
+				}
+			],
+			"reveal": "direction"
+		},
+		"values": {
+			"A.gain.db": -12
+		},
+		"expected": {
+			"total": 0,
+			"score": 0,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "Level: far off — too low.",
+			"criteria": [
+				{
+					"id": "t",
+					"label": "Level",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Level: far off — too low."
+				}
+			]
+		}
+	},
+	{
+		"name": "range inside",
+		"assessment": {
+			"criteria": [
+				{
+					"type": "range",
+					"a": {
+						"ref": "A",
+						"attr": "delayTime"
+					},
+					"min": 0.2,
+					"max": 0.4,
+					"scale": "linear",
+					"full": 0,
+					"zero": 0.2
+				}
+			]
+		},
+		"values": {
+			"A.delayTime.number": 0.3
+		},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "range: spot on.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "range: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "range above",
+		"assessment": {
+			"reveal": "direction",
+			"criteria": [
+				{
+					"type": "range",
+					"a": {
+						"ref": "A",
+						"attr": "delayTime"
+					},
+					"min": 0.2,
+					"max": 0.4,
+					"scale": "linear",
+					"full": 0,
+					"zero": 0.2,
+					"label": "Delay"
+				}
+			]
+		},
+		"values": {
+			"A.delayTime.number": 0.5
+		},
+		"expected": {
+			"total": 0.5000000000000001,
+			"score": 5,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "Delay: close — too high.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Delay",
+					"weight": 1,
+					"score": 0.5000000000000001,
+					"missing": false,
+					"text": "Delay: close — too high."
+				}
+			]
+		}
+	},
+	{
+		"name": "range below log",
+		"assessment": {
+			"reveal": "direction",
+			"criteria": [
+				{
+					"type": "range",
+					"a": {
+						"ref": "A",
+						"attr": "delayTime"
+					},
+					"min": 0.2,
+					"max": 0.4,
+					"scale": "log2",
+					"full": 0,
+					"zero": 2
+				}
+			]
+		},
+		"values": {
+			"A.delayTime.number": 0.1
+		},
+		"expected": {
+			"total": 0.5,
+			"score": 5,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "range: close — too low.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 1,
+					"score": 0.5,
+					"missing": false,
+					"text": "range: close — too low."
+				}
+			]
+		}
+	},
+	{
+		"name": "relation (bass vs kick)",
+		"assessment": {
+			"max": 10,
+			"pass": 0.5,
+			"criteria": [
+				{
+					"id": "bal",
+					"label": "Balance",
+					"type": "relation",
+					"a": {
+						"ref": "A",
+						"attr": "gain",
+						"as": "db"
+					},
+					"b": {
+						"ref": "B",
+						"attr": "gain",
+						"as": "db"
+					},
+					"scale": "linear",
+					"target": 3,
+					"full": 0.5,
+					"zero": 4
+				}
+			]
+		},
+		"values": {
+			"A.gain.db": -3,
+			"B.gain.db": -9
+		},
+		"expected": {
+			"total": 0.2857142857142857,
+			"score": 2.9,
+			"max": 10,
+			"passed": false,
+			"comment": "",
+			"feedback": "Balance: far off.",
+			"criteria": [
+				{
+					"id": "bal",
+					"label": "Balance",
+					"weight": 1,
+					"score": 0.2857142857142857,
+					"missing": false,
+					"text": "Balance: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "spread (strings)",
+		"assessment": {
+			"max": 8,
+			"reveal": "distance",
+			"criteria": [
+				{
+					"id": "bal",
+					"label": "Strings",
+					"type": "spread",
+					"of": [
+						{
+							"ref": "A",
+							"attr": "gain",
+							"as": "db"
+						},
+						{
+							"ref": "B",
+							"attr": "gain",
+							"as": "db"
+						},
+						{
+							"ref": "C",
+							"attr": "gain",
+							"as": "db"
+						},
+						{
+							"ref": "D",
+							"attr": "gain",
+							"as": "db"
+						}
+					],
+					"scale": "linear",
+					"full": 1,
+					"zero": 7
+				}
+			]
+		},
+		"values": {
+			"A.gain.db": -6,
+			"B.gain.db": -8,
+			"C.gain.db": -5,
+			"D.gain.db": -12
+		},
+		"expected": {
+			"total": 0,
+			"score": 0,
+			"max": 8,
+			"passed": true,
+			"comment": "",
+			"feedback": "Strings: far off.",
+			"criteria": [
+				{
+					"id": "bal",
+					"label": "Strings",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "Strings: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "spread with one value",
+		"assessment": {
+			"criteria": [
+				{
+					"type": "spread",
+					"of": [
+						{
+							"ref": "A",
+							"attr": "gain",
+							"as": "db"
+						}
+					],
+					"scale": "linear",
+					"full": 0,
+					"zero": 1
+				}
+			]
+		},
+		"values": {
+			"A.gain.db": 0
+		},
+		"expected": {
+			"total": 0,
+			"score": 0,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "A value could not be measured.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 1,
+					"score": 0,
+					"missing": true,
+					"text": "A value could not be measured."
+				}
+			]
+		}
+	},
+	{
+		"name": "zero not above full",
+		"assessment": {
+			"criteria": [
+				{
+					"type": "target",
+					"a": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"target": 400,
+					"scale": "linear",
+					"full": 10,
+					"zero": 10
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 405
+		},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "target: spot on.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 1,
+					"score": 1,
+					"missing": false,
+					"text": "target: spot on."
+				}
+			]
+		}
+	},
+	{
+		"name": "zero not above full, off",
+		"assessment": {
+			"criteria": [
+				{
+					"type": "target",
+					"a": {
+						"ref": "A",
+						"attr": "frequency"
+					},
+					"target": 400,
+					"scale": "linear",
+					"full": 10,
+					"zero": 10
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 450
+		},
+		"expected": {
+			"total": 0,
+			"score": 0,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "target: far off.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "target: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "unknown type",
+		"assessment": {
+			"criteria": [
+				{
+					"id": "x",
+					"type": "nonsense",
+					"a": {
+						"ref": "A",
+						"attr": "frequency"
+					}
+				}
+			]
+		},
+		"values": {
+			"A.frequency.number": 1
+		},
+		"expected": {
+			"total": 0,
+			"score": 0,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "x could not be measured.",
+			"criteria": [
+				{
+					"id": "x",
+					"label": "x",
+					"weight": 1,
+					"score": 0,
+					"missing": true,
+					"text": "x could not be measured."
+				}
+			]
+		}
+	},
+	{
+		"name": "weights and bands only",
+		"assessment": {
+			"max": 3,
+			"bands": [
+				{
+					"min": 0.5,
+					"text": "Half way."
+				},
+				{
+					"min": 0,
+					"text": "Start."
+				},
+				{
+					"min": "x",
+					"text": "ignored"
+				}
+			],
+			"criteria": [
+				{
+					"type": "target",
+					"a": {
+						"ref": "A",
+						"attr": "pan"
+					},
+					"target": 0,
+					"scale": "linear",
+					"full": 0.1,
+					"zero": 1,
+					"weight": 3
+				},
+				{
+					"type": "target",
+					"a": {
+						"ref": "B",
+						"attr": "pan"
+					},
+					"target": 0,
+					"scale": "linear",
+					"full": 0.1,
+					"zero": 1,
+					"weight": 1
+				}
+			]
+		},
+		"values": {
+			"A.pan.number": 0,
+			"B.pan.number": 1
+		},
+		"expected": {
+			"total": 0.75,
+			"score": 2.3,
+			"max": 3,
+			"passed": true,
+			"comment": "Half way.",
+			"feedback": "Half way. target: spot on. target: far off.",
+			"criteria": [
+				{
+					"id": "c1",
+					"label": "Criterion 1",
+					"weight": 3,
+					"score": 1,
+					"missing": false,
+					"text": "target: spot on."
+				},
+				{
+					"id": "c2",
+					"label": "Criterion 2",
+					"weight": 1,
+					"score": 0,
+					"missing": false,
+					"text": "target: far off."
+				}
+			]
+		}
+	},
+	{
+		"name": "invalid max falls back to 10",
+		"assessment": {
+			"max": -3,
+			"criteria": []
+		},
+		"values": {},
+		"expected": {
+			"total": 1,
+			"score": 10,
+			"max": 10,
+			"passed": true,
+			"comment": "",
+			"feedback": "",
+			"criteria": []
+		}
+	}
+]

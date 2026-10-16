@@ -6,7 +6,7 @@ import { selection } from "../state/selection.js";
 import { bindCurrentFile, getCurrentFileId } from "./document-sync.js";
 import { STATE_FILE_NAME, initWorkstationState, flushWorkstationState } from "./workstation-state.js";
 import { stageStore } from "./stage-store.js";
-import { assessmentStore } from "./assessment-store.js";
+import { assessmentStore, ASSESSMENT_FILE_NAME } from "./assessment-store.js";
 import { initInputs, flushInputs } from "./inputs-store.js";
 import { resetEditHistory } from "./edit-history.js";
 import { listTemplates, fetchTemplateZip } from "./template-loader.js";
@@ -351,6 +351,43 @@ async function buildWebExportZipBlob() {
 export async function exportProjectAsZip() {
 	const blob = await buildWebExportZipBlob();
 	await pickSaveLocation(blob, "waw-export.zip");
+}
+
+// Gives the project to be published in public/ (see viewer.html): its zip, and
+// — kept apart — the assessments. A task that is graded must not hand its
+// assessment to everyone who opens the page, so by default the zip has none:
+// they go in <name>.assessment.json, to be loaded into the grading server (see
+// lti/admin.php). With `keepAssessment` the zip is the whole project and the
+// viewer judges for itself (a practice page, no grade). Two downloads.
+export async function exportForPublishing(name, { keepAssessment = false } = {}) {
+	if (!/^[A-Za-z0-9._-]{1,120}$/.test(name)) {
+		throw new Error("The name may hold letters, digits, dots, dashes and underscores only.");
+	}
+	const blob = await buildProjectZipBlob();
+	if (keepAssessment) {
+		downloadBlob(blob, `${name}.zip`);
+		return;
+	}
+	const zip = await JSZip.loadAsync(blob);
+	const entry = zip.file(ASSESSMENT_FILE_NAME);
+	const assessmentText = entry ? await entry.async("string") : null;
+	zip.remove(ASSESSMENT_FILE_NAME);
+	downloadBlob(await zip.generateAsync({ type: "blob" }), `${name}.zip`);
+	if (assessmentText) {
+		await new Promise((resolve) => setTimeout(resolve, 400)); // a browser takes two downloads in a row more kindly with a pause
+		downloadBlob(new Blob([assessmentText], { type: "application/json" }), `${name}.assessment.json`);
+	}
+}
+
+function downloadBlob(blob, filename) {
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+	setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 // The standard "Save": writes back to whatever file the project was last
