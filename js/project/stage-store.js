@@ -34,6 +34,15 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 // An "input" item stands for a row of a live input (the camera: `ref` is the
 // row's id in inputs.json) together with the Start/Stop of that input.
 //
+// Landscape and portrait: a view can have a second layout for a tall window
+// (a phone), with its own position, width and scale for every item; everything
+// else about an item is shared. The top-level x/y/w (and s, a scale factor,
+// default 1) are the landscape layout, `portrait: { x, y, w, s }` on an item is
+// the portrait one, and `portrait: true` on the view says it has one (the page
+// then shows it whenever the window is taller than it is wide — see
+// wa-stage-view.js). A landscape Stage is 960 wide, a portrait one 540; both
+// as tall as their items need.
+//
 // A view's `id` is random and never derived from its name: it is what ends
 // up in the view's URL, so it must neither change when the view is renamed
 // nor be guessable. An item's height is never stored: an item is as tall as
@@ -51,8 +60,25 @@ export const STAGE_FILE_NAME = "stage.json";
 // What an input row (see wa-webcam-input.js) carries when it is dragged onto
 // the Stage: JSON { source, entryId }.
 export const STAGE_INPUT_DRAG_TYPE = "application/x-waw-stage-input";
-export const STAGE_WIDTH = 960;
+export const STAGE_WIDTH = 960; // landscape
 export const STAGE_MIN_HEIGHT = 540;
+export const STAGE_WIDTH_PORTRAIT = 540;
+export const STAGE_MIN_HEIGHT_PORTRAIT = 960;
+export const ORIENTATIONS = ["landscape", "portrait"];
+
+export const stageWidthFor = (orientation) => (orientation === "portrait" ? STAGE_WIDTH_PORTRAIT : STAGE_WIDTH);
+export const stageMinHeightFor = (orientation) => (orientation === "portrait" ? STAGE_MIN_HEIGHT_PORTRAIT : STAGE_MIN_HEIGHT);
+
+// Where an item is in a layout: { x, y, w, s }. An item with no portrait
+// position of its own is shown where it is in landscape.
+export function itemGeometry(item, orientation) {
+	if (orientation === "portrait" && item.portrait) {
+		return { x: item.portrait.x, y: item.portrait.y, w: item.portrait.w, s: item.portrait.s ?? 1 };
+	}
+	return { x: item.x, y: item.y, w: item.w, s: item.s ?? 1 };
+}
+
+export const viewHasPortrait = (view) => !!view?.portrait;
 
 const FORMAT_VERSION = 2;
 const SAVE_DEBOUNCE_MS = 400;
@@ -60,6 +86,8 @@ const DEFAULT_WIDTHS = { heading: 600, text: 600, command: 150, var: 100, elemen
 const ESTIMATED_HEIGHTS = { heading: 44, text: 90, command: 40, var: 110, element: 240, input: 90 };
 const ITEM_GAP = 16;
 const ELEMENT_COLUMN_STEP = 280;
+const PORTRAIT_MARGIN = 20;
+const PORTRAIT_MAX_WIDTH = STAGE_WIDTH_PORTRAIT - 2 * PORTRAIT_MARGIN;
 const DEFAULT_VIEW_NAME = "Stage";
 
 function newViewId() {
@@ -78,6 +106,8 @@ class StageStore extends EventTarget {
 		this._saveTimer = null;
 		this._nextItemId = 1;
 		this._defaultsCache = null;
+		// Which layout is being edited (not saved; the viewer follows the window instead).
+		this.orientation = "landscape";
 		this._elementTags = new Set(); // tags that have a card to show (set by wa-chain-view.js)
 		// The defaults follow the document (a new root Command shows up), so a
 		// project without a stage.json keeps up with it.
@@ -171,6 +201,13 @@ class StageStore extends EventTarget {
 		this.dispatchEvent(new CustomEvent("change"));
 	}
 
+	// Which layout the editor shows and edits (the views' own data is not touched).
+	setOrientation(orientation) {
+		if (!ORIENTATIONS.includes(orientation) || orientation === this.orientation) return;
+		this.orientation = orientation;
+		this.dispatchEvent(new CustomEvent("change"));
+	}
+
 	_defaultItems() {
 		if (this._defaultsCache) return this._defaultsCache;
 		const items = [];
@@ -236,15 +273,70 @@ class StageStore extends EventTarget {
 		}
 	}
 
+	// x, y and w in `fields` are where the item goes in the layout being edited
+	// (see `orientation`); in the other layout, if the view has one, it goes last.
 	addItem(type, fields = {}) {
 		this._materialize(); // first: it fixes the numbering the new id comes from
-		const item = { id: `i${this._nextItemId++}`, type, x: 24, y: 24, w: DEFAULT_WIDTHS[type] ?? 200, ...fields };
+		const { x, y, w, s, ...rest } = { x: 24, y: 24, w: DEFAULT_WIDTHS[type] ?? 200, ...fields };
+		const base = { id: `i${this._nextItemId++}`, type, ...rest };
+		const hasPortrait = viewHasPortrait(this.currentView);
+		let item;
+		if (this.orientation === "portrait" && hasPortrait) {
+			item = {
+				...base,
+				x: 24,
+				y: this.nextFreeY("landscape"),
+				w,
+				portrait: { x: Math.max(0, x), y: Math.max(0, y), w: Math.min(w, PORTRAIT_MAX_WIDTH), s: s ?? 1 }
+			};
+		} else {
+			item = { ...base, x, y, w };
+			if (s && s !== 1) item.s = s;
+			if (hasPortrait) item.portrait = { x: PORTRAIT_MARGIN, y: this.nextFreeY("portrait"), w: Math.min(w, PORTRAIT_MAX_WIDTH), s: 1 };
+		}
 		this._editCurrentView((items) => [...items, item]);
 		return item;
 	}
 
 	updateItem(id, fields) {
 		this._editCurrentView((items) => items.map((i) => (i.id === id ? { ...i, ...fields } : i)));
+	}
+
+	// Moves, resizes or scales an item in one layout: patch is any of { x, y, w, s }.
+	updateGeometry(id, orientation, patch) {
+		this._editCurrentView((items) =>
+			items.map((i) => {
+				if (i.id !== id) return i;
+				if (orientation === "portrait") {
+					const base = i.portrait || { x: i.x, y: i.y, w: Math.min(i.w, PORTRAIT_MAX_WIDTH), s: i.s ?? 1 };
+					return { ...i, portrait: { ...base, ...patch } };
+				}
+				return { ...i, ...patch };
+			})
+		);
+	}
+
+	// Gives the current view a portrait layout: every item in a column, in the order
+	// they have in landscape (top to bottom, then left to right), at the widths they have
+	// (cut to fit) and at the scale they have — to be moved around from there.
+	createPortraitLayout() {
+		this._materialize();
+		const id = this.currentViewId;
+		this._commit(
+			this._views.map((v) => {
+				if (v.id !== id || v.portrait) return v;
+				const order = [...v.items].sort((a, b) => a.y - b.y || a.x - b.x);
+				const placed = new Map();
+				let y = 24;
+				order.forEach((i) => {
+					const s = i.s ?? 1;
+					const w = Math.min(i.w, Math.floor(PORTRAIT_MAX_WIDTH / s));
+					placed.set(i.id, { x: PORTRAIT_MARGIN, y, w, s });
+					y += estimatedHeight({ ...i, w }) * s + ITEM_GAP;
+				});
+				return { ...v, portrait: true, items: v.items.map((i) => ({ ...i, portrait: placed.get(i.id) })) };
+			})
+		);
 	}
 
 	removeItem(id) {
@@ -266,7 +358,7 @@ class StageStore extends EventTarget {
 		const source = this._views.find((v) => v.id === id);
 		if (!source) return null;
 		const items = source.items.map((i) => ({ ...i, id: `i${this._nextItemId++}` }));
-		const view = { id: newViewId(), name: `${source.name} copy`, items };
+		const view = { id: newViewId(), name: `${source.name} copy`, items, ...(source.portrait ? { portrait: true } : {}) };
 		this._commit([...this._views, view]);
 		this._currentId = view.id;
 		this.dispatchEvent(new CustomEvent("change"));
@@ -315,10 +407,14 @@ class StageStore extends EventTarget {
 		if (!usable.length) {
 			return { error: `The Stage can't show <${node.tagName}> yet. Drag an element such as a BiquadFilterNode, a <Command> or a <Var>.` };
 		}
+		// Side by side in a wide layout; in a narrow one, one below the other.
+		const column = this.orientation === "portrait";
 		let x = x0;
+		let y = y0;
 		const items = usable.map((n) => {
-			const item = this.addItem("element", { x, y: y0, ref: refOf(n) });
-			x += ELEMENT_COLUMN_STEP;
+			const item = this.addItem("element", { x, y, ref: refOf(n) });
+			if (column) y += estimatedHeight({ type: "element", w: DEFAULT_WIDTHS.element }) + ITEM_GAP;
+			else x += ELEMENT_COLUMN_STEP;
 			return item;
 		});
 		return { items };
@@ -327,17 +423,13 @@ class StageStore extends EventTarget {
 	// Where something new can go without landing on what is there: below the
 	// lowest item (heights are estimated — the view knows the real ones, but
 	// this must work with the Stage panel closed).
-	nextFreeY() {
+	nextFreeY(orientation = this.orientation) {
 		const items = this.items;
 		if (!items.length) return 24;
 		let bottom = 0;
 		items.forEach((i) => {
-			let h = ESTIMATED_HEIGHTS[i.type] ?? 60;
-			if (i.type === "text" || i.type === "heading") {
-				const lines = String(i.text || "").split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / Math.max(10, i.w / 9))), 0);
-				h = Math.max(h, lines * (i.type === "heading" ? 36 : 24) + 8);
-			}
-			bottom = Math.max(bottom, i.y + h);
+			const g = itemGeometry(i, orientation);
+			bottom = Math.max(bottom, g.y + estimatedHeight({ ...i, w: g.w }) * g.s);
 		});
 		return bottom + ITEM_GAP;
 	}
@@ -370,7 +462,12 @@ function parseStageFile(data) {
 	if (Array.isArray(data.views)) {
 		const views = data.views
 			.filter((v) => v && typeof v.id === "string" && Array.isArray(v.items))
-			.map((v) => ({ id: v.id, name: typeof v.name === "string" && v.name ? v.name : DEFAULT_VIEW_NAME, items: v.items.filter(isValidItem).map((i) => ({ ...i })) }));
+			.map((v) => ({
+				id: v.id,
+				name: typeof v.name === "string" && v.name ? v.name : DEFAULT_VIEW_NAME,
+				...(v.portrait === true ? { portrait: true } : {}),
+				items: v.items.filter(isValidItem).map(cleanItem)
+			}));
 		return views.length ? views : null;
 	}
 	if (Array.isArray(data.items)) {
@@ -383,6 +480,27 @@ function nextItemIdFor(views) {
 	let max = 0;
 	views.forEach((v) => v.items.forEach((i) => (max = Math.max(max, parseInt(String(i.id).replace(/\D/g, ""), 10) || 0))));
 	return max + 1;
+}
+
+// An item as read from a file: its portrait position is kept only if it is a position.
+function cleanItem(i) {
+	const item = { ...i };
+	const p = item.portrait;
+	if (p && !(p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.w))) delete item.portrait;
+	return item;
+}
+
+// How tall an item is, roughly — the view knows the real height, but this has to
+// work with the Stage panel closed.
+function estimatedHeight(item) {
+	let h = ESTIMATED_HEIGHTS[item.type] ?? 60;
+	if (item.type === "text" || item.type === "heading") {
+		const lines = String(item.text || "")
+			.split("\n")
+			.reduce((n, l) => n + Math.max(1, Math.ceil(l.length / Math.max(10, item.w / 9))), 0);
+		h = Math.max(h, lines * (item.type === "heading" ? 36 : 24) + 8);
+	}
+	return h;
 }
 
 function isValidItem(i) {

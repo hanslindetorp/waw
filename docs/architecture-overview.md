@@ -1023,6 +1023,35 @@ redigeringshjälpmedel) och senare av LTI-lagret.
   sig längs de ändringsbara axlarna och siffror för låsta attribut visas inte.
   Panner-kortet (3D) är bara en bild när varken `positionX` eller `positionZ` får
   ändras, annars är hela 3D-vyn rörlig.
+- **Liggande och stående layout** (nytt, 2026-10-17): en vy kan ha en andra layout
+  för ett högt fönster (en telefon). Varje item har då en egen placering, bredd och
+  skala för varje läge; allt annat är gemensamt. Toppnivåns `x/y/w` (och `s`, skalfaktor,
+  standard 1) är den liggande layouten, `portrait: { x, y, w, s }` på ett item den
+  stående, och `portrait: true` på vyn säger att den har en. Liggande Stage är 960 bred,
+  stående 540. Knapparna Landscape/Portrait i verktygsfältet väljer vilken layout man
+  redigerar; första gången man väljer Portrait skapas den (`createPortraitLayout`: alla
+  items i en kolumn i samma ordning som i liggande, i sin bredd och skala). Nya items
+  hamnar sist i den andra layouten. En publik sida (`readonly`/`view-id`) väljer själv:
+  `matchMedia("(orientation: portrait)")` — stående fönster ger den stående layouten
+  (om vyn har en), annars den liggande — och byter live när fönstret vrids.
+- **Skala och storlek:** högerkanten av ett item ändrar bredden (innehållet flyter om),
+  hörnet nere till höger skalar hela itemet (`transform: scale`, 0,25–3, aldrig större än
+  att det ryms), och Stage blir högre efter behov. Piltangenterna flyttar det markerade
+  itemet 1 px (10 med Skift).
+- **Hjälplinjer som i Apple Pages** (`js/utils/stage-snap.js`, ren modul): när ett item
+  flyttas dras det mot kanter och mittlinjer hos andra items och sidan (mitt och en
+  marginal på 24 px in från kanten) inom 6 skärmpixlar, och mot samma mellanrum som
+  redan finns mellan andra items (efter, före, eller mitt emellan två); gula linjer
+  och gap-markeringar visar vad det ligger i linje med. Samma vid breddändring (högerkanten).
+  Håll Cmd/Ctrl för att slå av det under draget.
+- **Markering exklusivt** (`js/state/selection-surface.js`): Stage-item och dokument-
+  markering (Preview/trädet) är olika instanser, så bara en är aktiv. Väljer man något på
+  Stage är Stage aktiv: Backspace/Delete och piltangenterna tas av Stage (capture-fasen,
+  `stopImmediatePropagation`) och Previewns kort visas inte markerade (`surface-inactive`
+  i `wa-chain-view`, bara där); ett tryck någon annanstans ger tillbaka aktiviteten till
+  dokumentet. XML-editorn och Previewn delar fortfarande markering, som förut.
+- **Dragbild:** när ett kort dras från Preview (eller en INPUT-rad) till Stage följer en
+  liten kopia av kortet (60 %) pekaren, inte en bild av greppet (`js/utils/drag-image.js`).
 - **Etiketter på Stage:** kortets id-text visar bara elementets egen `label` (aldrig
   id); en knapp (Command) utan `label` visar bara sin ikon; en ratt (Var) utan
   `label` visar inget namn (`public-labels` på `wa-var-knobs`).

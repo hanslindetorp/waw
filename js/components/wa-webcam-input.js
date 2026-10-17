@@ -3,6 +3,7 @@ import { xmlStore } from "../xml-editor/xml-store.js";
 import { inputMapMode } from "../state/input-map-mode.js";
 import { inputSources } from "../state/input-sources.js";
 import { stageStore, STAGE_INPUT_DRAG_TYPE } from "../project/stage-store.js";
+import { setCardDragImage } from "../utils/drag-image.js";
 import "./wa-color-picker.js";
 import { COLOR_PALETTE } from "./wa-color-picker.js";
 
@@ -1573,6 +1574,7 @@ export class WaWebcamInput extends HTMLElement {
 			e.stopPropagation();
 			e.dataTransfer.effectAllowed = "move";
 			e.dataTransfer.setData(STAGE_INPUT_DRAG_TYPE, JSON.stringify({ source: "webcam", entryId: entry.id }));
+			setCardDragImage(e.dataTransfer, row);
 		});
 
 		top.append(picker, lbl, muteBtn, pin, del);

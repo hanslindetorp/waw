@@ -13,6 +13,8 @@ import {
 } from "../waxml-integration/gain-units.js";
 import { isEditableContext } from "../project/edit-history.js";
 import { stageStore } from "../project/stage-store.js";
+import { setCardDragImage } from "../utils/drag-image.js";
+import { selectionSurface } from "../state/selection-surface.js";
 import { engineDefault } from "../xml-editor/default-attributes.js";
 import { showNotice } from "./wa-notice-dialog.js";
 import {
@@ -349,6 +351,10 @@ template.innerHTML = `
 		.node-card.selected {
 			border-color: var(--waw-accent, #4fa3ff);
 			box-shadow: 0 0 0 1px var(--waw-accent, #4fa3ff);
+		}
+		.surface-inactive .node-card.selected {
+			border-color: var(--waw-border, #2f2f2f);
+			box-shadow: none;
 		}
 		.node-card.dragging {
 			opacity: 0.45;
@@ -896,6 +902,7 @@ export class WaChainView extends HTMLElement {
 		this._stackEl = this.shadowRoot.querySelector(".chain-stack");
 		this._isLocalEdit = false;
 		this._onStoreChange = this._onStoreChange.bind(this);
+		this._onSurface = () => this._applySurface();
 		this._onKeyDown = this._onKeyDown.bind(this);
 		this._renderedChildIds = new Set();
 		// AnalyserNode cards: which display mode (waveform/fft) each node id
@@ -915,12 +922,15 @@ export class WaChainView extends HTMLElement {
 	}
 
 	connectedCallback() {
+		selectionSurface.addEventListener("change", this._onSurface);
+		this._applySurface();
 		xmlStore.addEventListener("change", this._onStoreChange);
 		document.addEventListener("keydown", this._onKeyDown);
 		this._render();
 	}
 
 	disconnectedCallback() {
+		selectionSurface.removeEventListener("change", this._onSurface);
 		xmlStore.removeEventListener("change", this._onStoreChange);
 		document.removeEventListener("keydown", this._onKeyDown);
 		this._stopLiveLoop();
@@ -1005,6 +1015,13 @@ export class WaChainView extends HTMLElement {
 	_onStoreChange() {
 		if (this._isLocalEdit) return;
 		this._render();
+	}
+
+	// While the Stage is where the user last selected something (see
+	// selection-surface.js), the cards here are not shown as selected — only one of
+	// the two places is. (Card-only instances, the Stage's own, never take part.)
+	_applySurface() {
+		this._stackEl.classList.toggle("surface-inactive", !this._cardElementId && selectionSurface.active === "stage");
 	}
 
 	// "Card only" mode, used by the Stage panel: this instance shows just the
@@ -1286,6 +1303,7 @@ export class WaChainView extends HTMLElement {
 	_onKeyDown(e) {
 		if (e.defaultPrevented || (e.key !== "Backspace" && e.key !== "Delete")) return;
 		if (!this.getClientRects().length || isEditableContext()) return;
+		if (selectionSurface.active === "stage") return; // an item on the Stage is what is selected
 		const ids = new Set([...xmlStore.selectedNodeIds, xmlStore.selectedNodeId].filter((id) => id && this._renderedChildIds?.has(id)));
 		if (!ids.size) return;
 		e.preventDefault();
@@ -1691,6 +1709,8 @@ export class WaChainView extends HTMLElement {
 			e.stopPropagation();
 			e.dataTransfer.effectAllowed = "move";
 			e.dataTransfer.setData("text/plain", node.id);
+			// a small copy of the card follows the pointer, not a picture of the handle
+			setCardDragImage(e.dataTransfer, pin.closest(".node-card, .var-card"));
 		});
 		pin.addEventListener("dragend", (e) => e.stopPropagation());
 		pin.addEventListener("click", (e) => {

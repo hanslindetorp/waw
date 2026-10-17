@@ -1,7 +1,17 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { findNodeById } from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
-import { stageStore, STAGE_WIDTH, STAGE_MIN_HEIGHT, STAGE_INPUT_DRAG_TYPE } from "../project/stage-store.js";
+import {
+	stageStore,
+	STAGE_WIDTH,
+	STAGE_INPUT_DRAG_TYPE,
+	itemGeometry,
+	stageWidthFor,
+	stageMinHeightFor,
+	viewHasPortrait
+} from "../project/stage-store.js";
+import { computeSnap } from "../utils/stage-snap.js";
+import { selectionSurface } from "../state/selection-surface.js";
 import { inputSources } from "../state/input-sources.js";
 import { isEditableContext } from "../project/edit-history.js";
 import { showNotice } from "./wa-notice-dialog.js";
@@ -32,6 +42,9 @@ import { CARD_ATTRIBUTES } from "./wa-chain-view.js";
 
 const MAX_SCALE = 1.5;
 const STAGE_BOTTOM_MARGIN = 40;
+const SNAP_PX = 6; // how close (in screen pixels) an item has to come before it is pulled into line
+const MIN_ITEM_SCALE = 0.25;
+const MAX_ITEM_SCALE = 3;
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -249,6 +262,79 @@ template.innerHTML = `
 			cursor: pointer;
 			padding: 0 0.2rem;
 		}
+		.scale-handle {
+			position: absolute;
+			right: -7px;
+			bottom: -7px;
+			width: 12px;
+			height: 12px;
+			display: none;
+			border-radius: 2px;
+			background: var(--waw-accent, #4fa3ff);
+			border: 1px solid #fff;
+			cursor: nwse-resize;
+			touch-action: none;
+			z-index: 3;
+		}
+		:host(:not([readonly])) .item:hover > .scale-handle,
+		:host(:not([readonly])) .item.selected > .scale-handle {
+			display: block;
+		}
+		/* The guides shown while an item is moved or widened (see utils/stage-snap.js). */
+		.guide {
+			position: absolute;
+			pointer-events: none;
+			z-index: 20;
+			background: #ffd60a;
+		}
+		.guide.gap {
+			background: none;
+			box-sizing: border-box;
+		}
+		.guide.gap.along-x {
+			border-left: 1px solid #ffd60a;
+			border-right: 1px solid #ffd60a;
+		}
+		.guide.gap.along-y {
+			border-top: 1px solid #ffd60a;
+			border-bottom: 1px solid #ffd60a;
+		}
+		.guide.gap::after {
+			content: "";
+			position: absolute;
+			background: #ffd60a;
+		}
+		.guide.gap.along-x::after {
+			left: 0;
+			right: 0;
+			top: 50%;
+			height: 1px;
+		}
+		.guide.gap.along-y::after {
+			top: 0;
+			bottom: 0;
+			left: 50%;
+			width: 1px;
+		}
+		.orient {
+			display: inline-flex;
+			gap: 0;
+		}
+		.orient button {
+			border-radius: 0;
+		}
+		.orient button:first-child {
+			border-radius: 4px 0 0 4px;
+		}
+		.orient button:last-child {
+			border-radius: 0 4px 4px 0;
+			border-left: none;
+		}
+		.orient button.active {
+			border-color: var(--waw-accent, #4fa3ff);
+			color: var(--waw-accent, #4fa3ff);
+			background: rgba(79, 163, 255, 0.12);
+		}
 		.resize {
 			position: absolute;
 			right: -6px;
@@ -411,6 +497,10 @@ template.innerHTML = `
 		<button type="button" data-add="heading">+ Heading</button>
 		<button type="button" data-add="text">+ Instruction</button>
 		<span class="hint">Drag elements, Commands and Vars here from the XML tree.</span>
+		<span class="orient" title="The layout being edited. A page shows the portrait one when the window is taller than it is wide.">
+			<button type="button" data-orient="landscape">Landscape</button>
+			<button type="button" data-orient="portrait">Portrait</button>
+		</span>
 		<span class="spacer"></span>
 		<button type="button" data-assess="toggle" title="How this view is assessed">Assessment</button>
 		<button type="button" data-assess="test" title="Try the assessment on the page as it is now">Test run</button>
@@ -462,6 +552,17 @@ export class WaStageView extends HTMLElement {
 		};
 		this._resizeObserver = new ResizeObserver(() => this._fit());
 		this._itemObserver = new ResizeObserver(() => this._fitHeight());
+		// A page (the viewer) follows the window: portrait when it is taller than wide.
+		this._portraitQuery = window.matchMedia("(orientation: portrait)");
+	}
+
+	// The layout in use: in the editor the one being edited (the toggle in the toolbar), on a
+	// page the one the window asks for — and portrait only for a view that has one.
+	_orientation() {
+		const view = this._shownView();
+		if (!viewHasPortrait(view)) return "landscape";
+		const wantsPortrait = this.readonly ? this._portraitQuery.matches : stageStore.orientation === "portrait";
+		return wantsPortrait ? "portrait" : "landscape";
 	}
 
 	// Pinned to one view (the viewer page): that view only, nothing editable.
@@ -492,11 +593,23 @@ export class WaStageView extends HTMLElement {
 	connectedCallback() {
 		stageStore.addEventListener("change", this._onChange);
 		xmlStore.addEventListener("change", this._onXmlChange);
-		document.addEventListener("keydown", this._onKeyDown);
+		// Capture phase: while the Stage is where the user last selected something, its keys
+		// (Backspace/Delete, the arrows) are its own — no other handler gets them.
+		document.addEventListener("keydown", this._onKeyDown, true);
 		document.addEventListener("pointerdown", this._onDocPointerDown, true);
 		inputSources.addEventListener("change", this._onSourcesChange);
+		this._portraitQuery.addEventListener("change", this._onChange);
 		this._wireSource();
 		this._resizeObserver.observe(this._viewport);
+
+		this.shadowRoot.querySelectorAll("[data-orient]").forEach((btn) =>
+			btn.addEventListener("click", () => {
+				const orientation = btn.dataset.orient;
+				if (orientation === "portrait" && !viewHasPortrait(stageStore.currentView)) stageStore.createPortraitLayout();
+				stageStore.setOrientation(orientation);
+				this._select(null);
+			})
+		);
 
 		const toggle = this.shadowRoot.querySelector('[data-assess="toggle"]');
 		toggle.addEventListener("click", () => {
@@ -555,9 +668,10 @@ export class WaStageView extends HTMLElement {
 	disconnectedCallback() {
 		stageStore.removeEventListener("change", this._onChange);
 		xmlStore.removeEventListener("change", this._onXmlChange);
-		document.removeEventListener("keydown", this._onKeyDown);
+		document.removeEventListener("keydown", this._onKeyDown, true);
 		document.removeEventListener("pointerdown", this._onDocPointerDown, true);
 		inputSources.removeEventListener("change", this._onSourcesChange);
+		this._portraitQuery.removeEventListener("change", this._onChange);
 		this._unwireSource();
 		this._stopInputTick();
 		this._resizeObserver.disconnect();
@@ -637,6 +751,9 @@ export class WaStageView extends HTMLElement {
 
 	// ── Selection / keyboard ──────────────────────────────────────────────
 	_select(id) {
+		// Selecting here makes the Stage the active surface; letting go hands it back to the
+		// document (the Preview and the tree).
+		selectionSurface.set(id ? "stage" : "document");
 		if (this._selectedId === id) return;
 		this._selectedId = id;
 		this._stage.querySelectorAll(".item").forEach((el) => el.classList.toggle("selected", el.dataset.item === id));
@@ -680,30 +797,46 @@ export class WaStageView extends HTMLElement {
 	}
 
 	_onKeyDown(e) {
-		if (this.readonly || e.defaultPrevented) return;
-		if (e.key !== "Backspace" && e.key !== "Delete") return;
+		if (this.readonly) return;
+		const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+		const isDelete = e.key === "Backspace" || e.key === "Delete";
+		if (!isDelete && !arrows[e.key]) return;
 		if (!this._selectedId || this._editingId || isEditableContext()) return;
-		if (!this.getClientRects().length) return;
+		if (!this.getClientRects().length || selectionSurface.active !== "stage") return;
 		e.preventDefault();
+		e.stopImmediatePropagation(); // nothing else (the Preview, the tree) acts on it
 		const id = this._selectedId;
-		this._selectedId = null;
-		stageStore.removeItem(id);
+		if (isDelete) {
+			this._selectedId = null;
+			selectionSurface.set("document");
+			stageStore.removeItem(id);
+			return;
+		}
+		// The arrow keys nudge the selected item, ten times as far with Shift.
+		const item = (this._shownView()?.items || []).find((i) => i.id === id);
+		if (!item) return;
+		const orientation = this._orientation();
+		const g = itemGeometry(item, orientation);
+		const step = e.shiftKey ? 10 : 1;
+		stageStore.updateGeometry(id, orientation, { x: Math.max(0, g.x + arrows[e.key][0] * step), y: Math.max(0, g.y + arrows[e.key][1] * step) });
 	}
 
 	// ── Layout ────────────────────────────────────────────────────────────
 	_fit() {
 		const available = this._viewport.clientWidth;
 		if (!available) return;
-		this._scale = Math.min(MAX_SCALE, available / STAGE_WIDTH);
+		const width = stageWidthFor(this._orientation());
+		this._scale = Math.min(MAX_SCALE, available / width);
+		this._stage.style.width = `${width}px`;
 		this._stage.style.transform = `scale(${this._scale})`;
-		this._scaler.style.width = `${STAGE_WIDTH * this._scale}px`;
+		this._scaler.style.width = `${width * this._scale}px`;
 		this._fitHeight();
 	}
 
 	_fitHeight() {
-		let bottom = STAGE_MIN_HEIGHT;
+		let bottom = stageMinHeightFor(this._orientation());
 		this._stage.querySelectorAll(".item").forEach((el) => {
-			bottom = Math.max(bottom, el.offsetTop + el.offsetHeight + STAGE_BOTTOM_MARGIN);
+			bottom = Math.max(bottom, el.offsetTop + el.offsetHeight * (parseFloat(el.dataset.s) || 1) + STAGE_BOTTOM_MARGIN);
 		});
 		this._stage.style.height = `${bottom}px`;
 		this._scaler.style.height = `${bottom * this._scale}px`;
@@ -737,6 +870,8 @@ export class WaStageView extends HTMLElement {
 		this._itemObserver.disconnect();
 		this._renderTabs();
 		this._renderItemSettings();
+		const orientation = this._orientation();
+		this.shadowRoot.querySelectorAll("[data-orient]").forEach((btn) => btn.classList.toggle("active", btn.dataset.orient === orientation));
 		if (!this.readonly) this._assessmentEditor.setViewId(stageStore.currentViewId);
 		this._stage.innerHTML = "";
 		const view = this._shownView();
@@ -847,9 +982,11 @@ export class WaStageView extends HTMLElement {
 		const el = document.createElement("div");
 		el.className = "item";
 		el.dataset.item = item.id;
-		el.style.left = `${item.x}px`;
-		el.style.top = `${item.y}px`;
-		el.style.width = `${item.w}px`;
+		const g = itemGeometry(item, this._orientation());
+		el.style.left = `${g.x}px`;
+		el.style.top = `${g.y}px`;
+		el.style.width = `${g.w}px`;
+		this._applyScale(el, g.s);
 		if (item.id === this._selectedId) el.classList.add("selected");
 
 		el.appendChild(this._buildContent(item));
@@ -876,6 +1013,12 @@ export class WaStageView extends HTMLElement {
 			resize.className = "resize";
 			this._wireResize(resize, el, item);
 			el.appendChild(resize);
+
+			const scaleHandle = document.createElement("div");
+			scaleHandle.className = "scale-handle";
+			scaleHandle.title = "Drag to make it larger or smaller";
+			this._wireScale(scaleHandle, el, item);
+			el.appendChild(scaleHandle);
 
 			el.addEventListener("pointerdown", () => this._select(item.id));
 		}
@@ -1052,56 +1195,157 @@ export class WaStageView extends HTMLElement {
 	}
 
 	// ── Moving / resizing ─────────────────────────────────────────────────
-	_wireMove(grip, el, item) {
-		grip.addEventListener("pointerdown", (e) => {
-			e.preventDefault();
-			grip.setPointerCapture(e.pointerId);
-			const startX = e.clientX;
-			const startY = e.clientY;
-			const origX = item.x;
-			const origY = item.y;
-			let moved = false;
-			const move = (ev) => {
-				moved = true;
-				const nx = Math.max(0, Math.round(origX + (ev.clientX - startX) / this._scale));
-				const ny = Math.max(0, Math.round(origY + (ev.clientY - startY) / this._scale));
-				el.style.left = `${nx}px`;
-				el.style.top = `${ny}px`;
-				el._pos = { x: nx, y: ny };
-			};
-			const up = () => {
-				grip.removeEventListener("pointermove", move);
-				grip.removeEventListener("pointerup", up);
-				grip.removeEventListener("pointercancel", up);
-				if (moved && el._pos) stageStore.updateItem(item.id, el._pos);
-			};
-			grip.addEventListener("pointermove", move);
-			grip.addEventListener("pointerup", up);
-			grip.addEventListener("pointercancel", up);
+	// ── Moving, widening, scaling ─────────────────────────────────────────
+	// An item's scale: everything in it is drawn larger or smaller (the box is as wide as
+	// `w`, then scaled from its top left corner).
+	_applyScale(el, s) {
+		el.dataset.s = String(s);
+		el.style.transformOrigin = "0 0";
+		el.style.transform = s === 1 ? "" : `scale(${s})`;
+	}
+
+	// The other items as rectangles in the Stage's units, as they are drawn.
+	_otherRects(exceptId) {
+		return [...this._stage.querySelectorAll(".item")]
+			.filter((el) => el.dataset.item !== exceptId)
+			.map((el) => {
+				const s = parseFloat(el.dataset.s) || 1;
+				return { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth * s, h: el.offsetHeight * s };
+			});
+	}
+
+	_stageSize() {
+		return { w: stageWidthFor(this._orientation()), h: this._stage.offsetHeight };
+	}
+
+	// Snapping can be switched off while dragging by holding Cmd/Ctrl, as in Pages.
+	_snap(e, params) {
+		if (e.metaKey || e.ctrlKey) {
+			this._clearGuides();
+			return { dx: 0, dy: 0 };
+		}
+		const result = computeSnap({ ...params, stage: this._stageSize(), threshold: SNAP_PX / this._scale });
+		this._showGuides(result.guides);
+		return result;
+	}
+
+	_showGuides(guides) {
+		this._clearGuides();
+		const px = 1 / this._scale; // one screen pixel, in the Stage's units
+		guides.forEach((g) => {
+			const el = document.createElement("div");
+			el.className = "guide";
+			if (g.kind === "line") {
+				if (g.axis === "x") Object.assign(el.style, { left: `${g.pos}px`, top: `${g.from}px`, width: `${px}px`, height: `${g.to - g.from}px` });
+				else Object.assign(el.style, { top: `${g.pos}px`, left: `${g.from}px`, height: `${px}px`, width: `${g.to - g.from}px` });
+			} else if (g.axis === "x") {
+				el.classList.add("gap", "along-x");
+				Object.assign(el.style, { left: `${g.from}px`, width: `${g.to - g.from}px`, top: `${g.cross - 5 * px}px`, height: `${10 * px}px` });
+			} else {
+				el.classList.add("gap", "along-y");
+				Object.assign(el.style, { top: `${g.from}px`, height: `${g.to - g.from}px`, left: `${g.cross - 5 * px}px`, width: `${10 * px}px` });
+			}
+			this._stage.appendChild(el);
 		});
 	}
 
+	_clearGuides() {
+		this._stage.querySelectorAll(".guide").forEach((el) => el.remove());
+	}
+
+	// Drags `target` (the handle) with pointer capture: onMove(dxStage, dyStage, event) while
+	// held, onEnd(moved) on release.
+	_drag(target, e, onMove, onEnd) {
+		e.preventDefault(); // (the press still reaches the item, which selects it)
+		target.setPointerCapture(e.pointerId);
+		const startX = e.clientX;
+		const startY = e.clientY;
+		let moved = false;
+		const move = (ev) => {
+			moved = true;
+			onMove((ev.clientX - startX) / this._scale, (ev.clientY - startY) / this._scale, ev);
+		};
+		const up = () => {
+			target.removeEventListener("pointermove", move);
+			target.removeEventListener("pointerup", up);
+			target.removeEventListener("pointercancel", up);
+			this._clearGuides();
+			onEnd(moved);
+		};
+		target.addEventListener("pointermove", move);
+		target.addEventListener("pointerup", up);
+		target.addEventListener("pointercancel", up);
+	}
+
+	_wireMove(grip, el, item) {
+		grip.addEventListener("pointerdown", (e) => {
+			const orientation = this._orientation();
+			const g = itemGeometry(item, orientation);
+			const w = el.offsetWidth * g.s;
+			const h = el.offsetHeight * g.s;
+			const others = this._otherRects(item.id);
+			let pos = null;
+			this._drag(
+				grip,
+				e,
+				(dx, dy, ev) => {
+					const snap = this._snap(ev, { moving: { x: g.x + dx, y: g.y + dy, w, h }, others });
+					pos = { x: Math.max(0, Math.round(g.x + dx + snap.dx)), y: Math.max(0, Math.round(g.y + dy + snap.dy)) };
+					el.style.left = `${pos.x}px`;
+					el.style.top = `${pos.y}px`;
+				},
+				(moved) => {
+					if (moved && pos) stageStore.updateGeometry(item.id, orientation, pos);
+				}
+			);
+		});
+	}
+
+	// The right edge changes the width of the box (the content reflows); the corner scales it.
 	_wireResize(handle, el, item) {
 		handle.addEventListener("pointerdown", (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			handle.setPointerCapture(e.pointerId);
-			const startX = e.clientX;
-			const origW = item.w;
-			let width = origW;
-			const move = (ev) => {
-				width = Math.max(60, Math.min(STAGE_WIDTH - item.x, Math.round(origW + (ev.clientX - startX) / this._scale)));
-				el.style.width = `${width}px`;
-			};
-			const up = () => {
-				handle.removeEventListener("pointermove", move);
-				handle.removeEventListener("pointerup", up);
-				handle.removeEventListener("pointercancel", up);
-				if (width !== origW) stageStore.updateItem(item.id, { w: width });
-			};
-			handle.addEventListener("pointermove", move);
-			handle.addEventListener("pointerup", up);
-			handle.addEventListener("pointercancel", up);
+			const orientation = this._orientation();
+			const g = itemGeometry(item, orientation);
+			const h = el.offsetHeight * g.s;
+			const others = this._otherRects(item.id);
+			const maxWidth = (stageWidthFor(orientation) - g.x) / g.s;
+			let width = g.w;
+			this._drag(
+				handle,
+				e,
+				(dx, _dy, ev) => {
+					// the edge in the Stage's units, pulled into line with other items' edges
+					const edgeWidth = (g.w + dx / g.s) * g.s;
+					const snap = this._snap(ev, { moving: { x: g.x, y: g.y, w: edgeWidth, h }, others, axes: ["x"], anchors: ["end"] });
+					width = Math.max(60, Math.min(maxWidth, Math.round((edgeWidth + snap.dx) / g.s)));
+					el.style.width = `${width}px`;
+				},
+				(moved) => {
+					if (moved && width !== g.w) stageStore.updateGeometry(item.id, orientation, { w: width });
+				}
+			);
+		});
+	}
+
+	_wireScale(handle, el, item) {
+		handle.addEventListener("pointerdown", (e) => {
+			const orientation = this._orientation();
+			const g = itemGeometry(item, orientation);
+			const natural = el.offsetWidth; // the box's width before scaling
+			const maxScale = Math.max(MIN_ITEM_SCALE, (stageWidthFor(orientation) - g.x) / natural);
+			let s = g.s;
+			this._drag(
+				handle,
+				e,
+				(dx) => {
+					s = Math.round(Math.max(MIN_ITEM_SCALE, Math.min(MAX_ITEM_SCALE, maxScale, (natural * g.s + dx) / natural)) * 100) / 100;
+					this._applyScale(el, s);
+					this._fitHeight();
+				},
+				(moved) => {
+					if (moved && s !== g.s) stageStore.updateGeometry(item.id, orientation, { s });
+				}
+			);
 		});
 	}
 }
