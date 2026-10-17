@@ -15,7 +15,18 @@ import { isEditableContext } from "../project/edit-history.js";
 import { stageStore } from "../project/stage-store.js";
 import { engineDefault } from "../xml-editor/default-attributes.js";
 import { showNotice } from "./wa-notice-dialog.js";
-import { biquadResponseCurve, freqToX, xToFreq, GRAPH_FREQ_MIN, GRAPH_FREQ_MAX, BIQUAD_GAIN_TYPES, BIQUAD_Q_TYPES } from "../xml-editor/biquad-math.js";
+import {
+	biquadResponseCurve,
+	freqToX,
+	xToFreq,
+	GRAPH_FREQ_MIN,
+	GRAPH_FREQ_MAX,
+	BIQUAD_GAIN_TYPES,
+	BIQUAD_Q_TYPES,
+	BIQUAD_BAND_TYPES,
+	qToBandwidthOctaves,
+	bandwidthOctavesToQ
+} from "../xml-editor/biquad-math.js";
 import { compressorOutputDb } from "../xml-editor/compressor-math.js";
 import { computeMapPoints, mapStage1 } from "../xml-editor/var-mapper-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
@@ -162,6 +173,8 @@ function biquadYPixelToDb(h, py) {
 // _buildBiquadCard). Per Hans (2026-09-28).
 const BIQUAD_Q_DRAG_MIN = 0.1,
 	BIQUAD_Q_DRAG_MAX = 20;
+const BIQUAD_SAMPLE_RATE = 44100; // what the curve is drawn for (see _redrawBiquadCanvas)
+const BIQUAD_BAND_EDGE_HIT_PX = 7; // how close to a band edge (in canvas pixels) a press grabs it
 function biquadQToYPixel(h, q) {
 	const t = (q - BIQUAD_Q_DRAG_MIN) / (BIQUAD_Q_DRAG_MAX - BIQUAD_Q_DRAG_MIN);
 	return h - Math.max(0, Math.min(1, t)) * h;
@@ -2126,7 +2139,7 @@ export class WaChainView extends HTMLElement {
 			// drag axis left there, so it stays scroll-only (see yDragMode).
 			if (BIQUAD_GAIN_TYPES.has(type) && BIQUAD_Q_TYPES.has(type)) {
 				const scrollHint = document.createElement("span");
-				scrollHint.textContent = "(scroll = Q)";
+				scrollHint.textContent = BIQUAD_BAND_TYPES.has(type) ? "(drag a box edge or scroll = Q)" : "(scroll = Q)";
 				chipRow.appendChild(scrollHint);
 			}
 		};
@@ -2141,8 +2154,106 @@ export class WaChainView extends HTMLElement {
 		this._redrawBiquadCanvas(canvas, state, select.value);
 		refreshChips(select.value);
 
+		// The band around the frequency (peaking/bandpass/notch): a box whose left
+		// and right edges are dragged sideways to change Q, the other edge
+		// following — the width of the band is what Q means for these types
+		// (see BIQUAD_BAND_TYPES). Per Hans (2026-10-17), after Logic Pro's EQ.
+		//
+		// The box is only there while it is wanted: when the pointer is over the
+		// point (it then stays while the pointer is inside the box, so its edges
+		// can be reached) and while the point is dragged; with a touch screen a
+		// tap on the point selects it ("sticky") and the box stays until a tap
+		// somewhere else on the graph. state.bandOn is what the drawing looks at.
+		let draggingEdge = false;
+		const DOT_HIT_PX = 16;
+		const dotNearPoint = (px, py) =>
+			Math.hypot(px - biquadFreqToXPixel(canvas.width, state.freq), py - this._biquadHandleY(select.value, state, canvas.height)) <= DOT_HIT_PX;
+		const edgeNear = (px) => {
+			const edges = this._biquadBandEdges(select.value, state, canvas.width);
+			if (!edges || !state.bandOn || isParamVarControlled(node, "Q")) return false;
+			return Math.abs(px - edges.xLo) <= BIQUAD_BAND_EDGE_HIT_PX || Math.abs(px - edges.xHi) <= BIQUAD_BAND_EDGE_HIT_PX;
+		};
+		const insideBox = (px) => {
+			const edges = this._biquadBandEdges(select.value, state, canvas.width);
+			return !!edges && px >= edges.xLo - BIQUAD_BAND_EDGE_HIT_PX && px <= edges.xHi + BIQUAD_BAND_EDGE_HIT_PX;
+		};
+		// Sets what the box shows and redraws if it changed.
+		const setBand = (on, edgeHot) => {
+			if (!BIQUAD_BAND_TYPES.has(select.value)) on = edgeHot = false;
+			if (!!state.bandOn === on && !!state.edgeHot === edgeHot) return;
+			state.bandOn = on;
+			state.edgeHot = edgeHot;
+			canvas.style.cursor = edgeHot ? "ew-resize" : "";
+			this._redrawBiquadCanvas(canvas, state, select.value);
+		};
+		canvas.addEventListener("pointermove", (e) => {
+			if (draggingEdge || state.dotDragging) return;
+			const { px, py } = canvasPointFromEvent(canvas, e);
+			const dotNear = dotNearPoint(px, py);
+			const on = state.bandSticky || dotNear || (state.bandOn && insideBox(px));
+			setBand(on, on && !dotNear && edgeNear(px));
+		});
+		canvas.addEventListener("pointerleave", () => {
+			if (!draggingEdge && !state.dotDragging && !state.bandSticky) setBand(false, false);
+		});
+
 		canvas.addEventListener("pointerdown", (e) => {
 			const mode = yDragMode(select.value);
+			{
+				const { px, py } = canvasPointFromEvent(canvas, e);
+				const dotNear = dotNearPoint(px, py);
+				if (!dotNear && edgeNear(px)) {
+					e.preventDefault();
+					draggingEdge = true;
+					setBand(true, true);
+					try {
+						canvas.setPointerCapture(e.pointerId);
+					} catch {}
+					const onEdgeMove = (moveEvt) => {
+						const { px: mx } = canvasPointFromEvent(canvas, moveEvt);
+						// Whichever edge is held, the box is symmetric around the
+						// frequency (in octaves), so its half-width is the distance
+						// to the pointer.
+						const freqAtPointer = biquadXPixelToFreq(canvas.width, Math.max(0, Math.min(canvas.width, mx)));
+						const halfWidthOctaves = Math.abs(Math.log2(freqAtPointer / state.freq));
+						const q = bandwidthOctavesToQ(2 * halfWidthOctaves, state.freq, BIQUAD_SAMPLE_RATE);
+						state.Q = Math.round(Math.max(BIQUAD_Q_DRAG_MIN, Math.min(BIQUAD_Q_DRAG_MAX, q)) * 100) / 100;
+						this._redrawBiquadCanvas(canvas, state, select.value);
+						refreshChips(select.value);
+						const nodeNow = findNodeById(xmlStore.root, node.id);
+						if (!nodeNow) return;
+						this._commitAttributes(node.id, { ...nodeNow.attributes, Q: String(state.Q) });
+						if (nodeNow.attributes.id) applyLiveProperty(nodeNow.attributes.id, "Q", state.Q);
+					};
+					const onEdgeUp = () => {
+						canvas.removeEventListener("pointermove", onEdgeMove);
+						canvas.removeEventListener("pointerup", onEdgeUp);
+						canvas.removeEventListener("pointercancel", onEdgeUp);
+						draggingEdge = false;
+						// The box stays (the pointer is in it) unless this was a touch that
+						// isn't selecting the point.
+						setBand(state.bandSticky || e.pointerType !== "touch", false);
+					};
+					canvas.addEventListener("pointermove", onEdgeMove);
+					canvas.addEventListener("pointerup", onEdgeUp);
+					canvas.addEventListener("pointercancel", onEdgeUp);
+					return;
+				}
+				// Touch: a tap on the point selects it (the box stays); a tap somewhere
+				// else on the graph lets go of it again.
+				if (e.pointerType === "touch") {
+					if (dotNear) {
+						state.bandSticky = true;
+						setBand(true, false);
+					} else if (state.bandSticky) {
+						state.bandSticky = false;
+						setBand(false, false);
+					}
+				} else if (dotNear) {
+					setBand(true, false);
+				}
+				state.dotDragging = dotNear && !(isParamVarControlled(node, "frequency") || (mode === "gain" ? isParamVarControlled(node, "gain") : mode === "q" ? isParamVarControlled(node, "Q") : false));
+			}
 			// A var-controlled axis is locked against direct dragging (would
 			// just fight waxml.js's own Watcher) — the whole 2D handle is
 			// locked if either axis currently in play is, since a single
@@ -2194,9 +2305,12 @@ export class WaChainView extends HTMLElement {
 			const onUp = () => {
 				canvas.removeEventListener("pointermove", onMove);
 				canvas.removeEventListener("pointerup", onUp);
+				canvas.removeEventListener("pointercancel", onUp);
+				state.dotDragging = false;
 			};
 			canvas.addEventListener("pointermove", onMove);
 			canvas.addEventListener("pointerup", onUp);
+			canvas.addEventListener("pointercancel", onUp);
 		});
 
 		canvas.addEventListener(
@@ -2258,11 +2372,41 @@ export class WaChainView extends HTMLElement {
 		return biquadDbToYPixel(h, 0);
 	}
 
+	// The band's edges as x positions in the graph (null for a type that has
+	// no band): the frequencies half an octave-bandwidth either side of the
+	// centre, which for a peaking filter are exactly where the curve is half way
+	// to its peak (see qToBandwidthOctaves). Clipped to the graph.
+	_biquadBandEdges(type, state, w) {
+		if (!BIQUAD_BAND_TYPES.has(type)) return null;
+		const halfOctaves = qToBandwidthOctaves(state.Q, state.freq, BIQUAD_SAMPLE_RATE) / 2;
+		const clamp = (f) => Math.max(GRAPH_FREQ_MIN, Math.min(GRAPH_FREQ_MAX, f));
+		return {
+			xLo: biquadFreqToXPixel(w, clamp(state.freq * Math.pow(2, -halfOctaves))),
+			xHi: biquadFreqToXPixel(w, clamp(state.freq * Math.pow(2, halfOctaves)))
+		};
+	}
+
 	_redrawBiquadCanvas(canvas, state, type) {
 		const ctx = canvas.getContext("2d");
 		const w = canvas.width,
 			h = canvas.height;
 		ctx.clearRect(0, 0, w, h);
+
+		// The band box under everything else — only while it is wanted (see the
+		// card's pointer handlers); it brightens while its edges are hovered or dragged.
+		const edges = state.bandOn ? this._biquadBandEdges(type, state, w) : null;
+		if (edges) {
+			ctx.fillStyle = state.edgeHot ? "rgba(79, 163, 255, 0.18)" : "rgba(79, 163, 255, 0.09)";
+			ctx.fillRect(edges.xLo, 0, edges.xHi - edges.xLo, h);
+			ctx.strokeStyle = state.edgeHot ? "rgba(140, 200, 255, 0.95)" : "rgba(79, 163, 255, 0.5)";
+			ctx.lineWidth = state.edgeHot ? 2 : 1;
+			ctx.beginPath();
+			ctx.moveTo(edges.xLo, 0);
+			ctx.lineTo(edges.xLo, h);
+			ctx.moveTo(edges.xHi, 0);
+			ctx.lineTo(edges.xHi, h);
+			ctx.stroke();
+		}
 
 		ctx.strokeStyle = "#2a2d31";
 		ctx.lineWidth = 1;

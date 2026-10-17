@@ -156,3 +156,32 @@ export const BIQUAD_GAIN_TYPES = new Set(["peaking", "lowshelf", "highshelf"]);
 // Types whose Q affects the curve shape (shelving filters don't, per spec —
 // see SHELF_SLOPE above).
 export const BIQUAD_Q_TYPES = new Set(["lowpass", "highpass", "bandpass", "peaking", "notch", "allpass"]);
+
+// Types for which Q means a BANDWIDTH — a band around the frequency (peaking:
+// the band where the curve is more than half-way to its peak; bandpass/notch:
+// within 3 dB of it). The preview draws that band as a box with edges to drag
+// (see wa-chain-view.js). For lowpass/highpass Q is a resonance instead, and
+// allpass doesn't change the magnitude at all, so no band is drawn for those.
+export const BIQUAD_BAND_TYPES = new Set(["peaking", "bandpass", "notch"]);
+
+// The bandwidth in OCTAVES that goes with a Q at a centre frequency — the RBJ
+// Audio EQ Cookbook relation 1/Q = 2 sinh(ln2/2 · BW · w0/sin w0), which is exact
+// for these digital filters (the w0/sin w0 factor is the warping at high
+// frequencies). BW is the width between the frequencies where a peaking
+// filter has half of its gain in dB (and, for bandpass/notch, the -3 dB points).
+export function qToBandwidthOctaves(Q, freq, sampleRate) {
+	const w0 = bandW0(freq, sampleRate);
+	return (2 * Math.asinh(1 / (2 * Math.max(0.0001, Q))) * Math.sin(w0)) / (Math.LN2 * w0);
+}
+
+// ...and back: the Q that gives a bandwidth of `bw` octaves.
+export function bandwidthOctavesToQ(bw, freq, sampleRate) {
+	const w0 = bandW0(freq, sampleRate);
+	return 1 / (2 * Math.sinh(((Math.LN2 / 2) * Math.max(0, bw) * w0) / Math.sin(w0)));
+}
+
+function bandW0(freq, sampleRate) {
+	const f0 = Math.max(1, Math.min(sampleRate / 2 - 1, freq));
+	return (2 * Math.PI * f0) / sampleRate;
+}
+

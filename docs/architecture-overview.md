@@ -879,6 +879,21 @@ definition — bandpass är alltid ~0dB där, notch alltid en djup nolla,
 allpass har ingen amplitud-kurva alls) och behåller en enkel oberoende
 Q-skala istället.
 
+**Q som bandbreddsruta** (nytt, 2026-10-17, per Hans — efter Logic Pros EQ): för
+de typer där Q betyder bandbredd (peaking, bandpass, notch — `BIQUAD_BAND_TYPES`)
+ritas ett band runt frekvensen som en ruta; dras dess vänster- eller högerkant
+i sidled ändras Q och den andra kanten följer med (rutan är symmetrisk i
+oktaver). Rutan syns bara när pekaren är över punkten och blir kvar medan
+pekaren är inne i rutan (så kanterna går att nå) och medan punkten dras; med
+touch väljs punkten genom ett tryck (rutan blir kvar) och släpps med ett tryck
+någon annanstans på grafen. Kanterna ligger exakt där en peaking-kurva är
+halvvägs till sin topp (dB), bandpass/notch där de är 3 dB ner: Q ↔ bandbredd
+är RBJ-sambandet `1/Q = 2·sinh(ln2/2 · BW · w0/sin w0)` i `biquad-math.js`
+(`qToBandwidthOctaves`/`bandwidthOctavesToQ`), `node`-testat mot den faktiska
+frekvensresponsen (avvikelse < 0,02 oktav även vid 10 kHz). Lowpass/highpass
+(där Q är resonans) och allpass har ingen ruta och behåller sina gamla
+handtag. Samma kort används på Stage.
+
 ### Delade rattmoduler: samma drag-beteende och typad inmatning överallt (nytt, 2026-09-28/29)
 
 Två nya, delade `js/utils/`-moduler, framtvingade av upprepade buggrapporter

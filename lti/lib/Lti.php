@@ -62,7 +62,14 @@ final class Lti
         }
         $platform = $this->platformFor($issuer, $params['client_id'] ?? null);
         if (!$platform) {
-            throw new LtiException('This learning platform is not registered with this tool.');
+            // Says what arrived, to make a mismatch with the registration easy to see
+            // (an address and a number the platform itself sent; nothing secret).
+            $clientId = (string) ($params['client_id'] ?? '');
+            throw new LtiException(
+                'This learning platform is not registered with this tool. It said: issuer "' . mb_substr($issuer, 0, 120) . '"'
+                . ($clientId !== '' ? ', client id "' . mb_substr($clientId, 0, 60) . '"' : ', no client id')
+                . '. Compare with the platform on the control page (section 2).'
+            );
         }
         $this->purgeStates();
         $state = bin2hex(random_bytes(24));
@@ -356,7 +363,17 @@ final class Lti
             'Accept: application/json',
         ], $body);
         $ok = $response['status'] >= 200 && $response['status'] < 300;
-        return ['sent' => $ok, 'status' => $ok ? 'sent' : 'the gradebook answered ' . $response['status']];
+        return ['sent' => $ok, 'status' => $ok ? 'sent' : self::refusal('the gradebook answered ' . $response['status'], $response['body'])];
+    }
+
+    /**
+     * A refusal from the platform as one short line: what we did, and what the platform
+     * said about it (its own error text — nothing of ours — cut to fit the status column).
+     */
+    private static function refusal(string $what, string $body): string
+    {
+        $said = trim(preg_replace('/\s+/', ' ', strip_tags($body)));
+        return mb_substr($said === '' ? $what : "$what: $said", 0, 180);
     }
 
     /** The line item's /scores address (any query string stays at the end). */
@@ -387,7 +404,7 @@ final class Lti
         ], '', '&', PHP_QUERY_RFC3986));
         $data = json_decode($response['body'], true);
         if ($response['status'] !== 200 || !is_array($data) || empty($data['access_token'])) {
-            throw new LtiException('the platform did not give an access token (' . $response['status'] . ')');
+            throw new LtiException(self::refusal('the platform did not give an access token (' . $response['status'] . ')', $response['body']));
         }
         return (string) $data['access_token'];
     }

@@ -31,7 +31,8 @@ $pdo->prepare('INSERT INTO waw_lti_platforms (name, issuer, client_id, deploymen
 
 $requests = [];
 $jwksFetches = 0;
-$http = function (string $method, string $url, array $headers, ?string $body) use (&$requests, &$jwksFetches, $platformJwk) {
+$scoreResponse = ['status' => 200, 'body' => '{}']; // what the gradebook answers a score with
+$http = function (string $method, string $url, array $headers, ?string $body) use (&$requests, &$jwksFetches, &$scoreResponse, $platformJwk) {
     $requests[] = compact('method', 'url', 'headers', 'body');
     if ($url === 'https://canvas.example/jwks') {
         $jwksFetches++;
@@ -41,7 +42,7 @@ $http = function (string $method, string $url, array $headers, ?string $body) us
         return ['status' => 200, 'body' => json_encode(['access_token' => 'access-123', 'token_type' => 'Bearer', 'expires_in' => 3600])];
     }
     if (str_contains($url, '/scores')) {
-        return ['status' => 200, 'body' => '{}'];
+        return $scoreResponse;
     }
     return ['status' => 404, 'body' => ''];
 };
@@ -187,6 +188,13 @@ check('lti done: stored with only the values asked for', $sub['score'] == 10 && 
 
 $out = $lti->submit($token, ['B.frequency.number' => 100, 'A.frequency.number' => 400]);
 check('lti done: a bad result is scored too', $out['result']['score'] == 0.0 && $out['result']['passed'] === false);
+
+// When the gradebook refuses, the result stands and its own words say why.
+$scoreResponse = ['status' => 403, 'body' => '{"errors":{"type":"forbidden","message":"The tool may not post to this line item"}}'];
+$out = $lti->submit($token, ['B.frequency.number' => 410, 'A.frequency.number' => 400]);
+check('lti done: a refused score is reported with the platform\'s own message',
+    $out['result']['score'] == 10.0 && $out['ags']['sent'] === false && str_contains($out['ags']['status'], '403') && str_contains($out['ags']['status'], 'may not post to this line item') && mb_strlen($out['ags']['status']) <= 180);
+$scoreResponse = ['status' => 200, 'body' => '{}'];
 
 // A launch without a gradebook entry still scores, and says nothing was sent.
 [, $q5] = begin($lti);

@@ -6,6 +6,11 @@ namespace Waw;
 
 final class Http
 {
+    // Canvas refuses API requests without a User-Agent that says who is calling
+    // (its "403 Not Authorized … valid user agent" answer), so every request names
+    // the tool. Contact details can be added here if a platform asks for them.
+    public const USER_AGENT = 'WAW-LTI/1.0 (+https://waxml.org/waw/)';
+
     /** @return array{status: int, body: string} status 0 when the request itself failed */
     public static function request(string $method, string $url, array $headers = [], ?string $body = null): array
     {
@@ -19,6 +24,7 @@ final class Http
             CURLOPT_TIMEOUT => 15,
             CURLOPT_CONNECTTIMEOUT => 8,
             CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_USERAGENT => self::USER_AGENT,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
