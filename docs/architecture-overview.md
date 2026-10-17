@@ -1010,6 +1010,22 @@ redigeringshjälpmedel) och senare av LTI-lagret.
 - **Redigering:** `+ Heading`/`+ Instruction`, flytta via greppet, bredd via
   högerkanten, dubbelklick = redigera text (flikar: byta namn, duplicera,
   ta bort), Backspace = ta bort.
+- **Vad en betraktare får ändra** (nytt, 2026-10-17): ett `element`-item kan ha
+  `editable: [attribut…]` — de attribut den som ser sidan får ändra. Alla andra
+  kontroller (reglage, chips, rullgardiner, dragpunkter, Q-rutan) ritas inte alls,
+  inte bara låsta; saknas listan får betraktaren ändra allt, som förut. Kortet
+  läser det via `wa-chain-view` `setCardNode(id, { editable, publicLabels })` och
+  `_locked(attr)` i varje kortbyggare; `CARD_ATTRIBUTES` anger vilka attribut varje
+  korttyp har kontroller för (och därmed kryssrutorna). I Stage-panelen visar en
+  rad under flikarna kryssrutor för det markerade elementet (inget kryss = låst
+  och dolt); Stage-panelen visar alltså samma sak som eleven. Kurvor ritas som
+  vanligt (annars blir de obegripliga), men punkten på filterkurvan kan bara röra
+  sig längs de ändringsbara axlarna och siffror för låsta attribut visas inte.
+  Panner-kortet (3D) är bara en bild när varken `positionX` eller `positionZ` får
+  ändras, annars är hela 3D-vyn rörlig.
+- **Etiketter på Stage:** kortets id-text visar bara elementets egen `label` (aldrig
+  id); en knapp (Command) utan `label` visar bara sin ikon; en ratt (Var) utan
+  `label` visar inget namn (`public-labels` på `wa-var-knobs`).
 - **INPUT på Stage:** en INPUT-rad (kameran) kan läggas på scenen via greppet
   i raden (`input`-item: rad + Start/Stop-knapp + live-mätare). Raderna är
   projektinnehåll och sparas i `inputs.json` (`js/project/inputs-store.js`;

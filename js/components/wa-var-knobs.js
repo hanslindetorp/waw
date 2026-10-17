@@ -576,7 +576,9 @@ export class WaVarKnobs extends HTMLElement {
 
 		const nameLabel = document.createElement("div");
 		nameLabel.className = "var-name";
-		nameLabel.textContent = varName || "(no name)";
+		// On a page for other people (the Stage sets `public-labels`) the knob is named by the
+		// <Var>'s own `label` — its technical name is not shown.
+		nameLabel.textContent = this.hasAttribute("public-labels") ? node.attributes.label || "" : varName || "(no name)";
 		nameRow.appendChild(nameLabel);
 
 		// Arms/disarms the shared var-map-mode singleton (see

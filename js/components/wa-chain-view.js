@@ -1013,10 +1013,24 @@ export class WaChainView extends HTMLElement {
 	// never follows the selection. Same cards, same live editing, but no
 	// chain around them (no arrows, <Var> columns, reordering or keyboard
 	// delete). Pass null to go back to following the selection.
-	setCardNode(elementId) {
+	//
+	// For a page that is handed to other people (the Stage), two more things can be
+	// asked for: `editable` — the attributes a viewer may change; every other
+	// control is hidden, not just locked (null = no restriction) — and
+	// `publicLabels` — the card's small id text then only shows the element's own
+	// `label`, never its id. Per Hans (2026-10-17).
+	setCardNode(elementId, { editable = null, publicLabels = false } = {}) {
 		this._cardElementId = elementId || null;
+		this._cardEditable = Array.isArray(editable) ? new Set(editable) : null;
+		this._publicLabels = !!publicLabels;
 		this.toggleAttribute("card-only", !!this._cardElementId);
 		this._render();
+	}
+
+	// Whether the control for `attrName` is out of bounds for whoever looks at this
+	// card (see setCardNode's `editable`): it is then not drawn at all.
+	_locked(attrName) {
+		return !!this._cardElementId && !!this._cardEditable && !this._cardEditable.has(attrName);
 	}
 
 	_findElementByAttributeId(elementId) {
@@ -1654,7 +1668,7 @@ export class WaChainView extends HTMLElement {
 
 		const idLabel = document.createElement("span");
 		idLabel.className = "node-card-id";
-		idLabel.textContent = displayLabel(node);
+		idLabel.textContent = this._cardElementId && this._publicLabels ? node.attributes.label || "" : displayLabel(node);
 		header.appendChild(idLabel);
 		if (!this._cardElementId) header.appendChild(this._buildStagePin(node));
 
@@ -1702,6 +1716,7 @@ export class WaChainView extends HTMLElement {
 			select.appendChild(opt);
 		});
 		select.value = node.attributes[attrName] || defaultValue;
+		if (this._locked(attrName)) select.style.display = "none";
 		select.addEventListener("pointerdown", (e) => e.stopPropagation());
 		select.addEventListener("click", (e) => e.stopPropagation());
 		select.addEventListener("change", () => {
@@ -1723,6 +1738,7 @@ export class WaChainView extends HTMLElement {
 	_buildNumberField(node, attrName, unit) {
 		const row = document.createElement("div");
 		row.className = "field-row";
+		if (this._locked(attrName)) row.style.display = "none";
 		const label = document.createElement("span");
 		label.className = "field-label";
 		label.textContent = attrName;
@@ -1833,6 +1849,7 @@ export class WaChainView extends HTMLElement {
 	// _lockRemoteControlled) — the chip stays live for re-typing/re-mapping.
 	_buildSimpleKnob(node, attrName, min, max, labelText, formatFn, defaultValue, onChange) {
 		const { wrap, knob, dial } = this._buildKnobSkeleton(labelText, 24);
+		if (this._locked(attrName)) wrap.style.display = "none";
 		const applyVisual = (v) => this._applyKnobRotation(dial, v, min, max);
 
 		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName });
@@ -2007,6 +2024,7 @@ export class WaChainView extends HTMLElement {
 		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName: "gain" });
 		chip.classList.add("knob-value-label");
 		wrap.appendChild(chip);
+		if (this._locked("gain")) wrap.style.display = "none";
 		card.appendChild(wrap);
 
 		const applyVisual = (db) => {
@@ -2091,7 +2109,12 @@ export class WaChainView extends HTMLElement {
 		const state = {
 			freq: liveOrDefault("frequency", 1000),
 			Q: liveOrDefault("Q", 1),
-			gainDb: liveOrDefault("gain", 0) // BiquadFilterNode.gain is native dB
+			gainDb: liveOrDefault("gain", 0), // BiquadFilterNode.gain is native dB
+			// Whether the point on the curve is drawn at all for a type: a viewer who may change
+			// nothing it stands for (see setCardNode's `editable`) has no point to take hold of.
+			// (A point that can't be moved still is there when Q may change: it is where the
+			// band box comes from.) Set below, once yDragMode exists.
+			dotAllowed: () => true
 		};
 
 		// The curve's draggable point covers frequency (X, always) plus one
@@ -2102,6 +2125,12 @@ export class WaChainView extends HTMLElement {
 		// the two: dragging up *is* raising the curve) and Q stays
 		// scroll-only there. Per Hans (2026-09-28).
 		const yDragMode = (type) => (BIQUAD_GAIN_TYPES.has(type) ? "gain" : BIQUAD_Q_TYPES.has(type) ? "q" : null);
+		const canDragX = () => !this._locked("frequency");
+		const canDragY = (type) => {
+			const m = yDragMode(type);
+			return m === "gain" ? !this._locked("gain") : m === "q" ? !this._locked("Q") : false;
+		};
+		state.dotAllowed = (type) => canDragX() || canDragY(type) || (BIQUAD_BAND_TYPES.has(type) && !this._locked("Q"));
 
 		// Individually mappable/typeable value chips (js/utils/param-binding.js)
 		// for each attribute the curve draws — replaces the old plain-text info
@@ -2121,15 +2150,15 @@ export class WaChainView extends HTMLElement {
 			const freqLocked = isParamVarControlled(nodeNow, "frequency");
 			freqChip.el.classList.toggle("var-controlled", freqLocked);
 			freqChip.render(freqLocked ? nodeNow.attributes.frequency : `${formatValue(state.freq, 10000)} Hz`);
-			chipRow.appendChild(freqChip.el);
+			if (!this._locked("frequency")) chipRow.appendChild(freqChip.el);
 
-			if (BIQUAD_Q_TYPES.has(type)) {
+			if (BIQUAD_Q_TYPES.has(type) && !this._locked("Q")) {
 				const qLocked = isParamVarControlled(nodeNow, "Q");
 				qChip.el.classList.toggle("var-controlled", qLocked);
 				qChip.render(qLocked ? nodeNow.attributes.Q : `Q ${formatValue(state.Q, 100)}`);
 				chipRow.appendChild(qChip.el);
 			}
-			if (BIQUAD_GAIN_TYPES.has(type)) {
+			if (BIQUAD_GAIN_TYPES.has(type) && !this._locked("gain")) {
 				const gainLocked = isParamVarControlled(nodeNow, "gain");
 				gainChip.el.classList.toggle("var-controlled", gainLocked);
 				gainChip.render(gainLocked ? nodeNow.attributes.gain : `${formatValue(state.gainDb, 100)} dB`);
@@ -2137,7 +2166,7 @@ export class WaChainView extends HTMLElement {
 			}
 			// Only "peaking" has both a draggable gain *and* a Q — Q has no
 			// drag axis left there, so it stays scroll-only (see yDragMode).
-			if (BIQUAD_GAIN_TYPES.has(type) && BIQUAD_Q_TYPES.has(type)) {
+			if (BIQUAD_GAIN_TYPES.has(type) && BIQUAD_Q_TYPES.has(type) && !this._locked("Q")) {
 				const scrollHint = document.createElement("span");
 				scrollHint.textContent = BIQUAD_BAND_TYPES.has(type) ? "(drag a box edge or scroll = Q)" : "(scroll = Q)";
 				chipRow.appendChild(scrollHint);
@@ -2167,10 +2196,11 @@ export class WaChainView extends HTMLElement {
 		let draggingEdge = false;
 		const DOT_HIT_PX = 16;
 		const dotNearPoint = (px, py) =>
+			state.dotAllowed(select.value) &&
 			Math.hypot(px - biquadFreqToXPixel(canvas.width, state.freq), py - this._biquadHandleY(select.value, state, canvas.height)) <= DOT_HIT_PX;
 		const edgeNear = (px) => {
 			const edges = this._biquadBandEdges(select.value, state, canvas.width);
-			if (!edges || !state.bandOn || isParamVarControlled(node, "Q")) return false;
+			if (!edges || !state.bandOn || isParamVarControlled(node, "Q") || this._locked("Q")) return false;
 			return Math.abs(px - edges.xLo) <= BIQUAD_BAND_EDGE_HIT_PX || Math.abs(px - edges.xHi) <= BIQUAD_BAND_EDGE_HIT_PX;
 		};
 		const insideBox = (px) => {
@@ -2179,7 +2209,8 @@ export class WaChainView extends HTMLElement {
 		};
 		// Sets what the box shows and redraws if it changed.
 		const setBand = (on, edgeHot) => {
-			if (!BIQUAD_BAND_TYPES.has(select.value)) on = edgeHot = false;
+			// no box for a type without a band, nor when Q is out of bounds (the box is only for changing Q)
+			if (!BIQUAD_BAND_TYPES.has(select.value) || this._locked("Q")) on = edgeHot = false;
 			if (!!state.bandOn === on && !!state.edgeHot === edgeHot) return;
 			state.bandOn = on;
 			state.edgeHot = edgeHot;
@@ -2252,7 +2283,12 @@ export class WaChainView extends HTMLElement {
 				} else if (dotNear) {
 					setBand(true, false);
 				}
-				state.dotDragging = dotNear && !(isParamVarControlled(node, "frequency") || (mode === "gain" ? isParamVarControlled(node, "gain") : mode === "q" ? isParamVarControlled(node, "Q") : false));
+				state.dotDragging =
+					dotNear &&
+					(canDragX() || canDragY(select.value)) &&
+					!(isParamVarControlled(node, "frequency") || (mode === "gain" ? isParamVarControlled(node, "gain") : mode === "q" ? isParamVarControlled(node, "Q") : false));
+				// Nothing about the point may be changed by this viewer: it only shows the box.
+				if (dotNear && !canDragX() && !canDragY(select.value)) return;
 			}
 			// A var-controlled axis is locked against direct dragging (would
 			// just fight waxml.js's own Watcher) — the whole 2D handle is
@@ -2274,8 +2310,10 @@ export class WaChainView extends HTMLElement {
 
 			const onMove = (moveEvt) => {
 				const { px: mx, py: my } = canvasPointFromEvent(canvas, moveEvt);
-				state.freq = Math.max(GRAPH_FREQ_MIN, Math.min(GRAPH_FREQ_MAX, biquadXPixelToFreq(canvas.width, mx)));
-				if (BIQUAD_EXACT_CENTER_TYPES.has(select.value)) {
+				if (canDragX()) state.freq = Math.max(GRAPH_FREQ_MIN, Math.min(GRAPH_FREQ_MAX, biquadXPixelToFreq(canvas.width, mx)));
+				if (!canDragY(select.value)) {
+					// only the frequency may change
+				} else if (BIQUAD_EXACT_CENTER_TYPES.has(select.value)) {
 					// The dot sits exactly on the curve for these 5 types (see
 					// BIQUAD_EXACT_CENTER_TYPES) — solve the exact inverse so it
 					// also stays exactly under the cursor while dragging.
@@ -2292,14 +2330,15 @@ export class WaChainView extends HTMLElement {
 
 				const nodeNow = findNodeById(xmlStore.root, node.id);
 				if (!nodeNow) return;
-				const patch = { ...nodeNow.attributes, frequency: String(Math.round(state.freq)) };
-				if (mode === "gain") patch.gain = formatGainAttribute(node.tagName, state.gainDb);
-				else if (mode === "q") patch.Q = String(Math.round(state.Q * 10) / 10);
+				const patch = { ...nodeNow.attributes };
+				if (canDragX()) patch.frequency = String(Math.round(state.freq));
+				if (canDragY(select.value) && mode === "gain") patch.gain = formatGainAttribute(node.tagName, state.gainDb);
+				else if (canDragY(select.value) && mode === "q") patch.Q = String(Math.round(state.Q * 10) / 10);
 				this._commitAttributes(node.id, patch);
 				if (nodeNow.attributes.id) {
-					applyLiveProperty(nodeNow.attributes.id, "frequency", state.freq);
-					if (mode === "gain") applyLiveProperty(nodeNow.attributes.id, "gain", formatGainAttribute(node.tagName, state.gainDb));
-					else if (mode === "q") applyLiveProperty(nodeNow.attributes.id, "Q", state.Q);
+					if (canDragX()) applyLiveProperty(nodeNow.attributes.id, "frequency", state.freq);
+					if (canDragY(select.value) && mode === "gain") applyLiveProperty(nodeNow.attributes.id, "gain", formatGainAttribute(node.tagName, state.gainDb));
+					else if (canDragY(select.value) && mode === "q") applyLiveProperty(nodeNow.attributes.id, "Q", state.Q);
 				}
 			};
 			const onUp = () => {
@@ -2316,7 +2355,7 @@ export class WaChainView extends HTMLElement {
 		canvas.addEventListener(
 			"wheel",
 			(e) => {
-				if (!BIQUAD_Q_TYPES.has(select.value) || isParamVarControlled(node, "Q")) return;
+				if (!BIQUAD_Q_TYPES.has(select.value) || isParamVarControlled(node, "Q") || this._locked("Q")) return;
 				e.preventDefault();
 				state.Q = Math.max(0.1, Math.min(20, state.Q - e.deltaY * 0.01));
 				this._redrawBiquadCanvas(canvas, state, select.value);
@@ -2432,15 +2471,17 @@ export class WaChainView extends HTMLElement {
 		});
 		ctx.stroke();
 
-		const hx = biquadFreqToXPixel(w, state.freq);
-		const hy = this._biquadHandleY(type, state, h);
-		ctx.fillStyle = "#4fa3ff";
-		ctx.beginPath();
-		ctx.arc(hx, hy, 4, 0, Math.PI * 2);
-		ctx.fill();
-		ctx.strokeStyle = "rgba(255,255,255,0.7)";
-		ctx.lineWidth = 1;
-		ctx.stroke();
+		if (state.dotAllowed(type)) {
+			const hx = biquadFreqToXPixel(w, state.freq);
+			const hy = this._biquadHandleY(type, state, h);
+			ctx.fillStyle = "#4fa3ff";
+			ctx.beginPath();
+			ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+			ctx.fill();
+			ctx.strokeStyle = "rgba(255,255,255,0.7)";
+			ctx.lineWidth = 1;
+			ctx.stroke();
+		}
 	}
 
 	// --- DynamicsCompressorNode: classic transfer curve + knobs for the rest ---
@@ -2484,8 +2525,9 @@ export class WaChainView extends HTMLElement {
 			ratioChip.el.classList.toggle("var-controlled", ratioLocked());
 			ratioChip.render(ratioLocked() ? nodeNow.attributes.ratio : `${formatValue(state.ratio, 100)}:1`);
 		};
-		chipRow.append(thresholdChip.el, ratioChip.el);
-		card.appendChild(chipRow);
+		if (!this._locked("threshold")) chipRow.append(thresholdChip.el);
+		if (!this._locked("ratio")) chipRow.append(ratioChip.el);
+		if (chipRow.children.length) card.appendChild(chipRow);
 		refreshChips();
 
 		canvas.addEventListener("pointerdown", (e) => {
@@ -2503,8 +2545,8 @@ export class WaChainView extends HTMLElement {
 			// A var-controlled handle is locked against dragging (see
 			// wa-chain-view.js's other cards for the same reasoning) — type
 			// into or Map the chip instead.
-			if (mode === "threshold" && thresholdLocked()) return;
-			if (mode === "ratio" && ratioLocked()) return;
+			if (mode === "threshold" && (thresholdLocked() || this._locked("threshold"))) return;
+			if (mode === "ratio" && (ratioLocked() || this._locked("ratio"))) return;
 			e.preventDefault();
 			try {
 				canvas.setPointerCapture(e.pointerId);
@@ -2635,6 +2677,7 @@ export class WaChainView extends HTMLElement {
 
 		const HANDLES = ["p0", "c1", "c2", "p3"];
 		canvas.addEventListener("pointerdown", (e) => {
+			if (this._locked("curveBezier")) return;
 			const { px, py } = canvasPointFromEvent(canvas, e);
 			let hit = null;
 			for (const key of HANDLES) {
@@ -2847,8 +2890,10 @@ export class WaChainView extends HTMLElement {
 			maxDbChip.render(`${formatValue(readNum(nodeNow, "maxDecibels", -30), 200)} dB`);
 			smoothChip.render(`smooth ${formatValue(readNum(nodeNow, "smoothingTimeConstant", ANALYSER_DEFAULT_SMOOTHING), 1)}`);
 		};
-		chipRow.append(minDbChip.el, maxDbChip.el, smoothChip.el);
-		card.appendChild(chipRow);
+		if (!this._locked("minDecibels")) chipRow.append(minDbChip.el);
+		if (!this._locked("maxDecibels")) chipRow.append(maxDbChip.el);
+		if (!this._locked("smoothingTimeConstant")) chipRow.append(smoothChip.el);
+		if (chipRow.children.length) card.appendChild(chipRow);
 		refreshChips();
 
 		applySettings();
@@ -3047,6 +3092,9 @@ export class WaChainView extends HTMLElement {
 		const view = document.createElement("wa-panner-view");
 		card.appendChild(view);
 		view.setPrimaryNode(node.id);
+		// The 3D view moves the position as a whole (x and z by dragging the speaker): when
+		// neither may change for this viewer, it is only a picture.
+		if (this._locked("positionX") && this._locked("positionZ")) view.style.pointerEvents = "none";
 		return card;
 	}
 }
@@ -3064,6 +3112,20 @@ const NODE_BUILDERS = {
 };
 
 export const SUPPORTED_CHAIN_NODE_TAGS = new Set(Object.keys(NODE_BUILDERS));
+
+// The attributes a card has a control for, per element — what a Stage item can
+// give a viewer the right to change (see setCardNode's `editable`).
+export const CARD_ATTRIBUTES = {
+	OscillatorNode: ["type", "frequency", "detune"],
+	BiquadFilterNode: ["type", "frequency", "Q", "gain"],
+	GainNode: ["gain"],
+	DynamicsCompressorNode: ["threshold", "ratio", "knee", "attack", "release"],
+	WaveShaperNode: ["oversample", "curveBezier"],
+	StereoPannerNode: ["pan"],
+	DelayNode: ["delayTime"],
+	AnalyserNode: ["fftSize", "minDecibels", "maxDecibels", "smoothingTimeConstant"],
+	PannerNode: ["positionX", "positionZ"]
+};
 stageStore.setElementTags(SUPPORTED_CHAIN_NODE_TAGS);
 
 customElements.define("wa-chain-view", WaChainView);

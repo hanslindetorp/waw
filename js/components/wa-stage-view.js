@@ -11,7 +11,7 @@ import { runAssessment } from "../assessment/run.js";
 import { showAssessmentResult } from "./wa-assessment-result.js";
 import "./wa-assessment-editor.js";
 import "./wa-var-knobs.js";
-import "./wa-chain-view.js";
+import { CARD_ATTRIBUTES } from "./wa-chain-view.js";
 
 // The Stage panel: a flat page (see project/stage-store.js) with headings,
 // instructions and chosen objects from the audio graph at x/y positions on a
@@ -158,6 +158,31 @@ template.innerHTML = `
 		}
 		.tab-add:hover {
 			color: var(--waw-accent, #4fa3ff);
+		}
+		/* What the viewer of the selected element may change (see item.editable). */
+		.item-settings {
+			flex: 0 0 auto;
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 0.3rem 0.9rem;
+			padding: 0.35rem 0.6rem;
+			font-size: 0.72rem;
+			border-bottom: 1px solid var(--waw-border, #2f2f2f);
+			background: rgba(79, 163, 255, 0.06);
+		}
+		.item-settings[hidden],
+		:host([readonly]) .item-settings {
+			display: none;
+		}
+		.item-settings label {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.25rem;
+			cursor: pointer;
+		}
+		.item-settings .settings-hint {
+			color: var(--waw-muted, #8a8a8a);
 		}
 		.viewport {
 			flex: 1 1 auto;
@@ -391,6 +416,7 @@ template.innerHTML = `
 		<button type="button" data-assess="test" title="Try the assessment on the page as it is now">Test run</button>
 	</div>
 	<div class="tabs"></div>
+	<div class="item-settings" hidden></div>
 	<div class="viewport">
 		<div class="scaler"><div class="stage"></div></div>
 	</div>
@@ -403,6 +429,7 @@ export class WaStageView extends HTMLElement {
 		this.attachShadow({ mode: "open" });
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 		this._tabs = this.shadowRoot.querySelector(".tabs");
+		this._itemSettings = this.shadowRoot.querySelector(".item-settings");
 		this._drawer = this.shadowRoot.querySelector(".drawer");
 		this._assessmentEditor = this.shadowRoot.querySelector("wa-assessment-editor");
 		this._viewport = this.shadowRoot.querySelector(".viewport");
@@ -613,6 +640,43 @@ export class WaStageView extends HTMLElement {
 		if (this._selectedId === id) return;
 		this._selectedId = id;
 		this._stage.querySelectorAll(".item").forEach((el) => el.classList.toggle("selected", el.dataset.item === id));
+		this._renderItemSettings();
+	}
+
+	// For a selected element: a tick box for each attribute it has a control for — the ones
+	// ticked are what a viewer of the page may change; the rest is locked and not shown. An item
+	// without a list at all (made before this existed) lets the viewer change everything.
+	_renderItemSettings() {
+		const bar = this._itemSettings;
+		bar.innerHTML = "";
+		const item = this._selectedId ? (this._shownView()?.items || []).find((i) => i.id === this._selectedId) : null;
+		const node = item && item.type === "element" ? this._findByAttributeId(item.ref) : null;
+		const attrs = node ? CARD_ATTRIBUTES[node.tagName] : null;
+		if (this.readonly || !attrs) {
+			bar.hidden = true;
+			return;
+		}
+		bar.hidden = false;
+		const title = document.createElement("span");
+		title.textContent = "A viewer may change:";
+		bar.appendChild(title);
+		attrs.forEach((attr) => {
+			const label = document.createElement("label");
+			const box = document.createElement("input");
+			box.type = "checkbox";
+			box.checked = !Array.isArray(item.editable) || item.editable.includes(attr);
+			box.addEventListener("change", () => {
+				const current = Array.isArray(item.editable) ? item.editable : attrs;
+				const next = box.checked ? [...new Set([...current, attr])] : current.filter((a) => a !== attr);
+				stageStore.updateItem(item.id, { editable: attrs.filter((a) => next.includes(a)) });
+			});
+			label.append(box, document.createTextNode(attr));
+			bar.appendChild(label);
+		});
+		const hint = document.createElement("span");
+		hint.className = "settings-hint";
+		hint.textContent = "Unticked = locked and hidden.";
+		bar.appendChild(hint);
 	}
 
 	_onKeyDown(e) {
@@ -672,6 +736,7 @@ export class WaStageView extends HTMLElement {
 		this._lastRefSignature = this._refSignature();
 		this._itemObserver.disconnect();
 		this._renderTabs();
+		this._renderItemSettings();
 		if (!this.readonly) this._assessmentEditor.setViewId(stageStore.currentViewId);
 		this._stage.innerHTML = "";
 		const view = this._shownView();
@@ -827,6 +892,7 @@ export class WaStageView extends HTMLElement {
 			case "var": {
 				const knobs = document.createElement("wa-var-knobs");
 				knobs.toggleAttribute("hide-map", this.readonly);
+				knobs.setAttribute("public-labels", "");
 				knobs.setOnlyElementId(item.ref);
 				return knobs;
 			}
@@ -834,7 +900,7 @@ export class WaStageView extends HTMLElement {
 				return this._buildInput(item);
 			case "element": {
 				const card = document.createElement("wa-chain-view");
-				card.setCardNode(item.ref);
+				card.setCardNode(item.ref, { editable: Array.isArray(item.editable) ? item.editable : null, publicLabels: true });
 				return card;
 			}
 		}
@@ -950,8 +1016,12 @@ export class WaStageView extends HTMLElement {
 		glyph.textContent = type === "set" ? "=" : type === "stop" ? "■" : "▶";
 		const label = document.createElement("span");
 		const value = cmd.attributes.value ?? "";
-		label.textContent =
-			cmd.attributes.label || (type === "set" ? `${cmd.attributes.variable}=${value}` : String(value).replace(/^[.#]/, ""));
+		// The button says what its `label` says; without one it is just its icon — the
+		// technical selector ("chA") is nothing for a viewer to read. (The author can still
+		// see what it does: the tooltip.)
+		label.textContent = cmd.attributes.label || "";
+		btn.title = !this.readonly && !cmd.attributes.label ? (type === "set" ? `${cmd.attributes.variable}=${value}` : `${type}(${value})`) : cmd.attributes.label || "";
+		if (!label.textContent) label.hidden = true;
 		btn.append(label, glyph);
 		btn.addEventListener("click", () => {
 			btn.classList.remove("blink");
