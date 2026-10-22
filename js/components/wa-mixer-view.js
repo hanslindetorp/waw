@@ -1,5 +1,4 @@
 import { xmlStore } from "../xml-editor/xml-store.js";
-import { withEngineDefaults } from "../xml-editor/default-attributes.js";
 import * as ops from "../xml-editor/xml-tree-ops.js";
 import { playerStore } from "../waxml-integration/player-store.js";
 import { applyLiveProperty, applyLiveMethodCall, getLiveProperty } from "../waxml-integration/live-property.js";
@@ -18,6 +17,7 @@ import { isPreviewableAudioFile } from "./wa-file-preview.js";
 import {
 	parseGainAttributeToDb,
 	formatGainAttribute,
+	gainAsDbString,
 	isDbNativeGain,
 	dbToLinearRatio,
 	EQ_GAIN_MIN_DB as EQ_MIN_DB,
@@ -223,6 +223,14 @@ const CAMERA_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none"
 // based generators (AudioBufferSourceNode, AmbientAudio, ...).
 const SINE_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12c2.5-8 5.5-8 8 0s5.500 8 8 0 3-5 4-4"/></svg>`;
 const WAVE_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 10v4M7 7v10M11 4v16M15 8v8M19 6v12M22 11v2"/></svg>`;
+// The parameters a Snapshot captures: the continuous ones (AudioParams), whose
+// values can be stored as numbers and glided to by transitionTime.
+const SNAPSHOT_CONTINUOUS_PARAMS = new Set([
+	"gain", "frequency", "detune", "Q", "pan", "delayTime", "threshold", "knee", "ratio", "attack", "release",
+	"positionX", "positionY", "positionZ", "orientationX", "orientationY", "orientationZ",
+	// a PannerNode's plain numeric properties (waxml.js has setters for them)
+	"refDistance", "rolloffFactor", "coneInnerAngle", "coneOuterAngle", "coneOuterGain"
+]);
 const SNAPSHOT_ITEM_W = 86; // a snapshot cell: as wide as the master strip's content
 const SNAPSHOT_ITEM_H = 22;
 const SNAPSHOT_GAP = 3;
@@ -1569,6 +1577,10 @@ export class WaMixerView extends HTMLElement {
 		// back to "lit" off a stale/default (unity-gain) getChannelGain()
 		// reading on the next frame.
 		this._soloActive = false;
+		// The <Mixer>'s own attributes selected as pseudo-parts of this view
+		// ("solo", "blend", "transitionTime"): not elements, so they're held
+		// here, and a Snapshot captures the ones selected (see _createSnapshot).
+		this._mixerParts = new Set();
 		// Set around every xmlStore.updateAttributes call fired from a knob/
 		// fader's own continuous drag (see _commitAttributes) — xmlStore's
 		// "change" event fires synchronously, and without this guard the
@@ -1614,6 +1626,12 @@ export class WaMixerView extends HTMLElement {
 		document.addEventListener("keydown", this._onKeyDown);
 		this._wireSoloSliderDrag();
 		this._quantizeSelect.addEventListener("change", () => this._handleQuantizeChange());
+		this._wireMixerPart(this._miniSliders.children[0], "blend", ".mini-slider");
+		this._wireMixerPart(this._miniSliders.children[1], "transitionTime", ".mini-slider");
+		this._wireMixerPart(this._soloTrack, "solo", ".solo-slider-handle");
+		this._miniSliders.children[0].title = "Click to select Blend (for a Snapshot); Cmd/Ctrl-click to add to the selection";
+		this._miniSliders.children[1].title = "Click to select Transition time (for a Snapshot); Cmd/Ctrl-click to add to the selection";
+		this._soloTrack.title = "Click to select Solo (for a Snapshot); Cmd/Ctrl-click to add to the selection";
 		this._blendSlider.addEventListener("input", () => this._handleBlendInput());
 		this._transitionSlider.addEventListener("input", () => this._handleTransitionInput());
 		// .mixer-body is the actual (single, shared) scroll container now —
@@ -1938,7 +1956,7 @@ export class WaMixerView extends HTMLElement {
 		if (this._isLocalEdit) return;
 		const sig = this._selectionSig();
 		if (sig !== this._lastSelectionSig) {
-			if (!this._ownSelect) this._soloSelected = false;
+			if (!this._ownSelect) this._mixerParts.clear();
 			this._lastSelectionSig = sig;
 		}
 		const selected = xmlStore.getSelectedNode();
@@ -1989,8 +2007,8 @@ export class WaMixerView extends HTMLElement {
 		this.shadowRoot.querySelectorAll("[data-part-id]").forEach((el) => {
 			el.classList.toggle("part-selected", this._isNodeSelected(el.dataset.partId));
 		});
-		this.shadowRoot.querySelectorAll("[data-part-solo]").forEach((el) => {
-			el.classList.toggle("part-selected", !!this._soloSelected);
+		this.shadowRoot.querySelectorAll("[data-part-mixer]").forEach((el) => {
+			el.classList.toggle("part-selected", this._mixerParts.has(el.dataset.partMixer));
 		});
 	}
 
@@ -2013,17 +2031,19 @@ export class WaMixerView extends HTMLElement {
 		if (!selectedId || !this._activeMixerId) return;
 		const mixerNode = ops.findNodeById(xmlStore.root, this._activeMixerId);
 		if (!mixerNode) return;
-		// A selected Solo takes the <Mixer>'s `solo` attribute with it — the
-		// Mixer itself stays.
-		const removeSolo = this._soloSelected && mixerNode.attributes.solo !== undefined;
-		if (this._soloSelected) {
+		// A selected Solo (or blend, transition time) takes the <Mixer>'s own
+		// attribute with it — the Mixer itself stays.
+		if (this._mixerParts.size) {
 			e.preventDefault();
-			this._soloSelected = false;
-			if (removeSolo) {
-				const attrs = { ...mixerNode.attributes };
-				delete attrs.solo;
-				xmlStore.updateAttributes(mixerNode.id, attrs);
+			const attrs = { ...mixerNode.attributes };
+			let removed = false;
+			for (const name of this._mixerParts) {
+				if (attrs[name] === undefined) continue;
+				delete attrs[name];
+				removed = true;
 			}
+			this._mixerParts.clear();
+			if (removed) xmlStore.updateAttributes(mixerNode.id, attrs);
 		}
 		// Everything selected inside this Mixer — one strip or several — goes
 		// in one gesture, per Hans (2026-10-09). The Mixer itself never does
@@ -2337,21 +2357,17 @@ export class WaMixerView extends HTMLElement {
 		});
 		if (!this._soloLocked) this._soloHandle.classList.remove("remote-controlled");
 
-		// The blend/transitionTime mini-sliders configure the big solo
-		// slider's crossfade — pointless with fewer than two channels, same
-		// threshold as that slider's own visibility. The matching blank
-		// .mini-sliders-row-spacer in every channel strip has to hide right
-		// along with it, or row-labels and each bottom-group's total content
-		// height stop matching and Pan/Vol/ON/Solo drift out of alignment.
-		// Faded (not hidden) whenever solo itself isn't currently engaged —
-		// per Hans, clearing solo should visibly fade these right along with
-		// the big slider and the per-channel lamps, since none of them mean
-		// anything until a solo position exists again.
-		const showMiniSliders = totalCount >= 2;
-		this._miniSliders.style.display = showMiniSliders ? "" : "none";
+		// The blend/transitionTime mini-sliders are always shown and usable,
+		// even with no or one channel (per Hans, 2026-10-22; they used to need
+		// two, like the big solo slider, which still does). Faded (not hidden)
+		// whenever solo itself isn't currently engaged — per Hans, clearing
+		// solo should visibly fade these right along with the big slider and
+		// the per-channel lamps, since none of them mean anything until a solo
+		// position exists again.
+		this._miniSliders.style.display = "";
 		this._miniSliders.classList.toggle("solo-inactive", !hasSolo);
 		this.shadowRoot.querySelectorAll(".channel-strip .mini-sliders-row-spacer").forEach((el) => {
-			el.style.display = showMiniSliders ? "" : "none";
+			el.style.display = "";
 		});
 
 		this._quantizeSelect.value = mixerNode.attributes.quantize || "";
@@ -2367,6 +2383,7 @@ export class WaMixerView extends HTMLElement {
 		this._updateSoloSliderGeometry();
 		this._lastRenderedRoot = xmlStore.root;
 		this._lastRenderedMixerId = this._activeMixerId;
+		this._updateSelectionHighlight(); // the static controls (blend, transition, solo handle) are parts too
 	}
 
 	// --- "+" channel-type picker ---
@@ -2571,8 +2588,8 @@ export class WaMixerView extends HTMLElement {
 		const btn = document.createElement("button");
 		btn.type = "button";
 		btn.className = "solo-btn part";
-		btn.dataset.partSolo = "";
-		if (this._soloSelected) btn.classList.add("part-selected");
+		btn.dataset.partMixer = "solo";
+		if (this._mixerParts.has("solo")) btn.classList.add("part-selected");
 		btn.title = `Solo: ${displayLabel(child)}`;
 		btn.dataset.channelIndex = String(index);
 		const lamp = document.createElement("span");
@@ -2689,7 +2706,7 @@ export class WaMixerView extends HTMLElement {
 		strip.addEventListener(
 			"pointerdown",
 			(e) => {
-				if (e.altKey && e.target.closest?.("[data-part-id], [data-part-solo]")) e.stopPropagation();
+				if (e.altKey && e.target.closest?.("[data-part-id], [data-part-mixer]")) e.stopPropagation();
 			},
 			true
 		);
@@ -2697,7 +2714,7 @@ export class WaMixerView extends HTMLElement {
 			"click",
 			(e) => {
 				if (!e.altKey) return;
-				const part = e.target.closest?.("[data-part-id], [data-part-solo]");
+				const part = e.target.closest?.("[data-part-id], [data-part-mixer]");
 				if (!part) return;
 				e.preventDefault();
 				e.stopPropagation();
@@ -2705,6 +2722,22 @@ export class WaMixerView extends HTMLElement {
 			},
 			true
 		);
+	}
+
+	// Makes one of the <Mixer>'s own controls selectable on its own, like the
+	// parts of a strip, so a Snapshot can capture it: a plain click on the
+	// control's surroundings selects it (the icon beside a mini slider, the
+	// solo slider's track — not the slider or handle itself, which operate
+	// it), Cmd/Ctrl-click adds it to or removes it from the selection.
+	// `operable` is the part that does the work and must keep its own clicks.
+	_wireMixerPart(el, name, operable) {
+		el.dataset.partMixer = name;
+		el.classList.add("part");
+		el.addEventListener("click", (e) => {
+			if (e.target.closest(operable)) return;
+			e.stopPropagation();
+			this._selectPart(el, e);
+		});
 	}
 
 	// Marks a strip element as the selectable face of an XML node (see
@@ -2722,7 +2755,7 @@ export class WaMixerView extends HTMLElement {
 	// from outside clears it too (see _onStoreChange).
 	_withOwnSelect(fn, clearSolo = true) {
 		this._ownSelect = true;
-		if (clearSolo) this._soloSelected = false;
+		if (clearSolo) this._mixerParts.clear();
 		try {
 			fn();
 		} finally {
@@ -2737,19 +2770,20 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	// Plain: select just this part. Cmd/Ctrl: toggle it in or out of the
-	// selection. "Solo" isn't an element but the <Mixer>'s own `solo`
-	// attribute (one position for the whole Mixer), so it is a pseudo-part held
-	// in this view: selecting it also selects the <Mixer> in the XML editor,
-	// and Backspace removes the attribute.
+	// selection. "Solo", "blend" and "transitionTime" aren't elements but the
+	// <Mixer>'s own attributes (one value for the whole Mixer), so they are
+	// pseudo-parts held in this view: selecting one also selects the <Mixer>
+	// in the XML editor, and Backspace removes the attribute.
 	_selectPart(el, e) {
 		const toggle = e.metaKey || e.ctrlKey;
-		if (el.dataset.partSolo !== undefined) {
+		const mixerPart = el.dataset.partMixer;
+		if (mixerPart) {
 			if (toggle) {
-				this._soloSelected = !this._soloSelected;
+				if (!this._mixerParts.delete(mixerPart)) this._mixerParts.add(mixerPart);
 				this._updateSelectionHighlight();
 			} else {
 				this._withOwnSelect(() => xmlStore.selectNode(this._activeMixerId), true);
-				this._soloSelected = true;
+				this._mixerParts.add(mixerPart);
 				this._updateSelectionHighlight();
 			}
 			return;
@@ -2984,9 +3018,11 @@ export class WaMixerView extends HTMLElement {
 
 	// transitionTime in seconds for `node`: its own, else the nearest
 	// ancestor's; 0 (= jump) when none of them has a numeric one.
-	_effectiveTransitionSeconds(node) {
+	// `pending` (node id -> attributes about to be written) lets a snapshot's
+	// own transitionTime count before the document has it.
+	_effectiveTransitionSeconds(node, pending) {
 		for (let n = node; n; n = n.parent ? ops.findNodeById(xmlStore.root, n.parent) : null) {
-			const raw = n.attributes.transitionTime;
+			const raw = (pending?.get(n.id) ?? n.attributes).transitionTime;
 			if (raw === undefined) continue;
 			const ms = parseFloat(raw);
 			return Number.isFinite(ms) && /^\s*\d+(\.\d+)?\s*$/.test(String(raw)) ? Math.max(0, ms) / 1000 : 0;
@@ -3015,9 +3051,12 @@ export class WaMixerView extends HTMLElement {
 		// new one starts from, not the (already final) XML value.
 		const reached = prev ? prev.current : new Map();
 		const tracks = []; // animated numeric attributes
+		const pending = new Map(edits.map((e) => [e.node.id, e.attributes]));
 		for (const e of edits) {
-			const tau = this._effectiveTransitionSeconds(e.node);
+			// The snapshot's own transitionTime (if it sets one) wins over what the element had.
+			const tau = this._effectiveTransitionSeconds(e.node, pending);
 			for (const [attr, raw] of Object.entries(e.changed)) {
+				if (attr === "transitionTime") continue; // sets the glide's duration, isn't a value that glides
 				const key = `${e.node.id}:${attr}`;
 				const target = this._engineValue(e.node, attr, raw);
 				const start = reached.has(key) ? reached.get(key) : this._engineValue(e.node, attr, e.previous[attr]);
@@ -3092,19 +3131,27 @@ export class WaMixerView extends HTMLElement {
 	// volume, a send, ...) — plus the <Mixer>'s `solo` when Solo is selected.
 	// With nothing of that kind selected it asks, then captures every channel.
 	// Snapshots always sit first in the <Mixer>, in creation order, ahead of
-	// the channels. Per Hans (2026-10-09). id/class/label are skipped: they
-	// name the element rather than describe a state a "set" could restore.
+	// the channels. Per Hans (2026-10-09). Only continuous parameters are
+	// captured (SNAPSHOT_CONTINUOUS_PARAMS, plain numbers or dB): not names,
+	// enums (a filter's type), routing or switches, which a "set" can't glide
+	// to and the engine can't take as a number. Only values written on the
+	// element count (no engine defaults filled in), a selected strip's own
+	// values come before its elements' (so a strip-wide transitionTime can be
+	// overridden per element), and transitionTime leads each element's.
+	// Per Hans (2026-10-22).
 	async _createSnapshot(mixerNode) {
 		const mixerNow = ops.findNodeById(xmlStore.root, mixerNode.id);
 		if (!mixerNow) return;
 		const chains = mixerNow.children.filter((c) => c.tagName === "Chain");
 		if (!chains.length) return;
 		const captureIds = this._selectedCaptureIds(mixerNow, chains);
-		let captureSolo = !!this._soloSelected;
-		if (!captureIds.size && !captureSolo) {
+		if (!captureIds.size && !this._mixerParts.size) {
 			const ok = await confirmDialog("No mixer channel or part of one is selected - Do you want to create a snapshot for all channels?");
 			if (!ok) return;
-			chains.forEach((chain) => chain.children.forEach((c) => captureIds.add(c.id)));
+			chains.forEach((chain) => {
+				captureIds.add(chain.id);
+				chain.children.forEach((c) => captureIds.add(c.id));
+			});
 		}
 		// The document may have changed while the dialog was open.
 		const mixerFresh = ops.findNodeById(xmlStore.root, mixerNode.id);
@@ -3113,18 +3160,33 @@ export class WaMixerView extends HTMLElement {
 		const addCommands = (node) => {
 			const nodeId = node.attributes.id;
 			if (!nodeId) return;
-			// The element's effective state: what is written, plus the engine's
-			// default for the parameters that never were (see default-attributes.js).
-			for (const [name, value] of Object.entries(withEngineDefaults(node))) {
-				if (name === "id" || name === "class" || name === "label") continue;
-				commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${nodeId}`, variable: name, value: String(value) } });
+			// Only what is written on the element — a parameter left at the
+			// engine's default isn't part of the snapshot. transitionTime comes
+			// first, so the values after it glide with it.
+			const entries = Object.entries(node.attributes).filter(([name, value]) => (name === "transitionTime" || SNAPSHOT_CONTINUOUS_PARAMS.has(name)) && /^-?\d*\.?\d+(e[+-]?\d+)?(dB)?$/i.test(String(value).trim()));
+			entries.sort(([a], [b]) => (b === "transitionTime") - (a === "transitionTime"));
+			for (const [name, value] of entries) {
+				// A gain is stored as an explicit "XdB" string so waxml.js knows to convert it (see gainAsDbString).
+				const stored = name === "gain" ? gainAsDbString(node.tagName, value) : String(value);
+				commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${nodeId}`, variable: name, value: stored } });
 			}
 		};
-		for (const chain of mixerFresh.children.filter((c) => c.tagName === "Chain")) {
-			chain.children.filter((c) => captureIds.has(c.id)).forEach(addCommands);
+		// The <Mixer>'s own attributes the user selected (solo, blend,
+		// transition time) come first — it is the parent of everything else
+		// — as far as they're written on it.
+		const mixerId = mixerFresh.attributes.id;
+		if (mixerId) {
+			for (const name of ["transitionTime", "blend", "solo"]) {
+				const value = mixerFresh.attributes[name];
+				if (!this._mixerParts.has(name) || value === undefined) continue;
+				commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${mixerId}`, variable: name, value: String(value) } });
+			}
 		}
-		if (captureSolo && mixerFresh.attributes.solo !== undefined && mixerFresh.attributes.id) {
-			commands.push({ tagName: "Command", attributes: { type: "set", selector: `#${mixerFresh.attributes.id}`, variable: "solo", value: String(mixerFresh.attributes.solo) } });
+		for (const chain of mixerFresh.children.filter((c) => c.tagName === "Chain")) {
+			// A selected strip's own values go first, so the elements after
+			// it can override them (a strip-wide transitionTime, say).
+			if (captureIds.has(chain.id)) addCommands(chain);
+			chain.children.filter((c) => captureIds.has(c.id)).forEach(addCommands);
 		}
 		if (!commands.length) {
 			showNotice("There are no attributes to capture in the selection.");
@@ -3137,8 +3199,8 @@ export class WaMixerView extends HTMLElement {
 		xmlStore.insertNewElementWithChildren(mixerFresh.id, "Snapshot", {}, commands, lastSnapshotIndex + 1);
 	}
 
-	// The ids of the chain elements the selection covers: all children of a
-	// selected <Chain>, or the selected element itself when it sits directly
+	// The ids of the chain elements the selection covers: a selected <Chain>
+	// and all its children, or the selected element itself when it sits directly
 	// in a <Chain> of this Mixer.
 	_selectedCaptureIds(mixerNode, chains) {
 		const ids = new Set();
@@ -3146,6 +3208,7 @@ export class WaMixerView extends HTMLElement {
 		if (xmlStore.selectedNodeId) selected.add(xmlStore.selectedNodeId);
 		for (const chain of chains) {
 			if (selected.has(chain.id)) {
+				ids.add(chain.id);
 				chain.children.forEach((c) => ids.add(c.id));
 				continue;
 			}

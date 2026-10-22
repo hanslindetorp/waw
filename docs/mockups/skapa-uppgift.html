@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Skapa uppgift — skiss</title>
+<style>
+	:root {
+		--bg: #121212;
+		--panel: #1a1a1a;
+		--panel2: #202327;
+		--border: #2f2f2f;
+		--fg: #e8e8e8;
+		--muted: #8a8a8a;
+		--accent: #4fa3ff;
+		--teal: #45b58c;
+		--danger: #e5484d;
+		--warn: #f2b84b;
+		color-scheme: dark;
+	}
+	* { box-sizing: border-box; }
+	html, body { height: 100%; margin: 0; }
+	body { background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+	button { font: inherit; color: inherit; background: #2a2a2a; border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer; }
+	button:hover:not(:disabled) { border-color: var(--accent); }
+	button:disabled { opacity: 0.45; cursor: default; }
+	button.primary { background: var(--accent); color: #06121f; border-color: var(--accent); font-weight: 600; }
+	button.primary:hover:not(:disabled) { filter: brightness(1.1); }
+	input[type="text"], textarea, select { font: inherit; color: var(--fg); background: #101010; border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; width: 100%; }
+	textarea { resize: vertical; min-height: 5rem; }
+	h2 { margin: 0 0 0.3rem; font-size: 1.25rem; }
+	h3 { margin: 1.4rem 0 0.4rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+	p.lead { margin: 0 0 1rem; color: var(--muted); }
+	.hint { color: var(--muted); font-size: 0.85rem; }
+	code { font: 0.85em ui-monospace, Menlo, monospace; background: #101010; padding: 0.1em 0.35em; border-radius: 4px; }
+
+	header.top { display: flex; align-items: center; gap: 0.8rem; padding: 0.6rem 1.2rem; border-bottom: 1px solid var(--border); background: var(--panel); }
+	header.top b { font-size: 1.05rem; }
+	.sketch { font-size: 0.72rem; letter-spacing: 0.06em; padding: 0.15rem 0.5rem; border: 1px dashed var(--warn); color: var(--warn); border-radius: 4px; }
+	header.top .spacer { flex: 1; }
+
+	.layout { display: grid; grid-template-columns: 1fr 22rem; height: calc(100% - 3.1rem); }
+	.layout.no-ai { grid-template-columns: 1fr 0; }
+	main { overflow: auto; padding: 1.2rem 1.6rem 2rem; }
+	main .inner { max-width: 54rem; margin: 0 auto; }
+
+	ol.steps { display: flex; gap: 0.3rem; list-style: none; margin: 0 0 1.4rem; padding: 0; flex-wrap: wrap; }
+	ol.steps li { flex: 1 1 8rem; }
+	ol.steps button { width: 100%; text-align: left; padding: 0.45rem 0.7rem; background: transparent; border-radius: 6px; font-size: 0.82rem; color: var(--muted); }
+	ol.steps button .n { display: inline-block; width: 1.4rem; height: 1.4rem; line-height: 1.4rem; margin-right: 0.4rem; text-align: center; border-radius: 50%; background: #2a2a2a; font-size: 0.75rem; }
+	ol.steps li.active button { color: var(--fg); border-color: var(--accent); background: rgba(79, 163, 255, 0.1); }
+	ol.steps li.active .n { background: var(--accent); color: #06121f; font-weight: 700; }
+	ol.steps li.done .n { background: var(--teal); color: #06121f; }
+
+	.nav { display: flex; justify-content: space-between; margin-top: 1.8rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+
+	.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.8rem; }
+	.card { text-align: left; padding: 0.9rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+	.card:hover { border-color: var(--accent); }
+	.card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: rgba(79, 163, 255, 0.07); }
+	.card .name { font-weight: 600; margin-bottom: 0.2rem; }
+	.card .ex { color: var(--muted); font-size: 0.82rem; }
+	.card .tag { display: inline-block; margin-top: 0.5rem; font-size: 0.7rem; color: var(--warn); }
+	.card.expert { background: transparent; border-style: dashed; }
+
+	.row { display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: center; }
+	.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin: 0.8rem 0; }
+	.choices { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+	.choice { padding: 0.35rem 0.8rem; border: 1px solid var(--border); border-radius: 999px; background: #222; cursor: pointer; font-size: 0.88rem; }
+	.choice.selected { border-color: var(--accent); background: rgba(79, 163, 255, 0.15); }
+	.drop { margin-top: 0.6rem; padding: 1.2rem; text-align: center; border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); cursor: pointer; }
+	.drop:hover, .drop.over { border-color: var(--accent); color: var(--fg); }
+	label.check { display: flex; align-items: center; gap: 0.5rem; margin: 0.35rem 0; cursor: pointer; }
+	label.check input { width: 1rem; height: 1rem; }
+	.banner { margin: 0 0 1rem; padding: 0.55rem 0.8rem; border: 1px dashed var(--warn); border-radius: 8px; color: var(--warn); font-size: 0.85rem; }
+
+	.slider-row { display: grid; grid-template-columns: 7rem 1fr 6.5rem; gap: 0.7rem; align-items: center; margin: 0.45rem 0; }
+	.slider-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+	.slider-row .val { font: 0.9rem ui-monospace, Menlo, monospace; text-align: right; }
+	.slider-row.locked { opacity: 0.4; }
+	.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+	.segmented button { border: none; border-radius: 0; background: transparent; padding: 0.4rem 1rem; }
+	.segmented button.selected { background: rgba(79, 163, 255, 0.2); color: var(--accent); }
+	table.tol { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.6rem; }
+	table.tol td, table.tol th { text-align: left; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); }
+	table.tol th { color: var(--muted); font-weight: 500; }
+
+	.tabs { display: flex; gap: 0.2rem; margin-bottom: 0.5rem; }
+	.tabs button { border-radius: 6px 6px 0 0; background: transparent; border-bottom: none; color: var(--muted); }
+	.tabs button.selected { color: var(--fg); background: var(--panel2); border-color: var(--accent); }
+	.band { display: grid; grid-template-columns: 6rem 1fr; gap: 0.6rem; align-items: center; margin: 0.35rem 0; }
+
+	.result { padding: 1rem 1.2rem; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; max-width: 26rem; }
+	.result .score { font-size: 1.8rem; font-weight: 700; }
+	.result .score small { color: var(--muted); font-size: 1rem; font-weight: 400; }
+	.result .status { margin-left: 0.5rem; font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 4px; vertical-align: middle; }
+	.status.pass { background: rgba(69, 181, 140, 0.2); color: var(--teal); }
+	.status.fail { background: rgba(229, 72, 77, 0.2); color: var(--danger); }
+	.bar { height: 6px; margin: 0.15rem 0 0.5rem; background: #101010; border-radius: 3px; overflow: hidden; }
+	.bar > div { height: 100%; background: var(--accent); }
+
+	.selftest { list-style: none; padding: 0; margin: 0; }
+	.selftest li { display: grid; grid-template-columns: 1.6rem 1fr auto; gap: 0.5rem; align-items: center; padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
+	.selftest .ok { color: var(--teal); font-weight: 700; }
+	.selftest .no { color: var(--danger); font-weight: 700; }
+	.device-wrap { display: flex; gap: 1.2rem; align-items: flex-start; flex-wrap: wrap; }
+	.device { border: 2px solid #3a3d41; border-radius: 14px; background: #121212; padding: 0.7rem; overflow: hidden; }
+	.device.landscape { width: 25rem; }
+	.device.portrait { width: 12.5rem; }
+	.device .h { font-weight: 700; margin-bottom: 0.2rem; }
+	.device .t { font-size: 0.78rem; color: #cdd3d8; margin-bottom: 0.5rem; }
+	.device .btns { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+	.device .btns span { padding: 0.15rem 0.5rem; background: #2a2a2a; border-radius: 5px; font-size: 0.72rem; }
+	.device .fc { background: #1a1c1f; border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem; font-size: 0.7rem; }
+	.device .done { margin-top: 0.5rem; text-align: right; }
+	.device .done span { background: var(--accent); color: #06121f; font-weight: 700; border-radius: 5px; padding: 0.15rem 0.8rem; font-size: 0.72rem; }
+	.linkbox { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
+	.linkbox input { font: 0.82rem ui-monospace, Menlo, monospace; }
+
+	aside#ai { border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+	.layout.no-ai aside#ai { display: none; }
+	aside#ai header { padding: 0.7rem 1rem; border-bottom: 1px solid var(--border); font-weight: 600; }
+	aside#ai header small { display: block; color: var(--muted); font-weight: 400; font-size: 0.75rem; }
+	#chat { flex: 1; overflow: auto; padding: 0.8rem 1rem; }
+	.msg { margin: 0 0 0.7rem; padding: 0.55rem 0.75rem; border-radius: 10px; font-size: 0.88rem; max-width: 92%; }
+	.msg.ai { background: var(--panel2); border: 1px solid var(--border); }
+	.msg.me { background: rgba(79, 163, 255, 0.18); margin-left: auto; }
+	.msg .suggest { display: block; margin-top: 0.5rem; }
+	.msg button { font-size: 0.8rem; padding: 0.25rem 0.6rem; margin: 0.15rem 0.25rem 0 0; }
+	#chatForm { padding: 0.7rem 1rem; border-top: 1px solid var(--border); display: flex; gap: 0.4rem; }
+	#chatForm input { flex: 1; }
+
+	@media (max-width: 900px) {
+		.layout { grid-template-columns: 1fr; height: auto; }
+		aside#ai { border-left: none; border-top: 1px solid var(--border); min-height: 22rem; }
+		body, html { height: auto; }
+	}
+</style>
+</head>
+<body>
+<header class="top">
+	<b>WAW</b>
+	<span>Skapa uppgift</span>
+	<span class="sketch">SKISS — inget sparas, siffrorna är ungefärliga</span>
+	<span class="spacer"></span>
+	<button id="aiToggle" type="button" aria-pressed="true">AI-assistent</button>
+</header>
+
+<div class="layout" id="layout">
+	<main>
+		<div class="inner">
+			<ol class="steps" id="steps"></ol>
+			<section id="panel"></section>
+			<div class="nav">
+				<button id="back" type="button">← Tillbaka</button>
+				<button id="next" type="button" class="primary">Nästa →</button>
+			</div>
+		</div>
+	</main>
+
+	<aside id="ai" aria-label="AI-assistent">
+		<header>AI-assistent<small>Fyller i formuläret åt dig. Du granskar och godkänner allt.</small></header>
+		<div id="chat"></div>
+		<form id="chatForm" autocomplete="off">
+			<input type="text" id="chatInput" placeholder="Skriv till assistenten…" />
+			<button type="submit">Skicka</button>
+		</form>
+	</aside>
+</div>
+
+<script>
+"use strict";
+
+// ───────────────────────── Tillstånd ─────────────────────────
+const S = {
+	step: 0,
+	maxStep: 0,
+	recipe: "match",
+	source: "pink",
+	upload: null,
+	loop: true,
+	params: { freq: true, gain: true, q: true },
+	facit: { freq: 400, gain: -9, q: 5 },
+	facitSet: false,
+	start: { freq: 350, gain: 0, q: 1 },
+	strict: "medel",
+	random: false,
+	lang: "sv",
+	texts: {
+		sv: { title: "Matcha filtret", body: "Lyssna på A och sedan på B. Ställ in filtret så att B låter som A, och tryck på Klar när du tycker att de matchar." },
+		en: { title: "Match the filter", body: "Listen to A, then to B. Adjust the filter until B sounds like A, and press Done when you think they match." }
+	},
+	max: 10,
+	pass: 60,
+	reveal: "direction",
+	bands: [
+		{ min: 90, text: { sv: "Mycket bra — B matchar A.", en: "Excellent — B matches A." } },
+		{ min: 60, text: { sv: "På god väg.", en: "Getting there." } },
+		{ min: 0, text: { sv: "Inte riktigt än — försök igen.", en: "Not yet — try again." } }
+	],
+	published: false
+};
+
+const STEPS = [
+	{ id: "type", title: "Uppgiftstyp" },
+	{ id: "source", title: "Ljudkälla" },
+	{ id: "student", title: "Vad ställer eleven in?" },
+	{ id: "solution", title: "Visa lösningen" },
+	{ id: "texts", title: "Texter & återkoppling" },
+	{ id: "test", title: "Testa & publicera" }
+];
+
+const RECIPES = [
+	{ id: "match", name: "Matcha en referens", ex: "Ställ in filtret så att B låter som A.", built: true },
+	{ id: "target", name: "Ställ in ett mål", ex: "Ställ delaytiden på en punkterad åttondel.", built: false },
+	{ id: "range", name: "Håll dig inom ett intervall", ex: "Rätt mängd reverb. Lagom kompression på sången.", built: false },
+	{ id: "balance", name: "Balansera flera ljud", ex: "Ställ volymen mellan två källor. Balansera fyra stråkstämmor.", built: false }
+];
+
+const SOURCES = [
+	{ id: "pink", name: "Rosa brus", note: "Bra för att höra filter och EQ." },
+	{ id: "white", name: "Vitt brus", note: "Skarpare. Hörs tydligt i höga frekvenser." },
+	{ id: "saw", name: "Sågtand 110 Hz", note: "Tonhöjd med många övertoner." },
+	{ id: "loop", name: "Trumloop (inbyggd)", note: "Exemplet nedan spelar brus i stället." }
+];
+
+// Tolerans per precisionsnivå — i hörbara enheter (oktaver för frekvens och Q, dB för förstärkning).
+const STRICT = {
+	strikt: { label: "Strikt", freq: [0.05, 0.5], gain: [0.5, 3], q: [0.1, 0.8] },
+	medel: { label: "Medel", freq: [0.1, 1], gain: [1, 6], q: [0.2, 1.5] },
+	forlatande: { label: "Förlåtande", freq: [0.2, 1.5], gain: [2, 9], q: [0.4, 2] }
+};
+
+// ───────────────────────── Bedömning (som i appen, förenklad) ─────────────────────────
+function critScore(dev, full, zero) {
+	if (dev <= full) return 1;
+	if (dev >= zero) return 0;
+	return 1 - (dev - full) / (zero - full);
+}
+function evaluate(ans) {
+	const t = STRICT[S.strict];
+	const items = [];
+	if (S.params.freq) items.push({ key: "freq", label: "Frekvens", dev: Math.abs(Math.log2(ans.freq / S.facit.freq)), tol: t.freq, signed: Math.log2(ans.freq / S.facit.freq) });
+	if (S.params.gain) items.push({ key: "gain", label: "Förstärkning", dev: Math.abs(ans.gain - S.facit.gain), tol: t.gain, signed: ans.gain - S.facit.gain });
+	if (S.params.q) items.push({ key: "q", label: "Q", dev: Math.abs(Math.log2(ans.q / S.facit.q)), tol: t.q, signed: Math.log2(ans.q / S.facit.q) });
+	items.forEach((i) => (i.score = critScore(i.dev, i.tol[0], i.tol[1])));
+	const total = items.length ? items.reduce((a, i) => a + i.score, 0) / items.length : 1;
+	return { items, total, score: Math.round(total * S.max * 10) / 10, passed: total * 100 >= S.pass };
+}
+function describeItem(i) {
+	if (S.reveal === "score") return "";
+	const q = i.score >= 0.9 ? "helt rätt" : i.score >= 0.5 ? "nära" : "långt ifrån";
+	let text = `${i.label}: ${q}`;
+	if (S.reveal === "direction" && i.score < 0.9 && i.signed !== 0) text += i.signed > 0 ? " — för högt" : " — för lågt";
+	return text + ".";
+}
+function bandFor(total) {
+	const sorted = [...S.bands].sort((a, b) => b.min - a.min);
+	return (sorted.find((b) => total * 100 >= b.min) || { text: {} }).text[S.lang] || "";
+}
+
+// ───────────────────────── Ljud (riktigt, via Web Audio) ─────────────────────────
+const audio = { ctx: null, src: null, filter: null, gain: null, playing: null };
+function ensureCtx() {
+	if (!audio.ctx) audio.ctx = new (window.AudioContext || window.webkitAudioContext)();
+	if (audio.ctx.state === "suspended") audio.ctx.resume();
+	return audio.ctx;
+}
+function noiseBuffer(ctx, kind) {
+	const len = ctx.sampleRate * 4;
+	const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+	const d = buf.getChannelData(0);
+	if (kind === "white") {
+		for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+	} else {
+		let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0; // rosa brus (Paul Kellet)
+		for (let i = 0; i < len; i++) {
+			const w = Math.random() * 2 - 1;
+			b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+			b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+			d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
+			b6 = w * 0.115926;
+		}
+	}
+	return buf;
+}
+function stopAudio() {
+	try { audio.src && audio.src.stop(); } catch {}
+	audio.src = null;
+	audio.playing = null;
+}
+function playAudio(which) {
+	const ctx = ensureCtx();
+	stopAudio();
+	const f = ctx.createBiquadFilter();
+	f.type = "peaking";
+	let src;
+	if (S.source === "saw") {
+		src = ctx.createOscillator();
+		src.type = "sawtooth";
+		src.frequency.value = 110;
+	} else {
+		src = ctx.createBufferSource();
+		src.buffer = noiseBuffer(ctx, S.source === "white" ? "white" : "pink");
+		src.loop = true;
+	}
+	const g = ctx.createGain();
+	g.gain.value = S.source === "saw" ? 0.12 : 0.5;
+	src.connect(f).connect(g).connect(ctx.destination);
+	audio.filter = f;
+	audio.src = src;
+	audio.playing = which;
+	applyFilter();
+	src.start();
+}
+function applyFilter() {
+	if (!audio.filter) return;
+	// "start-clean" is the source with no filter at all
+	const p = audio.playing === "start" ? S.start : audio.playing === "start-clean" ? { freq: 1000, gain: 0, q: 1 } : S.facit;
+	audio.filter.frequency.value = p.freq;
+	audio.filter.gain.value = p.gain;
+	audio.filter.Q.value = p.q;
+}
+function curvePath(p, w, h) {
+	const ctx = ensureCtx();
+	const f = ctx.createBiquadFilter();
+	f.type = "peaking";
+	f.frequency.value = p.freq;
+	f.gain.value = p.gain;
+	f.Q.value = p.q;
+	const n = 120;
+	const freqs = new Float32Array(n);
+	for (let i = 0; i < n; i++) freqs[i] = 20 * Math.pow(1000, i / (n - 1));
+	const mag = new Float32Array(n), ph = new Float32Array(n);
+	f.getFrequencyResponse(freqs, mag, ph);
+	let d = "";
+	for (let i = 0; i < n; i++) {
+		const db = Math.max(-24, Math.min(24, 20 * Math.log10(mag[i])));
+		const x = (i / (n - 1)) * w, y = h / 2 - (db / 24) * (h / 2);
+		d += (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+	}
+	return d;
+}
+
+// ───────────────────────── Hjälpare ─────────────────────────
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtFreq = (f) => (f >= 1000 ? (f / 1000).toFixed(2).replace(/\.?0+$/, "") + " kHz" : Math.round(f) + " Hz");
+const freqToSlider = (f) => Math.log(f / 20) / Math.log(1000);
+const sliderToFreq = (t) => Math.round(20 * Math.pow(1000, t));
+const recipe = () => RECIPES.find((r) => r.id === S.recipe);
+
+// ───────────────────────── Steg ─────────────────────────
+const views = {
+	type() {
+		return `
+			<h2>Vad för uppgift vill du göra?</h2>
+			<p class="lead">Välj en uppgiftstyp, eller beskriv uppgiften med egna ord för assistenten till höger.</p>
+			<div class="cards">
+				${RECIPES.map((r) => `<button class="card ${S.recipe === r.id ? "selected" : ""}" data-recipe="${r.id}">
+					<div class="name">${esc(r.name)}</div><div class="ex">${esc(r.ex)}</div>
+					${r.built ? "" : '<span class="tag">Inte utbyggd i skissen</span>'}</button>`).join("")}
+				<button class="card expert" data-recipe="free"><div class="name">Fri uppgift</div><div class="ex">Bygg hela ljudgrafen själv i editorn (expertläge).</div></button>
+			</div>`;
+	},
+	source() {
+		return `
+			${!recipe().built ? `<div class="banner">I skissen är bara "Matcha en referens" utbyggd — stegen nedan visar den.</div>` : ""}
+			<h2>Vilket ljud ska eleven arbeta med?</h2>
+			<p class="lead">Inbyggda ljud kräver ingen uppladdning (och inga upphovsrättsfrågor). Egna filer går också.</p>
+			<div class="cards">
+				${SOURCES.map((s) => `<button class="card ${S.source === s.id ? "selected" : ""}" data-source="${s.id}"><div class="name">${esc(s.name)}</div><div class="ex">${esc(s.note)}</div></button>`).join("")}
+			</div>
+			<div class="drop" id="drop">${S.upload ? `Vald fil: <b>${esc(S.upload)}</b> (skissen spelar brus i stället)` : "Eller dra hit en egen ljudfil, eller klicka för att välja (mp3, wav)"}</div>
+			<input type="file" id="file" accept="audio/*" hidden />
+			<label class="check"><input type="checkbox" id="loop" ${S.loop ? "checked" : ""}> Ljudet loopar när eleven trycker Spela</label>
+			<div class="row" style="margin-top:0.8rem">
+				<button id="listen" type="button">${audio.playing ? "■ Stoppa" : "▶ Lyssna"}</button>
+				<span class="hint">Så här låter källan, utan filter.</span>
+			</div>`;
+	},
+	student() {
+		return `
+			<h2>Vad får eleven ställa in?</h2>
+			<p class="lead">Eleven får ett filter (B) som hen ställer in för att låta som referensen (A). Du bestämmer vilka reglage som finns. Allt annat är låst och syns inte.</p>
+			<div class="panel">
+				<div class="row"><b>Filter</b><span class="hint">Typ: topp (peaking)</span></div>
+				<label class="check"><input type="checkbox" data-param="freq" ${S.params.freq ? "checked" : ""}> Frekvens</label>
+				<label class="check"><input type="checkbox" data-param="gain" ${S.params.gain ? "checked" : ""}> Förstärkning (dB)</label>
+				<label class="check"><input type="checkbox" data-param="q" ${S.params.q ? "checked" : ""}> Q (bredd)</label>
+				<p class="hint" style="margin:0.6rem 0 0">Det som inte är ikryssat är låst på startvärdet och syns inte för eleven.</p>
+			</div>
+			<h3>Så ser eleven filtret när uppgiften börjar</h3>
+			<div class="panel">
+				<svg viewBox="0 0 360 110" width="100%" height="110" aria-label="Filterkurva">
+					<line x1="0" x2="360" y1="55" y2="55" stroke="#2f2f2f"/>
+					<path d="${curvePath(S.start, 360, 110)}" fill="none" stroke="#4fa3ff" stroke-width="2"/>
+				</svg>
+				<div class="hint">Startvärden: ${fmtFreq(S.start.freq)}, ${S.start.gain} dB, Q ${S.start.q} (inget filter hörs än).</div>
+			</div>`;
+	},
+	solution() {
+		const t = STRICT[S.strict];
+		const row = (key, label, min, max, step, val, fmt, show) => `
+			<div class="slider-row ${show ? "" : "locked"}"><span>${label}</span>
+				<input type="range" data-fac="${key}" min="${min}" max="${max}" step="${step}" value="${val}" ${show ? "" : "disabled"}>
+				<span class="val" id="val-${key}">${fmt}</span></div>`;
+		return `
+			<h2>Visa den rätta lösningen</h2>
+			<p class="lead">Ställ in ljudet som det ska låta när det är rätt — det blir facit. Du slipper skriva några regler.</p>
+			<div class="panel">
+				${row("freq", "Frekvens", 0, 1, 0.001, freqToSlider(S.facit.freq), fmtFreq(S.facit.freq), S.params.freq)}
+				${row("gain", "Förstärkning", -24, 24, 0.5, S.facit.gain, S.facit.gain + " dB", S.params.gain)}
+				${row("q", "Q", 0.1, 20, 0.1, S.facit.q, S.facit.q, S.params.q)}
+				<div class="row" style="margin-top:0.8rem">
+					<button id="playFacit" type="button">${audio.playing === "facit" ? "■ Stoppa" : "▶ Spela rätt ljud (A)"}</button>
+					<button id="playStart" type="button">${audio.playing === "start" ? "■ Stoppa" : "▶ Spela elevens startljud (B)"}</button>
+					<button id="setFacit" type="button" class="primary">${S.facitSet ? "✓ Det här är rätt svar" : "Det här är rätt svar"}</button>
+				</div>
+			</div>
+			<h3>Hur noga ska det vara?</h3>
+			<div class="segmented" id="strict">${Object.entries(STRICT).map(([k, v]) => `<button data-strict="${k}" class="${S.strict === k ? "selected" : ""}">${v.label}</button>`).join("")}</div>
+			<table class="tol">
+				<tr><th>Inställning</th><th>Full poäng om eleven är inom</th><th>Ingen poäng längre bort än</th></tr>
+				${S.params.freq ? `<tr><td>Frekvens</td><td>${(t.freq[0] * 12).toFixed(1)} halvtoner (${(t.freq[0]).toFixed(2)} oktav)</td><td>${(t.freq[1] * 12).toFixed(0)} halvtoner</td></tr>` : ""}
+				${S.params.gain ? `<tr><td>Förstärkning</td><td>${t.gain[0]} dB</td><td>${t.gain[1]} dB</td></tr>` : ""}
+				${S.params.q ? `<tr><td>Q</td><td>${t.q[0]} oktav (kvot ${Math.pow(2, t.q[0]).toFixed(2)})</td><td>${t.q[1]} oktav</td></tr>` : ""}
+			</table>
+			<label class="check" style="margin-top:0.8rem; opacity:0.55"><input type="checkbox" disabled> Slumpa målvärdet per elev (senare — så att eleverna inte kan dela svaret)</label>`;
+	},
+	texts() {
+		const T = S.texts[S.lang];
+		const best = evaluate({ ...S.start });
+		return `
+			<h2>Texter och återkoppling</h2>
+			<p class="lead">Det eleven läser, och det hen får veta efter Klar.</p>
+			<div class="tabs" id="langTabs">
+				<button data-lang="sv" class="${S.lang === "sv" ? "selected" : ""}">Svenska</button>
+				<button data-lang="en" class="${S.lang === "en" ? "selected" : ""}">English</button>
+				<button id="translate" type="button" title="AI-assistenten översätter ditt utkast (du granskar)" style="margin-left:auto">✨ Översätt ${S.lang === "sv" ? "till engelska" : "till svenska"}</button>
+			</div>
+			<div class="panel" style="margin-top:0">
+				<label class="hint">Rubrik</label>
+				<input type="text" id="title" value="${esc(T.title)}">
+				<label class="hint" style="display:block;margin-top:0.7rem">Instruktion</label>
+				<textarea id="body">${esc(T.body)}</textarea>
+				<p class="hint" style="margin:0.5rem 0 0">Eleven får det språk som Canvas anger. Saknas texten på det språket används svenska.</p>
+			</div>
+			<h3>Poäng och återkoppling</h3>
+			<div class="panel">
+				<div class="row">
+					<label>Poäng <input type="text" id="max" value="${S.max}" style="width:4rem"></label>
+					<label>Godkänd vid <input type="text" id="pass" value="${S.pass}" style="width:4rem"> %</label>
+				</div>
+				<div style="margin-top:0.8rem"><div class="hint">Hur mycket ska kommentaren avslöja?</div>
+					<div class="choices" id="reveal">
+						${[["score", "Bara poängen"], ["distance", "Hur nära"], ["direction", "Hur nära, och för högt/lågt"]].map(([k, l]) => `<span class="choice ${S.reveal === k ? "selected" : ""}" data-reveal="${k}">${l}</span>`).join("")}
+					</div></div>
+				<div style="margin-top:0.8rem"><div class="hint">Kommentar efter resultat</div>
+					${S.bands.map((b, i) => `<div class="band"><span>Från ${b.min} %</span><input type="text" data-band="${i}" value="${esc(b.text[S.lang] || "")}"></div>`).join("")}
+				</div>
+			</div>
+			<div class="hint">Den som kör uppgiften med startvärdena får ${best.score} / ${S.max} (${best.passed ? "godkänd" : "ej godkänd"}).</div>`;
+	},
+	test() {
+		const T = S.texts[S.lang];
+		const exact = evaluate({ ...S.facit });
+		const defaults = evaluate({ ...S.start });
+		const near = evaluate({ freq: S.facit.freq * 1.07, gain: S.facit.gain + 0.8, q: S.facit.q * 1.12 });
+		const off = evaluate({ freq: S.facit.freq * 2.4, gain: S.facit.gain + 7, q: S.facit.q * 3 });
+		const tests = [
+			["Rätt svar ger full poäng", exact.score >= S.max, `${exact.score} / ${S.max}`],
+			["Startvärdena är inte godkända", !defaults.passed, `${defaults.score} / ${S.max}`],
+			["Nästan rätt blir godkänt", near.passed, `${near.score} / ${S.max}`],
+			["Långt ifrån rätt blir underkänt", !off.passed, `${off.score} / ${S.max}`]
+		];
+		const allOk = tests.every((t) => t[1]);
+		const sample = evaluate({ freq: S.facit.freq * 1.3, gain: S.facit.gain + 3, q: S.facit.q * 0.7 });
+		return `
+			<h2>Testa och publicera</h2>
+			<p class="lead">Systemet provar uppgiften åt dig innan eleverna ser den.</p>
+			<div class="panel"><ul class="selftest">
+				${tests.map((t) => `<li><span class="${t[1] ? "ok" : "no"}">${t[1] ? "✓" : "✗"}</span><span>${t[0]}</span><span class="hint">${t[2]}</span></li>`).join("")}
+			</ul>
+			<p class="hint" style="margin:0.6rem 0 0">${allOk ? "Allt ser rimligt ut." : "Något ser fel ut — justera precisionen eller poängen."}</p></div>
+
+			<h3>Så ser det ut för eleven</h3>
+			<div class="segmented" id="devSeg" style="margin-bottom:0.6rem"><button data-dev="landscape" class="selected">Liggande (dator)</button><button data-dev="portrait">Stående (mobil)</button></div>
+			<div class="device-wrap">
+				<div class="device landscape" id="device">
+					<div class="h">${esc(T.title)}</div><div class="t">${esc(T.body)}</div>
+					<div class="btns"><span>▶ Spela A</span><span>▶ Spela B</span><span>■ Stopp</span></div>
+					<div class="fc"><b>Filter</b><svg viewBox="0 0 220 60" width="100%" height="60"><line x1="0" x2="220" y1="30" y2="30" stroke="#2f2f2f"/><path d="${curvePath(S.start, 220, 60)}" fill="none" stroke="#4fa3ff" stroke-width="1.5"/></svg>
+						${S.params.freq ? "<span>" + fmtFreq(S.start.freq) + " </span>" : ""}${S.params.q ? "<span>Q " + S.start.q + " </span>" : ""}${S.params.gain ? "<span>" + S.start.gain + " dB</span>" : ""}</div>
+					<div class="done"><span>Klar</span></div>
+				</div>
+				<div class="result">
+					<div class="hint" style="margin-bottom:0.3rem">Efter Klar, om eleven var lite fel:</div>
+					<div class="score">${sample.score}<small> / ${S.max}</small><span class="status ${sample.passed ? "pass" : "fail"}">${sample.passed ? "Godkänd" : "Ej godkänd"}</span></div>
+					<div style="margin:0.4rem 0 0.6rem">${esc(bandFor(sample.total))}</div>
+					${sample.items.map((i) => `<div style="font-size:0.85rem">${esc(describeItem(i))}</div><div class="bar"><div style="width:${Math.round(i.score * 100)}%"></div></div>`).join("")}
+				</div>
+			</div>
+
+			<h3>Publicera</h3>
+			<div class="panel">
+				<div class="row"><button id="publish" type="button" class="primary" ${allOk ? "" : "disabled"}>${S.published ? "✓ Publicerad" : "Publicera uppgiften"}</button><span class="hint">Lägger uppgiften på servern. Bedömningen sparas dolt, så den inte kan läsas av eleverna.</span></div>
+				${S.published ? `<div style="margin-top:0.9rem"><div class="hint">Klistra in den här länken i Canvas: <i>Uppgift → Inlämningstyp: Externt verktyg → URL</i></div>
+					<div class="linkbox"><input type="text" readonly id="link" value="https://waxml.org/waw/lti/launch.php?project=matcha-filtret&view=v8k2m1x9q0"><button id="copyLink" type="button">Kopiera</button></div></div>` : ""}
+			</div>`;
+	}
+};
+
+// ───────────────────────── Rendering och händelser ─────────────────────────
+function render() {
+	$("#steps").innerHTML = STEPS.map((s, i) => `<li class="${i === S.step ? "active" : ""} ${i < S.maxStep && i !== S.step ? "done" : ""}"><button data-go="${i}"><span class="n">${i < S.maxStep && i !== S.step ? "✓" : i + 1}</span>${esc(s.title)}</button></li>`).join("");
+	$("#panel").innerHTML = views[STEPS[S.step].id]();
+	$("#back").disabled = S.step === 0;
+	$("#next").textContent = S.step === STEPS.length - 1 ? "Klar" : "Nästa →";
+	$("#next").disabled = S.step === STEPS.length - 1;
+	bind();
+}
+
+function go(i) {
+	if (i < 0 || i >= STEPS.length) return;
+	if (audio.playing && STEPS[i].id !== "solution" && STEPS[i].id !== "source") stopAudio();
+	S.step = i;
+	S.maxStep = Math.max(S.maxStep, i);
+	render();
+	$("main").scrollTop = 0;
+	stepHelp();
+}
+
+function bind() {
+	const on = (sel, ev, fn) => document.querySelectorAll(sel).forEach((el) => el.addEventListener(ev, (e) => fn(e, el)));
+	on("[data-recipe]", "click", (_, el) => {
+		S.recipe = el.dataset.recipe === "free" ? "match" : el.dataset.recipe;
+		if (el.dataset.recipe === "free") say("ai", "Fri uppgift är expertläget — det är dagens editor, där du bygger ljudgrafen själv. I skissen fortsätter vi med en färdig uppgiftstyp.");
+		render();
+	});
+	on("[data-source]", "click", (_, el) => { S.source = el.dataset.source; if (audio.playing) stopAudio(); render(); });
+	const drop = $("#drop");
+	if (drop) {
+		const file = $("#file");
+		drop.addEventListener("click", () => file.click());
+		file.addEventListener("change", () => { if (file.files[0]) { S.upload = file.files[0].name; render(); say("ai", `Jag har tagit emot ${S.upload}. I den riktiga versionen kontrollerar jag längd, nivå och om den går att loopa utan klick.`); } });
+		drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+		drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+		drop.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { S.upload = f.name; render(); } });
+	}
+	on("#loop", "change", (_, el) => (S.loop = el.checked));
+	on("#listen", "click", () => { if (audio.playing) stopAudio(); else playAudio("start-clean"); render(); });
+	on("[data-param]", "change", (_, el) => { S.params[el.dataset.param] = el.checked; render(); });
+	on("[data-fac]", "input", (_, el) => {
+		const k = el.dataset.fac, v = parseFloat(el.value);
+		if (k === "freq") { S.facit.freq = sliderToFreq(v); $("#val-freq").textContent = fmtFreq(S.facit.freq); }
+		if (k === "gain") { S.facit.gain = v; $("#val-gain").textContent = v + " dB"; }
+		if (k === "q") { S.facit.q = v; $("#val-q").textContent = v; }
+		S.facitSet = false;
+		$("#setFacit").textContent = "Det här är rätt svar";
+		applyFilter();
+	});
+	on("#playFacit", "click", () => { if (audio.playing === "facit") stopAudio(); else playAudio("facit"); render(); });
+	on("#playStart", "click", () => { if (audio.playing === "start") stopAudio(); else playAudio("start"); render(); });
+	on("#setFacit", "click", () => { S.facitSet = true; render(); say("ai", `Noterat: rätt svar är ${fmtFreq(S.facit.freq)}, ${S.facit.gain} dB, Q ${S.facit.q}. Vill du att jag föreslår hur noga det ska vara?`, [["Ja, föreslå", () => { S.strict = "medel"; render(); say("ai", "Jag föreslår Medel: full poäng inom ungefär en tredjedels ton på frekvensen och 1 dB på förstärkningen. Det brukar passa när eleverna går på gehör. Ändra gärna.") }]]); });
+	on("[data-strict]", "click", (_, el) => { S.strict = el.dataset.strict; render(); });
+	on("[data-lang]", "click", (_, el) => { S.lang = el.dataset.lang; render(); });
+	on("#title", "input", (_, el) => (S.texts[S.lang].title = el.value));
+	on("#body", "input", (_, el) => (S.texts[S.lang].body = el.value));
+	on("#translate", "click", () => {
+		const from = S.lang === "sv" ? "sv" : "en", to = from === "sv" ? "en" : "sv";
+		S.texts[to] = to === "en" ? { title: "Match the filter", body: "Listen to A, then to B. Adjust the filter until B sounds like A, and press Done when you think they match." } : { title: "Matcha filtret", body: "Lyssna på A och sedan på B. Ställ in filtret så att B låter som A, och tryck på Klar när du tycker att de matchar." };
+		S.lang = to;
+		render();
+		say("ai", "Jag har gjort ett översättningsutkast. Läs igenom det innan du publicerar — du är den som vet vad som är rätt term.");
+	});
+	on("#max", "input", (_, el) => (S.max = Math.max(1, parseFloat(el.value) || 10)));
+	on("#pass", "input", (_, el) => (S.pass = Math.max(0, Math.min(100, parseFloat(el.value) || 0))));
+	on("[data-reveal]", "click", (_, el) => { S.reveal = el.dataset.reveal; render(); });
+	on("[data-band]", "input", (_, el) => (S.bands[parseInt(el.dataset.band, 10)].text[S.lang] = el.value));
+	on("[data-dev]", "click", (_, el) => {
+		const d = $("#device");
+		d.className = "device " + el.dataset.dev;
+		document.querySelectorAll("[data-dev]").forEach((b) => b.classList.toggle("selected", b === el));
+	});
+	on("#publish", "click", () => { S.published = true; render(); say("ai", "Klart. Länken ovan är den du lägger in i Canvas. När en elev trycker Klar räknas poängen på servern och skickas tillbaka till betygsboken."); });
+	on("#copyLink", "click", async (_, el) => { try { await navigator.clipboard.writeText($("#link").value); el.textContent = "Kopierad"; } catch { $("#link").select(); } setTimeout(() => (el.textContent = "Kopiera"), 1200); });
+	on("[data-go]", "click", (_, el) => go(parseInt(el.dataset.go, 10)));
+}
+
+$("#back").addEventListener("click", () => go(S.step - 1));
+$("#next").addEventListener("click", () => go(S.step + 1));
+
+// ───────────────────────── AI-assistent (inspelad skiss) ─────────────────────────
+function say(who, text, actions = []) {
+	const div = document.createElement("div");
+	div.className = "msg " + who;
+	div.innerHTML = esc(text);
+	if (actions.length) {
+		const box = document.createElement("span");
+		box.className = "suggest";
+		actions.forEach(([label, fn]) => {
+			const b = document.createElement("button");
+			b.type = "button";
+			b.textContent = label;
+			b.addEventListener("click", () => { box.remove(); say("me", label); setTimeout(fn, 250); });
+			box.appendChild(b);
+		});
+		div.appendChild(box);
+	}
+	$("#chat").appendChild(div);
+	$("#chat").scrollTop = $("#chat").scrollHeight;
+}
+const HELP = {
+	type: "Beskriv uppgiften med egna ord, så väljer jag uppgiftstyp åt dig. Till exempel: \"en övning där eleverna ska ställa in ett filter på gehör\".",
+	source: "Rosa brus är oftast bäst för filter och EQ: det har energi överallt, så förändringen hörs tydligt. Vill du ha musik kan du ladda upp en kort loop.",
+	student: "Börja gärna med att låta eleven ställa in alla tre. Vill du göra uppgiften enklare kan du låsa Q.",
+	solution: "Ställ in det rätta ljudet och tryck \"Det här är rätt svar\". Sedan föreslår jag hur noga det ska vara.",
+	texts: "Jag kan skriva ett utkast till instruktion och återkoppling på svenska och engelska. Du granskar och ändrar.",
+	test: "Jag har provat uppgiften: rätt svar ger full poäng och startvärdena underkänns. När du publicerar får du länken till Canvas."
+};
+let helped = {};
+function stepHelp() {
+	const id = STEPS[S.step].id;
+	if (helped[id]) return;
+	helped[id] = true;
+	say("ai", HELP[id]);
+}
+$("#chatForm").addEventListener("submit", (e) => {
+	e.preventDefault();
+	const text = $("#chatInput").value.trim();
+	if (!text) return;
+	$("#chatInput").value = "";
+	say("me", text);
+	const t = text.toLowerCase();
+	setTimeout(() => {
+		if (/filter|eq|frekvens|equal/.test(t)) {
+			S.recipe = "match";
+			S.source = /musik|loop|trum/.test(t) ? "pink" : "pink";
+			S.params = { freq: true, gain: true, q: true };
+			say("ai", "Det låter som uppgiftstypen \"Matcha en referens\": eleven ställer in ett filter så att det låter som ett facit. Jag har valt den, rosa brus som ljudkälla, och låtit eleven ändra frekvens, förstärkning och Q.", [["Gå vidare till ljudkällan", () => go(1)]]);
+			render();
+		} else if (/delay|eko|tid/.test(t)) {
+			say("ai", "Det är uppgiftstypen \"Ställ in ett mål\" (till exempel en punkterad åttondel). Den är inte utbyggd i skissen, men flödet blir detsamma som i filterövningen.");
+		} else if (/reverb|kompress|lagom|mängd/.test(t)) {
+			say("ai", "Det är \"Håll dig inom ett intervall\": eleven ska hamna inom ett lagom område i stället för på ett exakt värde. Inte utbyggd i skissen.");
+		} else if (/mix|balans|volym|stråk/.test(t)) {
+			say("ai", "Det är \"Balansera flera ljud\". Facit blir hur långt ifrån varandra nivåerna får vara, i dB. Inte utbyggd i skissen.");
+		} else if (/språk|engelska|översätt/.test(t)) {
+			say("ai", "Instruktion och återkoppling kan finnas på flera språk. Eleven får det språk som Canvas anger. Jag kan översätta ditt utkast, du granskar det.");
+		} else {
+			say("ai", "I skissen kan jag bara svara på några saker: filter, delay, reverb/kompression, mix/balans och språk. Den riktiga assistenten förstår fritt, och föreslår värden som du sedan godkänner.");
+		}
+	}, 400);
+});
+$("#aiToggle").addEventListener("click", (e) => {
+	const l = $("#layout");
+	l.classList.toggle("no-ai");
+	e.currentTarget.setAttribute("aria-pressed", String(!l.classList.contains("no-ai")));
+});
+
+say("ai", "Hej! Berätta vad uppgiften ska handla om, så hjälper jag dig. Det du ser till vänster fylls i åt dig.");
+render();
+stepHelp();
+</script>
+</body>
+</html>

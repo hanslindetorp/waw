@@ -50,6 +50,27 @@ export function formatGainAttribute(tagName, db) {
 	return db === -Infinity ? "0" : `${rounded}dB`;
 }
 
+// A `gain` value written so the engine can tell its unit without knowing
+// where it came from: for a node with a linear gain (GainNode, Send, ...) a
+// plain number becomes an explicit "XdB" string (a bare 0.5 is a linear
+// ratio; waxml.js converts dB to amplitude only when it sees the "dB"). Used
+// where a value is stored away from its element, i.e. in a Snapshot's
+// <Command value>. A BiquadFilterNode's gain is dB by nature and waxml.js's
+// typeFixParam knows that from the node's name (no conversion, any "dB" is
+// just stripped), so it keeps its bare number like everywhere else. Silence
+// stays "0" (the schema's dB form has no -Infinity), anything that isn't a
+// plain number or dB value ($var, expression) is returned untouched.
+// Per Hans (2026-10-22).
+export function gainAsDbString(tagName, rawValue) {
+	const str = String(rawValue ?? "").trim();
+	if (isDbNativeGain(tagName)) return String(rawValue);
+	if (/^-?\d+(\.\d+)?dB$/i.test(str)) return str;
+	if (!/^-?\d+(\.\d+)?$/.test(str)) return String(rawValue);
+	const db = linearRatioToDb(parseFloat(str));
+	if (db === -Infinity) return "0";
+	return `${Math.round(db * 100) / 100}dB`;
+}
+
 // Shared dB ranges for a gain-drag control — a BiquadFilterNode's EQ band
 // realistically only needs ±15dB; anything else (a fader-like GainNode)
 // needs to reach down toward silence. Centralized here (rather than

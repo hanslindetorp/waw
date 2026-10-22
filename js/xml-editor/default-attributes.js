@@ -21,7 +21,9 @@ import { formatGainAttribute } from "../waxml-integration/gain-units.js";
 //                      detune or the analyser's display settings.
 //
 // Reading code asks engineDefault()/withEngineDefaults() for an attribute that
-// is missing; nothing rewrites existing documents.
+// is missing; nothing rewrites existing documents. (Snapshots no longer do:
+// since 2026-10-22 they capture only what is written, which is why creation
+// values matter.)
 
 export const ENGINE_DEFAULTS = {
 	OscillatorNode: { frequency: 440 },

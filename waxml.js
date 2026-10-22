@@ -24296,10 +24296,27 @@ class SnapshotComponent extends HTMLElement {
 	}
 
 	sendData(){
-		[...this.data.children].forEach(option => {
-			let variable = option.attributes.variable.value;
-			let value = parseFloat(option.attributes.value.value);
-			this.waxml.setVariable(variable, value);
+		[...this.data.children].forEach(command => {
+			let selector = command.attributes.selector ? command.attributes.selector.value : null;
+			let variable = command.attributes.variable.value;
+			let value = command.attributes.value.value;
+
+			if(typeof value == "string" && !value.includes("dB")){
+				value = parseFloat(value);
+			}
+
+			if(selector){
+				// set parameter on element
+				let element = this.waxml.querySelector(selector);
+				try{
+					element[variable] = value;
+				} catch(e){
+					// do nothing
+				}
+			} else {
+				// set variable on waxml
+				this.waxml.setVariable(variable, value);
+			}
 		});
 		this.dispatchEvent(new CustomEvent("sendData"));
 	}
