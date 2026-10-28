@@ -168,7 +168,7 @@ export class WaXmlCode extends HTMLElement {
 
 		this._textarea.addEventListener("input", () => {
 			this._isLocalEdit = true;
-			xmlStore.setCodeValue(this._textarea.value);
+			xmlStore.setCodeValue(this._textarea.value, { onlyIfChanged: true });
 			this._isLocalEdit = false;
 			this._renderStaticLayers(this._textarea.value);
 		});
@@ -184,7 +184,7 @@ export class WaXmlCode extends HTMLElement {
 			this._textarea.value = `${value.slice(0, start)}  ${value.slice(end)}`;
 			this._textarea.selectionStart = this._textarea.selectionEnd = start + 2;
 			this._isLocalEdit = true;
-			xmlStore.setCodeValue(this._textarea.value);
+			xmlStore.setCodeValue(this._textarea.value, { onlyIfChanged: true });
 			this._isLocalEdit = false;
 			this._renderStaticLayers(this._textarea.value);
 		});

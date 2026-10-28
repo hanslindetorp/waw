@@ -150,6 +150,27 @@ template.innerHTML = `
 		.blink {
 			animation: bb-trig-blink 0.35s ease-out;
 		}
+		/* What the live audio graph is doing: "Loading…" while an edit waits for
+		   its reload (live changes only reach the document until then), and a
+		   red Retry once loading failed for good. Per Hans (2026-10-28). */
+		.engine-status {
+			flex: 0 0 auto;
+			font: inherit;
+			font-size: 0.72rem;
+			padding: 0.25rem 0.5rem;
+			border-radius: 4px;
+			background: transparent;
+			border: 1px solid var(--waw-border, #2f2f2f);
+			color: var(--waw-muted, #8a8a8a);
+			cursor: default;
+			white-space: nowrap;
+		}
+		.engine-status.failed {
+			color: #fff;
+			background: var(--waw-danger, #c0392b);
+			border-color: var(--waw-danger, #c0392b);
+			cursor: pointer;
+		}
 		.selector-input {
 			background: #1a1c1f;
 			border: 1px solid var(--waw-border, #2f2f2f);
@@ -265,6 +286,7 @@ template.innerHTML = `
 				<span class="col-label">Triggers</span>
 				<button class="tp-btn tp-play" data-action="play" title="Play">▶</button>
 				<button class="tp-btn" data-action="stop" title="Stop">■</button>
+				<button class="engine-status" type="button" hidden></button>
 				<input type="text" class="selector-input" placeholder="CSS selector to trig" title="What PLAY triggers — auto-fills whenever anything gets trig()'d, or type your own" />
 				<button class="add-shortcut-btn" type="button" title="Save the current selector as a trigger-shortcut Command">
 					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -313,6 +335,7 @@ export class WaBottomBar extends HTMLElement {
 		this._playBtn = this.shadowRoot.querySelector('[data-action="play"]');
 		this._stopBtn = this.shadowRoot.querySelector('[data-action="stop"]');
 		this._selectorInput = this.shadowRoot.querySelector(".selector-input");
+		this._engineStatus = this.shadowRoot.querySelector(".engine-status");
 		this._addShortcutBtn = this.shadowRoot.querySelector(".add-shortcut-btn");
 		this._addVarBtn = this.shadowRoot.querySelector(".add-var-btn");
 		this._globalShortcuts = this.shadowRoot.querySelector(".global-shortcuts");
@@ -335,6 +358,9 @@ export class WaBottomBar extends HTMLElement {
 			playerStore.play();
 		});
 		this._stopBtn.addEventListener("click", () => playerStore.stop());
+		this._engineStatus.addEventListener("click", () => {
+			if (playerStore.loadState === "failed") playerStore.retryLoad();
+		});
 		this._selectorInput.addEventListener("change", () => {
 			playerStore.setTriggerSelector(this._selectorInput.value, null);
 		});
@@ -452,6 +478,40 @@ export class WaBottomBar extends HTMLElement {
 		this._playBtn.disabled = !playerStore.triggerSelector;
 		if (this.shadowRoot.activeElement !== this._selectorInput) {
 			this._selectorInput.value = playerStore.triggerSelector;
+		}
+		this._updateEngineStatus();
+	}
+
+	// "Loading…" only shows once a reload has taken longer than it normally
+	// does (so it doesn't flash on every edit); a failed load shows at once.
+	_updateEngineStatus() {
+		const state = playerStore.loadState;
+		const btn = this._engineStatus;
+		if (state === "failed") {
+			clearTimeout(this._loadingTimer);
+			this._loadingTimer = null;
+			btn.hidden = false;
+			btn.classList.add("failed");
+			btn.textContent = "Audio failed to load — Retry";
+			btn.title = "The audio graph could not be loaded, so changes are not heard. Click to try again.";
+		} else if (state === "loading") {
+			if (!this._loadingTimer && btn.hidden) {
+				this._loadingTimer = setTimeout(() => {
+					this._loadingTimer = null;
+					if (playerStore.loadState !== "loading") return;
+					btn.hidden = false;
+					btn.classList.remove("failed");
+					btn.textContent = "Loading audio…";
+					btn.title = "Changes are in the document and will be heard once the audio has loaded.";
+				}, 1200);
+			} else if (!btn.hidden) {
+				btn.classList.remove("failed");
+				btn.textContent = "Loading audio…";
+			}
+		} else {
+			clearTimeout(this._loadingTimer);
+			this._loadingTimer = null;
+			btn.hidden = true;
 		}
 	}
 

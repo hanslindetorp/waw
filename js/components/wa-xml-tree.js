@@ -578,14 +578,6 @@ export class WaXmlTree extends HTMLElement {
 			if (contentWrap) rowContents.push({ wrap: contentWrap, indent: indentPx });
 		});
 		this._alignRowActions(rowContents);
-
-		if (this._pendingEditTarget) {
-			const { nodeId, colName } = this._pendingEditTarget;
-			this._pendingEditTarget = null;
-			const cell = this._container.querySelector(`.attr-cell[data-node-id="${nodeId}"][data-col="${colName}"]`);
-			const node = ops.findNodeById(root, nodeId);
-			if (cell && node) this._editAttrCell(cell, node, colName, node.attributes[colName]);
-		}
 	}
 
 	// Pins every row's actions (+/copy/delete) to the same horizontal
@@ -1172,17 +1164,10 @@ export class WaXmlTree extends HTMLElement {
 
 		cell.addEventListener("dblclick", (e) => {
 			e.stopPropagation();
-			if (value === undefined) {
-				// Double-clicking a cell for an attribute the element doesn't have
-				// yet adds it (empty value) right away, then continues straight
-				// into edit mode — xmlStore's change event re-renders the whole
-				// tree synchronously, so we ask render() to resume editing on the
-				// freshly-created cell once it exists (see _pendingEditTarget below).
-				this._pendingEditTarget = { nodeId: node.id, colName };
-				xmlStore.updateAttributes(node.id, { ...node.attributes, [colName]: "" });
-			} else {
-				this._editAttrCell(cell, node, colName, value);
-			}
+			// An attribute the element doesn't have yet opens straight into edit
+			// mode too; it is only added once it gets a value (an empty one is
+			// never kept, see xml-store.js).
+			this._editAttrCell(cell, node, colName, value);
 		});
 
 		return cell;
@@ -1203,7 +1188,7 @@ export class WaXmlTree extends HTMLElement {
 			if (committed) return;
 			committed = true;
 			const newValue = input.value;
-			if (newValue === currentValue) {
+			if (newValue === currentValue || (newValue === "" && currentValue === undefined)) {
 				this.render();
 				return;
 			}

@@ -679,7 +679,7 @@ export class WaNodeInspector extends HTMLElement {
 			this._isLocalEdit = true;
 			xmlStore.updateAttributes(node.id, { ...node.attributes, [attrName]: v });
 			this._isLocalEdit = false;
-			removeBtn.disabled = false;
+			removeBtn.disabled = v === ""; // an emptied field removes the attribute (see xml-store.js)
 			applyLiveAttributeNudge(node, attrName, v);
 		};
 

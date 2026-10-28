@@ -198,13 +198,17 @@ export class WaFileMenu extends HTMLElement {
 			}
 		});
 
-		this._onDocumentClick = () => this._close();
-		document.addEventListener("click", this._onDocumentClick);
+		// Capture phase, so a click on another menu's button (which stops its
+		// own propagation) still closes this one: only one menu is open at a time.
+		this._onDocumentClick = (e) => {
+			if (!e.composedPath().includes(this)) this._close();
+		};
+		document.addEventListener("click", this._onDocumentClick, true);
 		document.addEventListener("keydown", this._onKeyDown);
 	}
 
 	disconnectedCallback() {
-		document.removeEventListener("click", this._onDocumentClick);
+		document.removeEventListener("click", this._onDocumentClick, true);
 		document.removeEventListener("keydown", this._onKeyDown);
 	}
 

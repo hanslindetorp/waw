@@ -141,13 +141,34 @@ går via rena funktioner i `xml-tree-ops.js` och slutar med
 `detail.structural`-flagga:
 
 - **`structural = true`** (default): kan ha ändrat *formen* på dokumentet
-  (nod tillagd/borttagen/omordnad/omdöpt). `player-store.js` lyssnar
-  specifikt på detta för att stoppa uppspelning och tvinga en omladdning av
-  den levande ljudgrafen nästa gång man trycker Play.
-- **`structural = false`**: bara ett attributvärde ändrades (`updateAttributes`,
-  `updateTextContent`). Ändrar aldrig dokumentets form, så uppspelningen
-  fortsätter ostört — det här är vad som gör att man kan dra i en Mixer-ratt
-  eller Inspector-slider *medan* musiken spelas utan att den hackar.
+  (nod tillagd/borttagen/omordnad/omdöpt) eller ett attribut som den
+  levande grafen inte kan ta emot utan ombyggnad. `player-store.js` stoppar
+  då uppspelningen och laddar om grafen (`updateFromString`) efter 400 ms.
+- **`structural = false`**: bara ett *kontinuerligt* attributvärde ändrades.
+  Uppspelningen fortsätter ostört — det är därför man kan dra i en
+  Mixer-ratt eller Inspector-slider *medan* musiken spelas.
+
+Vad som räknas som det senare avgörs av en tillåtelselista i
+`js/waxml-integration/live-attributes.js` (ändrad 2026-10-28, efter att
+studenter väntat minuter på att ändringar skulle höras): bara kända
+kontinuerliga parametrar (`gain`, `frequency`, `Q`, `pan`, `delayTime`, ...)
+med ett rent numeriskt värde, filtrets `type`, WaveShapers `oversample`,
+`label` (som aldrig angår motorn) och borttagning av Mixerns `solo` hoppar
+över omladdningen. Allt annat — `id`/`class`, `src`, övriga enum/text,
+uttryck, och *borttagning* av ett attribut — ger omladdning, eftersom
+värdet annars bara hamnar i XML:en och inte hörs. Ett attribut med tom
+sträng behålls aldrig (`updateAttributes` tar bort det). Inuti en
+`<Composition>` gäller i stället `LIVE_NUDGE_ALLOWED_ATTRS` i `xml-store.js`.
+Ändringar som hoppar över omladdningen skickas in i de levande objekten av
+`player-store.js` (`liveAttributes` i eventets detail), oavsett vilken editor
+som gjorde dem.
+
+Kodfönstret (`setCodeValue(text, { onlyIfChanged: true })`) laddar bara om
+när texten är giltig XML som faktiskt skiljer sig från dokumentet; en
+halvskriven tagg eller en ren blankstegsändring stoppar inte musiken.
+Misslyckas en omladdning (fel eller timeout efter 8 s) försöker
+`player-store.js` igen efter 1,5, 4 och 10 s, och därefter visar
+bottenfältet en röd "Audio failed to load — Retry"-knapp (`loadState`).
 
 ### `selection` (js/state/selection.js)
 

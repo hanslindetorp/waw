@@ -1,9 +1,19 @@
 import * as ops from "./xml-tree-ops.js";
 import { creationAttributes } from "./default-attributes.js";
 import { isVariableControlled } from "./variable-references.js";
+import { isLiveAttributeChange, liveAttributePushes } from "../waxml-integration/live-attributes.js";
 import { findChainOrderProblems } from "./chain-rules.js";
 
 const EMPTY_XML = '<?xml version="1.0" encoding="UTF-8"?>';
+
+// An attribute with an empty string as its value is never kept: clearing a
+// field removes the attribute altogether, the same as the remove button does
+// (per Hans, 2026-10-28). Applied to every attribute write that goes through
+// this store; text typed straight into the code editor is the author's own.
+function withoutEmptyValues(attributes) {
+	if (!Object.values(attributes).some((v) => v === "")) return attributes;
+	return Object.fromEntries(Object.entries(attributes).filter(([, v]) => v !== ""));
+}
 
 // Shared state for the graphical XML editor (panel 2) and the XML source
 // view (panel 4) — same singleton-EventTarget pattern as vfs.js/selection.js,
@@ -556,14 +566,22 @@ class XmlStore extends EventTarget {
 	updateAttributes(nodeId, attributes) {
 		if (!this.root) return;
 		const node = ops.findNodeById(this.root, nodeId);
+		attributes = withoutEmptyValues(attributes);
 		attributes = this._applyActiveFadeTimeWorkaround(node, attributes);
 		const link = this._varLinkChange(node, attributes);
 		if (link) attributes = link.attributes;
 		const structural = !!link || this._attributeChangeNeedsRebuild(node, attributes);
 		const liveNudge = !structural ? this._buildLiveNudge(node, attributes) : null;
+		// The other half of "no reload": a change that skipped it is pushed into
+		// the live object by player-store.js, whichever editor made it.
+		let liveAttributes = null;
+		if (!structural && !liveNudge && node?.attributes.id) {
+			const changed = liveAttributePushes(node.tagName, node.attributes, attributes);
+			if (Object.keys(changed).length) liveAttributes = { elementId: node.attributes.id, changed };
+		}
 		this.root = ops.updateNodeAttributes(this.root, nodeId, attributes);
 		if (link?.renamed) this.root = ops.renameVarReferences(this.root, link.detail.oldName, link.detail.newName);
-		this._syncCode(structural, liveNudge ? { liveNudge } : {});
+		this._syncCode(structural, { ...(liveNudge ? { liveNudge } : {}), ...(liveAttributes ? { liveAttributes } : {}) });
 		if (link) this.dispatchEvent(new CustomEvent("var-link-changed", { detail: link.detail }));
 	}
 
@@ -612,7 +630,7 @@ class XmlStore extends EventTarget {
 		for (const { nodeId, attributes } of changes) {
 			const node = ops.findNodeById(this.root, nodeId);
 			if (!node) continue;
-			let attrs = this._applyActiveFadeTimeWorkaround(node, attributes);
+			let attrs = this._applyActiveFadeTimeWorkaround(node, withoutEmptyValues(attributes));
 			const link = this._varLinkChange(node, attrs);
 			if (link) attrs = link.attributes;
 			if (link || this._attributeChangeNeedsRebuild(node, attrs)) structural = true;
@@ -733,6 +751,20 @@ class XmlStore extends EventTarget {
 				if (!XmlStore.LIVE_NUDGE_ALLOWED_ATTRS.has(name)) return true;
 			}
 		}
+		// Everything else that changed needs a full reload too unless it is a
+		// continuous parameter the live graph takes as it is (see
+		// live-attributes.js): an id/class change, a new src, an enum, a
+		// removed attribute... would otherwise sit in the XML and only be heard
+		// at the next unrelated reload. Section/Layer/Stinger inside a
+		// <Composition> were screened by the allowlist above.
+		if (!(this._isInsideComposition(node) && XmlStore.LIVE_NUDGEABLE_COMPOSITION_TAGS.has(node.tagName))) {
+			for (const name of new Set([...Object.keys(node.attributes), ...Object.keys(nextAttributes)])) {
+				const was = node.attributes[name];
+				const now = nextAttributes[name];
+				if (was === now) continue;
+				if (!isLiveAttributeChange(node.tagName, name, was, now)) return true;
+			}
+		}
 		// An attribute whose value newly becomes (or stops being) a "$name"
 		// <Var> reference needs a full reload too, for the same "live nudge
 		// silently no-ops" reason as the Composition rule above: waxml.js
@@ -785,9 +817,18 @@ class XmlStore extends EventTarget {
 
 	// --- code -> tree sync (called by wa-xml-code on every edit) ---
 
-	setCodeValue(code) {
+	// `onlyIfChanged` (default false): the code editor passes true for what it
+	// types, so the graph is only reloaded
+	// when the text is valid XML that really differs from the document — a
+	// half-typed tag, or a change that only moves whitespace, must not stop
+	// the playing music and unload the graph (per Hans, 2026-10-28). Callers
+	// that replace the whole document (open project, undo, ...) keep the
+	// default.
+	setCodeValue(code, { onlyIfChanged = false } = {}) {
+		const previousXml = onlyIfChanged && this.root ? ops.generateFullXmlWithLineMap(this.root).xml : null;
 		this.codeValue = code;
 		const parsed = ops.parseXmlString(code);
+		let structural = true;
 		if (parsed) {
 			// Backfilled into the tree only — codeValue stays exactly as typed
 			// (below) so a freshly-typed <Stinger/> with no id yet doesn't get
@@ -802,11 +843,16 @@ class XmlStore extends EventTarget {
 			// tree in our own canonical layout, so they only match the literal
 			// text 1:1 while the user's formatting happens to agree with it.
 			// They re-sync exactly on the next tree-driven edit (_syncCode).
-			this.lineMap = ops.generateFullXmlWithLineMap(this.root).lineMap;
+			const generated = ops.generateFullXmlWithLineMap(this.root);
+			this.lineMap = generated.lineMap;
+			if (onlyIfChanged && previousXml !== null && generated.xml === previousXml) structural = false;
+		} else if (onlyIfChanged) {
+			// Invalid XML is left as-is in codeValue so the user can keep typing,
+			// but root/selection don't change — matches the DEMO's behaviour.
+			// Nothing about the document changed, so the graph stays as it is.
+			structural = false;
 		}
-		// Invalid XML is left as-is in codeValue so the user can keep typing,
-		// but root/selection don't change — matches the DEMO's behaviour.
-		this._emit();
+		this._emit(structural);
 	}
 
 	// structural (default true — the safe default, since under-flagging a

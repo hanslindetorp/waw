@@ -1,6 +1,8 @@
 import { undo, redo, canUndo, canRedo, addHistoryChangeListener, isEditableContext } from "../project/edit-history.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { showToast } from "../ui/toast.js";
+import { playerStore } from "../waxml-integration/player-store.js";
+import { parseXmlString } from "../xml-editor/xml-tree-ops.js";
 
 // Mac gets the ⌘ glyph in the shortcut hint; everyone else gets "Ctrl" — a
 // label-only distinction, edit-history.js's own keydown handler already
@@ -11,6 +13,7 @@ const REDO_HINT = IS_MAC ? "⇧⌘Z" : "Ctrl+Y";
 const COPY_HINT = IS_MAC ? "⌘C" : "Ctrl+C";
 const CUT_HINT = IS_MAC ? "⌘X" : "Ctrl+X";
 const PASTE_HINT = IS_MAC ? "⌘V" : "Ctrl+V";
+const UPDATE_HINT = IS_MAC ? "⌘U" : "Ctrl+U";
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -102,6 +105,11 @@ template.innerHTML = `
 			<span>Paste</span>
 			<span class="hint">${PASTE_HINT}</span>
 		</button>
+		<div class="menu-divider"></div>
+		<button class="menu-item" type="button" data-action="update">
+			<span>Update Changes</span>
+			<span class="hint">${UPDATE_HINT}</span>
+		</button>
 	</div>
 `;
 
@@ -117,6 +125,7 @@ export class WaEditMenu extends HTMLElement {
 		this._copyBtn = this.shadowRoot.querySelector('[data-action="copy"]');
 		this._cutBtn = this.shadowRoot.querySelector('[data-action="cut"]');
 		this._pasteBtn = this.shadowRoot.querySelector('[data-action="paste"]');
+		this._updateBtn = this.shadowRoot.querySelector('[data-action="update"]');
 		this._onHistoryChange = () => this._updateDisabledState();
 		this._onXmlStoreChange = () => this._updateDisabledState();
 		this._onKeyDown = this._onKeyDown.bind(this);
@@ -158,8 +167,18 @@ export class WaEditMenu extends HTMLElement {
 			this._close();
 		});
 
-		this._onDocumentClick = () => this._close();
-		document.addEventListener("click", this._onDocumentClick);
+		this._updateBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._updateChanges();
+			this._close();
+		});
+
+		// Capture phase, so a click on another menu's button (which stops its
+		// own propagation) still closes this one: only one menu is open at a time.
+		this._onDocumentClick = (e) => {
+			if (!e.composedPath().includes(this)) this._close();
+		};
+		document.addEventListener("click", this._onDocumentClick, true);
 		document.addEventListener("keydown", this._onKeyDown);
 
 		addHistoryChangeListener(this._onHistoryChange);
@@ -168,7 +187,7 @@ export class WaEditMenu extends HTMLElement {
 	}
 
 	disconnectedCallback() {
-		document.removeEventListener("click", this._onDocumentClick);
+		document.removeEventListener("click", this._onDocumentClick, true);
 		document.removeEventListener("keydown", this._onKeyDown);
 		xmlStore.removeEventListener("change", this._onXmlStoreChange);
 	}
@@ -189,6 +208,13 @@ export class WaEditMenu extends HTMLElement {
 			return;
 		}
 		if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+		// Update Changes works from inside the Code panel too (that is where
+		// it is most needed), so it comes before the text-field guard below.
+		if (e.key.toLowerCase() === "u" && !e.shiftKey) {
+			e.preventDefault();
+			this._updateChanges();
+			return;
+		}
 		if (isEditableContext()) return;
 		const key = e.key.toLowerCase();
 		if (key === "c") {
@@ -201,6 +227,18 @@ export class WaEditMenu extends HTMLElement {
 			e.preventDefault();
 			this._paste();
 		}
+	}
+
+	// Reloads the audio graph from the document as it is now (the Code panel's
+	// text is always mirrored into it while it is valid XML). When the text
+	// currently isn't valid, the last valid version is what gets loaded, and
+	// the user is told.
+	_updateChanges() {
+		if (!xmlStore.root) return;
+		if (!parseXmlString(xmlStore.codeValue)) {
+			showToast("The code has errors — updating with the last valid version.", { kind: "warning" });
+		}
+		playerStore.updateNow();
 	}
 
 	_copy() {

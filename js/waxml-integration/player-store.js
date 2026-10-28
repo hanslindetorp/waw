@@ -18,6 +18,13 @@ const RELOAD_DEBOUNCE_MS = 400;
 // reload for the rest of the session, since nothing would ever clear it.
 const RELOAD_TIMEOUT_MS = 8000;
 
+// A load that failed or timed out is tried again on its own, a few times with
+// growing pauses, instead of leaving the graph unloaded (which silently drops
+// every live edit and Var knob) until the next unrelated structural edit —
+// the "my changes aren't heard for minutes" case. Per Hans (2026-10-28).
+// After the last attempt the player bar shows a "Retry" button.
+const RETRY_DELAYS_MS = [1500, 4000, 10000];
+
 // Global playback state, independent of whichever Preview panel/view
 // happens to be showing — per Hans: switching from viewing a <Section> to
 // viewing a <Mixer> (or anything else) must never interrupt playback. The
@@ -51,6 +58,8 @@ class PlayerStore extends EventTarget {
 		this._reloadInFlight = false;
 		this._reloadPending = false;
 		this._reloadPromise = null; // shared by every caller currently waiting on _reloadDocument() — see there
+		this._loadFailed = false; // the last attempt to load the graph failed or timed out
+		this._failedAttempts = 0; // in a row, since the last successful load or structural edit
 		xmlStore.addEventListener("change", (e) => this._onXmlStoreChange(e));
 	}
 
@@ -64,9 +73,12 @@ class PlayerStore extends EventTarget {
 			// stayed non-structural because that tag's live object now exposes a
 			// generic waxml.js .set(param, value), per Hans (2026-09-08).
 			if (e.detail?.liveNudge) this._applyLiveNudge(e.detail.liveNudge);
+			if (e.detail?.liveAttributes) this._applyLiveAttributes(e.detail.liveAttributes);
 			return; // an attribute-only edit never invalidates the live graph's shape
 		}
 		this._documentLoaded = false;
+		this._loadFailed = false;
+		this._failedAttempts = 0;
 		if (this.isPlaying) {
 			try {
 				bridge.stopAll();
@@ -100,6 +112,29 @@ class PlayerStore extends EventTarget {
 			} catch {
 				// Same reasoning as live-property.js's own catch: not worth
 				// surfacing, the XML attribute is already the source of truth.
+			}
+		}
+	}
+
+	// Pushes the attributes of a non-structural edit (continuous parameters,
+	// see live-attributes.js) into the live object by property assignment,
+	// the same contract as live-property.js's applyLiveProperty (reimplemented
+	// here for the same circular-import reason as _applyLiveNudge above).
+	_applyLiveAttributes({ elementId, changed }) {
+		if (!this._documentLoaded || !elementId) return;
+		let liveObj;
+		try {
+			const matches = bridge.getLiveObjects(`[id='${elementId}']`);
+			liveObj = matches && matches[0];
+		} catch {
+			liveObj = null;
+		}
+		if (!liveObj) return;
+		for (const [param, value] of Object.entries(changed)) {
+			try {
+				liveObj[param] = value;
+			} catch {
+				// A property this object doesn't support — the XML stays the source of truth.
 			}
 		}
 	}
@@ -147,6 +182,8 @@ class PlayerStore extends EventTarget {
 			try {
 				await raceWithTimeout(bridge.loadFullDocument(xmlStore.root), RELOAD_TIMEOUT_MS);
 				this._documentLoaded = true;
+				this._loadFailed = false;
+				this._failedAttempts = 0;
 				this._emit();
 			} catch (err) {
 				// waxml.js hasn't finished loading yet, a transient parse issue,
@@ -154,12 +191,58 @@ class PlayerStore extends EventTarget {
 				// console warning (unlike the individual live-nudge failures
 				// elsewhere in this integration, a graph that won't load at all
 				// is a real operational problem, not routine no-op territory).
-				// The next structural change (or the loop continuing below)
-				// will try again.
+				// The loop continuing below, the automatic retry after it, or
+				// the next structural change will try again.
 				console.warn("player-store: failed to load the live waxml graph", err);
+				this._loadFailed = true;
+				this._failedAttempts++;
+				this._emit();
 			}
 		} while (this._reloadPending);
 		this._reloadInFlight = false;
+		if (!this._documentLoaded && this._loadFailed && this._failedAttempts <= RETRY_DELAYS_MS.length) {
+			clearTimeout(this._reloadTimer);
+			this._reloadTimer = setTimeout(() => this._reloadDocument(), RETRY_DELAYS_MS[this._failedAttempts - 1]);
+		}
+	}
+
+	// Edit > Update Changes (Cmd/Ctrl+U): reloads the graph from the document
+	// right now — without waiting for the debounce, the way a structural edit
+	// would — whatever state the live graph is in. A safety valve for when
+	// something didn't reach the engine. Per Hans (2026-10-28).
+	updateNow() {
+		this._documentLoaded = false;
+		this._loadFailed = false;
+		this._failedAttempts = 0;
+		if (this.isPlaying) {
+			try {
+				bridge.stopAll();
+			} catch {
+				// waxml not loaded / nothing playing — fine.
+			}
+			this.isPlaying = false;
+		}
+		this._emit();
+		clearTimeout(this._reloadTimer);
+		return this._reloadDocument();
+	}
+
+	// The player bar's "Retry" button: a fresh load, with the automatic
+	// retries available again.
+	retryLoad() {
+		this._failedAttempts = 0;
+		clearTimeout(this._reloadTimer);
+		return this._reloadDocument();
+	}
+
+	// "ready" — the live graph matches the document (or there is nothing to
+	// load); "loading" — an edit is waiting for its reload, or one is running,
+	// and live edits meanwhile only reach the document; "failed" — the load
+	// failed and no attempt is left running (see RETRY_DELAYS_MS).
+	get loadState() {
+		if (!xmlStore.root || this._documentLoaded) return "ready";
+		const retrying = this._loadFailed && this._failedAttempts <= RETRY_DELAYS_MS.length;
+		return this._loadFailed && !retrying ? "failed" : "loading";
 	}
 
 	// The PLAY/STOP field auto-follows whatever element was most recently

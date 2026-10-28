@@ -10,6 +10,17 @@ const VIEWS = [
 	{ id: "library", label: "Library (DEMO)" }
 ];
 
+// The workstation's panels, shown/hidden (collapsed) from here as well as with
+// each panel's own -/+ button. Per Hans (2026-10-28).
+const PANELS = [
+	{ id: "inputPanel", label: "Input" },
+	{ id: "fileManager", label: "File Manager" },
+	{ id: "xmlEditor", label: "XML Editor" },
+	{ id: "preview", label: "Preview" },
+	{ id: "stagePanel", label: "Stage" },
+	{ id: "xmlCode", label: "Code" }
+];
+
 const template = document.createElement("template");
 template.innerHTML = `
 	<style>
@@ -45,6 +56,11 @@ template.innerHTML = `
 			min-width: 12rem;
 			padding: 0.3rem;
 		}
+		.menu-divider {
+			height: 1px;
+			margin: 0.3rem 0.2rem;
+			background: var(--waw-border, #2f2f2f);
+		}
 		.menu-item {
 			display: flex;
 			align-items: center;
@@ -74,6 +90,8 @@ template.innerHTML = `
 	<button class="menu-trigger" type="button">View</button>
 	<div class="menu-dropdown" hidden>
 		${VIEWS.map((v) => `<button class="menu-item" type="button" data-view="${v.id}"><span>${v.label}</span><span class="check">✓</span></button>`).join("")}
+		<div class="menu-divider"></div>
+		${PANELS.map((p) => `<button class="menu-item" type="button" data-panel="${p.id}"><span>${p.label}</span><span class="check">✓</span></button>`).join("")}
 	</div>
 `;
 
@@ -84,7 +102,8 @@ export class WaViewMenu extends HTMLElement {
 		this.shadowRoot.appendChild(template.content.cloneNode(true));
 		this._trigger = this.shadowRoot.querySelector(".menu-trigger");
 		this._dropdown = this.shadowRoot.querySelector(".menu-dropdown");
-		this._items = [...this.shadowRoot.querySelectorAll(".menu-item")];
+		this._items = [...this.shadowRoot.querySelectorAll(".menu-item[data-view]")];
+		this._panelItems = [...this.shadowRoot.querySelectorAll(".menu-item[data-panel]")];
 		this._onViewChange = () => this._updateCurrent();
 	}
 
@@ -100,18 +119,43 @@ export class WaViewMenu extends HTMLElement {
 				this._close();
 			});
 		});
-		this._onDocumentClick = () => this._close();
-		document.addEventListener("click", this._onDocumentClick);
+		// A panel item stays open after a click (like a checkbox list) so several
+		// can be toggled in a row; the ✓ follows the panel itself, whichever way
+		// it was collapsed.
+		this._panelItems.forEach((item) => {
+			item.addEventListener("click", (e) => {
+				e.stopPropagation();
+				document.getElementById(item.dataset.panel)?.toggleCollapse();
+			});
+		});
+		this._onPanelChange = () => this._updatePanels();
+		document.addEventListener("collapse-change", this._onPanelChange);
+		// Capture phase, so a click on another menu's button (which stops its
+		// own propagation) still closes this one: only one menu is open at a time.
+		this._onDocumentClick = (e) => {
+			if (!e.composedPath().includes(this)) this._close();
+		};
+		document.addEventListener("click", this._onDocumentClick, true);
 		viewState.addEventListener("change", this._onViewChange);
 		this._updateCurrent();
+		this._updatePanels();
 	}
 
 	disconnectedCallback() {
-		document.removeEventListener("click", this._onDocumentClick);
+		document.removeEventListener("click", this._onDocumentClick, true);
+		document.removeEventListener("collapse-change", this._onPanelChange);
 		viewState.removeEventListener("change", this._onViewChange);
 	}
 
+	_updatePanels() {
+		this._panelItems.forEach((item) => {
+			const panel = document.getElementById(item.dataset.panel);
+			item.classList.toggle("current", !!panel && !panel.collapsed);
+		});
+	}
+
 	_open() {
+		this._updatePanels();
 		this._dropdown.hidden = false;
 		this.classList.add("open");
 	}
