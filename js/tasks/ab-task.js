@@ -99,14 +99,31 @@ export function updateTaskMeta(viewId, patch) {
 	return syncAbTask(viewId);
 }
 
-// An attribute the student may (not) change.
+// An attribute the student may (not) change. Taking one out FIXES it: B is set to
+// A's value and from then on follows A (see markChanged), so what the author sets on
+// A for a value the student can't change is what B has too. Putting it back lets the
+// student adjust it (and A is what it has to be found against) again.
 export function setEditable(viewId, slot, attr, on) {
 	const meta = taskOfView(viewId);
 	if (!meta) return null;
 	const key = editableKey(slot, attr);
 	const has = meta.editable.includes(key);
+	const fixed = (meta.fixed || []).filter((k) => k !== key);
 	if (on === has) return syncAbTask(viewId);
-	return updateTaskMeta(viewId, { editable: on ? [...meta.editable, key] : meta.editable.filter((k) => k !== key) });
+	if (!on) {
+		fixed.push(key);
+		followA(meta, slot, attr);
+	}
+	return updateTaskMeta(viewId, { editable: on ? [...meta.editable, key] : meta.editable.filter((k) => k !== key), fixed });
+}
+
+// B gets the value A has — exactly as A has it written.
+function followA(meta, slot, attr) {
+	const a = findElement(elementId(meta.prefix, "a", slot));
+	const b = findElement(elementId(meta.prefix, "b", slot));
+	if (!a || !b) return;
+	const text = a.attributes[attr] !== undefined ? a.attributes[attr] : attributeText(slot, attr, SLOTS[slot].start[attr]);
+	if (b.attributes[attr] !== text) xmlStore.updateAttributes(b.id, { ...b.attributes, [attr]: text });
 }
 
 // The values of strip A's parts as they are in the document: { "<slot>.<attr>": number }.
@@ -132,6 +149,11 @@ export function markChanged(viewId, before) {
 	Object.keys(now).forEach((key) => {
 		if (!Number.isFinite(now[key])) return;
 		const [slot, attr] = key.split(".");
+		// A value the author fixed is not something the student finds: B just follows it.
+		if ((meta.fixed || []).includes(key)) {
+			if (before[key] !== now[key]) followA(meta, slot, attr);
+			return;
+		}
 		const atStart = isAtStart(slot, attr, now[key]);
 		if (before[key] !== now[key] && !atStart && !meta.editable.includes(key)) added.push(key);
 		if (atStart && meta.editable.includes(key) && before[key] !== now[key]) dropped.push(key);

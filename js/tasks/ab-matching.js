@@ -17,15 +17,16 @@ import { drawTargets } from "../assessment/targets.js";
 //   <AudioBufferSourceNode id="<p>-src" src=… loop="true" output="#<p>-a, #<p>-b"/>     a sound file
 //   <OscillatorNode/Noise id="<p>-src" output="#<p>-gate"/> + <GainNode id="<p>-gate"   a continuous source,
 //        gain="$gate<p>" output="#<p>-a, #<p>-b"/> + <Var name="gate<p>" default="0"/>   switched on and off by the Var
-//   <Mixer solo="$solo<p>" blend="0" transitionTime="0">
+//   <Mixer solo="$solo<p>" blend="0" transitionTime="50">
 //     <Chain id="<p>-a"> mute, high shelf, peaking, low shelf, pan, volume </Chain>     the reference
 //     <Chain id="<p>-b"> … </Chain>                                                      the student's
 //   </Mixer>
 //   <Command> start, stop (the source) and listen-a / listen-b (set $solo<p> to 0 / 1)
 //
 // The same source feeds both strips, so A and B are the same sound at the same
-// moment, and the Mixer's solo (blend 0 and no transition time: a hard switch,
-// so no value in between lets both strips through) is the A/B switch. A sound
+// moment, and the Mixer's solo (blend 0: a hard switch, so no value in between
+// lets both strips through; 50 ms transition time to keep the switch from clicking)
+// is the A/B switch. A sound
 // file has start and stop of its own (trig/stop); an oscillator or noise runs
 // from the moment it is created and has none, hence the gate.
 //
@@ -158,7 +159,7 @@ export function buildAbGraph(spec) {
 			node("GainNode", { id: `${chainId(prefix, chain)}${MUTE_SUFFIX}`, label: "Mute", gain: "1" }),
 			...Object.keys(SLOTS).map((slot) => slotElement(prefix, chain, slot))
 		]);
-	const mixer = node("Mixer", { id: `${prefix}-mix`, label: spec.title || "A/B task", blend: "0", transitionTime: "0", solo: `$${soloVar}` }, [strip("a"), strip("b")]);
+	const mixer = node("Mixer", { id: `${prefix}-mix`, label: spec.title || "A/B task", blend: "0", transitionTime: "50", solo: `$${soloVar}` }, [strip("a"), strip("b")]);
 	const commands = [
 		node("Command", { id: `${prefix}-start`, label: "Start", ...source.start }),
 		node("Command", { id: `${prefix}-stop`, label: "Stop", ...source.stop }),
@@ -172,6 +173,7 @@ export function buildAbGraph(spec) {
 		display: spec.display === "strip" ? "strip" : "objects",
 		slots,
 		editable: [],
+		fixed: [], // values the author took out of what the student adjusts: B follows A's
 		ranges: {},
 		precision: {},
 		strictness: STRICTNESS[spec.strictness] ? spec.strictness : "medium"

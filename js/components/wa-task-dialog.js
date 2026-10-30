@@ -1,4 +1,4 @@
-import { vfs } from "../vfs/VFS.js";
+import { vfs, ROOT_ID } from "../vfs/VFS.js";
 import { showToast } from "../ui/toast.js";
 import { xmlStore } from "../xml-editor/xml-store.js";
 import { playerStore } from "../waxml-integration/player-store.js";
@@ -114,6 +114,7 @@ template.innerHTML = `
 		.attr-group { margin-bottom: 0.6rem; }
 		.attr-group-name { font-weight: 600; margin-bottom: 0.2rem; }
 		.attr-row { display: grid; grid-template-columns: 1.1rem 1fr auto; gap: 0.1rem 0.45rem; align-items: center; padding: 0.15rem 0; }
+		.attr-row.found .attr-label { color: var(--waw-accent, #4fa3ff); font-weight: 600; }
 		.attr-row .range { grid-column: 2 / 4; color: var(--waw-teal, #45b58c); font-size: 0.76rem; }
 		.attr-value { color: var(--waw-muted, #8a8a8a); font-size: 0.78rem; margin-left: 0.4rem; }
 		.attr-row .precision { grid-column: 2 / 4; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.74rem; color: var(--waw-muted, #8a8a8a); }
@@ -401,14 +402,33 @@ export class WaTaskDialog extends HTMLElement {
 		}
 		fileSelect.disabled = !files.length;
 		fileSelect.addEventListener("change", () => (spec.source.src = fileSelect.value));
+		// A file from the computer goes straight into the project (see _upload).
+		const upload = document.createElement("input");
+		upload.type = "file";
+		upload.accept = "audio/*,.wav,.mp3,.ogg,.m4a";
+		upload.hidden = true;
+		upload.addEventListener("click", (e) => e.stopPropagation());
+		upload.addEventListener("change", () => {
+			const file = upload.files[0];
+			upload.value = "";
+			if (file) this._upload(file);
+		});
+		const uploadBtn = document.createElement("button");
+		uploadBtn.type = "button";
+		uploadBtn.className = "action";
+		uploadBtn.textContent = "Upload a file…";
+		uploadBtn.addEventListener("click", (e) => {
+			e.preventDefault();
+			upload.click();
+		});
 		const fileSub = document.createElement("div");
-		fileSub.appendChild(fileSelect);
-		if (!files.length) {
-			const hint = document.createElement("div");
-			hint.className = "hint";
-			hint.textContent = "There is no audio file in the project yet — add one in the File Manager first.";
-			fileSub.appendChild(hint);
-		}
+		fileSub.style.cssText = "display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap";
+		fileSub.append(fileSelect, uploadBtn, upload);
+		const hint = document.createElement("div");
+		hint.className = "hint";
+		hint.style.flexBasis = "100%";
+		hint.textContent = files.length ? "From the project's files, or upload one — it is put in the audio folder." : "There is no audio file in the project yet — upload one.";
+		fileSub.appendChild(hint);
 		this._sources.appendChild(make("file", "A sound from the project", fileSub));
 		this._sources.appendChild(make("noise", "Noise", null));
 		const waveSelect = document.createElement("select");
@@ -442,6 +462,26 @@ export class WaTaskDialog extends HTMLElement {
 			later.innerHTML = `<div class="choice-head"><input type="radio" disabled />A Section of this project's Composition</div><div class="hint" style="margin:0.3rem 0 0 1.6rem">Coming later — for matching the balance between the tracks of a mix.</div>`;
 			this._sources.appendChild(later);
 		}
+	}
+
+	// A sound file picked on the computer: into the project's audio folder (or its
+	// root, when there is none), under a name that is free there, and chosen as the sound.
+	_upload(file) {
+		if (!isPreviewableAudioFile({ type: "file", name: file.name })) {
+			showToast("That is not an audio file (wav, mp3, ogg or m4a).", { kind: "warning" });
+			return;
+		}
+		const folder = vfs.listFolder(ROOT_ID).find((n) => n.type === "folder" && n.name.toLowerCase() === "audio");
+		const parentId = folder ? folder.id : ROOT_ID;
+		const taken = new Set(vfs.listFolder(parentId).map((n) => n.name));
+		const dot = file.name.lastIndexOf(".");
+		const base = dot > 0 ? file.name.slice(0, dot) : file.name;
+		const ext = dot > 0 ? file.name.slice(dot) : "";
+		let name = file.name;
+		for (let i = 2; taken.has(name); i++) name = `${base} (${i})${ext}`;
+		const node = vfs.uploadFile(parentId, name === file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified }));
+		this._spec.source.src = vfs.getExportPath(node.id);
+		this._renderSources();
 	}
 
 	// ── steps: display and objects ──
@@ -531,9 +571,15 @@ export class WaTaskDialog extends HTMLElement {
 	_switchTab(tab) {
 		this._tab = tab;
 		this._armed = null;
+		// What A is when the tab opens is what counts as "not changed" from here on
+		// (a value fixed on B must not come back as something the student finds).
+		if (tab === "a") {
+			const meta = taskOfView(this._viewId);
+			if (meta) this._before = readStrip(meta, "a");
+		}
 		this.shadowRoot.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
 		this._tabHint.textContent =
-			tab === "a" ? "Set A the way it should sound. What you change here is what the student has to find." : "Set the values B starts from, and tick what the student may adjust.";
+			tab === "a" ? "Set A the way it should sound. What you change here is what the student has to find." : "Set B's starting values. Tick what the student adjusts; untick a value to fix B at A's value.";
 		this._renderControls();
 		this._renderAttrs();
 		this._runSelfTest();
@@ -591,25 +637,18 @@ export class WaTaskDialog extends HTMLElement {
 				row.className = "attr-row";
 				const lead = document.createElement("span");
 				if (onA) {
-					lead.className = "mark";
-					lead.textContent = editable ? "✓" : "";
-					if (editable) {
-						lead.title = "The student has to find this. Click to reset it and take it out of the task.";
-						lead.style.cursor = "pointer";
-						lead.addEventListener("click", () => {
-							this._report_(resetAttribute(this._viewId, slot, attr), true);
-							this._before = readStrip(taskOfView(this._viewId), "a");
-						});
-					}
+					// (no mark here: which values the student adjusts is set on B)
+					row.classList.toggle("found", editable);
 				} else {
 					const cb = document.createElement("input");
 					cb.type = "checkbox";
 					cb.checked = editable;
-					cb.title = "The student may adjust this";
+					cb.title = "The student adjusts and is marked on this. Untick it to fix B at A's value instead.";
 					cb.addEventListener("change", () => this._report_(setEditable(this._viewId, slot, attr, cb.checked), true));
 					lead.appendChild(cb);
 				}
 				const label = document.createElement("span");
+				label.className = "attr-label";
 				const value = readDocumentValue(elementId(meta.prefix, this._tab, slot), attr, attr === "gain" ? "db" : "number");
 				label.append(ATTRIBUTES[attr].label);
 				const v = document.createElement("span");

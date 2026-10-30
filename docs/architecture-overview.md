@@ -1166,7 +1166,7 @@ tills de låter lika; en balansuppgift är samma sak (volymen mot en referens).
   balans mellan spår) är planerad men inte byggd. Källan kopplas till båda
   remsorna med `output="#abN-a, #abN-b"`.
 - **Mixer:** två fulla kanalremsor (A = referens, B = elevens) i en `<Mixer
-  solo="$soloabN" blend="0" transitionTime="0">`; A/B-Commands sätter solo
+  solo="$soloabN" blend="0" transitionTime="50">`; A/B-Commands sätter solo
   till 0/1 (blend 0 = hårt byte, inget mellanvärde läcker igenom båda).
 - **Uppgiftens data** (`task`) ligger i vyns assessment (författarens, ej
   publicerad): källa, vad som visas (`display`: `objects` | `strip`), delarna,
@@ -1183,7 +1183,12 @@ tills de låter lika; en balansuppgift är samma sak (volymen mot en referens).
   eleven ska hitta (`markChanged`) och varje numeriskt värde har en "rnd"-knapp
   (blinkar tills man vrider på reglaget; värdena man svepar över blir
   intervallet, som visas bredvid). På B ställer man in startvärden och kryssar
-  vad eleven får ändra. "Try a random target" sätter A till en slumpdragning för
+  vad eleven får ändra; kryssar man *ur* ett värde sätts B till A:s värde och
+  eleven kan inte ändra det (så görs ett förinställt värde: ändra i A, ta bort
+  krysset på B; värdet är då *fixerat* (`meta.fixed`) och B följer A:s värde
+  även om det ändras på A igen, tills man kryssar i det på nytt). A-fliken har ingen bock. Ljudfilen väljs bland projektets
+  filer eller laddas upp direkt (läggs i audio-mappen, annars roten).
+  "Try a random target" sätter A till en slumpdragning för
   att höra vad en elev får.
 - **Slumpade mål per elev** (`assessment/targets.js`): assessmentet listar
   `targets` (ett per värde med rnd-intervall: `key`, `ref`, `attr`, `write`,
