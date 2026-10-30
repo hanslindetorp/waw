@@ -52,6 +52,11 @@ class AssessmentStore extends EventTarget {
 			.then(() => this.dispatchEvent(new CustomEvent("change")));
 	}
 
+	// Every view that is assessed.
+	viewIds() {
+		return Object.keys(this._assessments);
+	}
+
 	has(viewId) {
 		return !!this._assessments[viewId];
 	}

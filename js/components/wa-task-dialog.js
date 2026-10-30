@@ -5,10 +5,10 @@ import { playerStore } from "../waxml-integration/player-store.js";
 import { isPreviewableAudioFile } from "./wa-file-preview.js";
 import "./wa-chain-view.js";
 import "./wa-mixer-view.js";
-import { SLOTS, ATTRIBUTES, OSCILLATOR_WAVES, DEFAULT_INSTRUCTION, PRECISION_LEVELS, PRECISION_LABELS, precisionOf, toleranceText, slotAttributes, editableKey, elementId, chainId } from "../tasks/ab-matching.js";
+import { SLOTS, ATTRIBUTES, OSCILLATOR_WAVES, DEFAULT_INSTRUCTION, PRECISION_LEVELS, PRECISION_LABELS, precisionOf, toleranceText, partAttributes, partOf, editableKey, elementId, chainId } from "../tasks/ab-matching.js";
 import { assessmentStore } from "../project/assessment-store.js";
 import { drawAndApply } from "../assessment/apply-targets.js";
-import { createAbTask, taskOfView, syncAbTask, setEditable, updateTaskMeta, readStrip, markChanged, deleteAbTask, readDocumentValue, resetAttribute, clearRange, snapToStart, setPrecision } from "../tasks/ab-task.js";
+import { createAbTask, taskOfView, syncAbTask, setEditable, updateTaskMeta, readStrip, markChanged, deleteAbTask, readDocumentValue, resetAttribute, clearRange, snapToStart, setPrecision, setRange, changeSource } from "../tasks/ab-task.js";
 
 // File > Create task...: sets up an "A/B matching" task (js/tasks/ab-matching.js)
 // the way an author sets up anything in the workstation — by turning the real
@@ -107,6 +107,8 @@ template.innerHTML = `
 		.tab.active { color: #06131f; background: var(--waw-accent, #4fa3ff); border-color: var(--waw-accent, #4fa3ff); }
 		.spacer { flex: 1 1 auto; }
 		.listen button.on { background: var(--waw-accent, #4fa3ff); color: #06131f; border-color: var(--waw-accent, #4fa3ff); }
+		.sound-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; }
+		.sound-panel { border: 1px solid var(--waw-border, #2f2f2f); border-radius: 6px; padding: 0.6rem 0.7rem; margin-bottom: 0.8rem; }
 		.setup-main { display: flex; flex-wrap: wrap; gap: 0.9rem; align-items: flex-start; }
 		.controls { flex: 1 1 16rem; display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: flex-start; }
 		.controls wa-chain-view { width: 250px; flex: 0 0 auto; }
@@ -187,6 +189,17 @@ template.innerHTML = `
 							<button class="action" type="button" data-listen="stop" title="Stop">■</button>
 						</span>
 					</div>
+					<div class="sound-row">
+						<span class="hint">Sound: <b class="sound-summary"></b></span>
+						<button class="action change-sound" type="button">Change sound…</button>
+					</div>
+					<div class="sound-panel" hidden>
+						<div class="sound-host"></div>
+						<div style="margin-top:0.5rem;display:flex;gap:0.5rem">
+							<button class="action primary apply-sound" type="button">Use this sound</button>
+							<button class="action cancel-sound" type="button">Cancel</button>
+						</div>
+					</div>
 					<div class="setup-main">
 						<div class="controls"></div>
 						<div class="attrs"></div>
@@ -213,6 +226,19 @@ template.innerHTML = `
 	</div>
 `;
 
+// Two numbers from what was typed: "300 - 3000", "300–3000", "300 3000", "0.2 to 0.8", "200 2k".
+function parseRange(text) {
+	const t = text.replace(/,/g, ".").replace(/[–—…]|\.{2,}|\bto\b/gi, " ").trim();
+	const num = "(-?\\d+(?:\\.\\d+)?k?)";
+	const m = new RegExp(`^${num}\\s*-\\s*${num}$`).exec(t) || new RegExp(`^${num}\\s+${num}$`).exec(t);
+	if (!m) return null;
+	const value = (x) => (x.endsWith("k") ? parseFloat(x) * 1000 : parseFloat(x));
+	const a = value(m[1]);
+	const b = value(m[2]);
+	if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return null;
+	return { min: Math.min(a, b), max: Math.max(a, b) };
+}
+
 export class WaTaskDialog extends HTMLElement {
 	constructor() {
 		super();
@@ -230,6 +256,9 @@ export class WaTaskDialog extends HTMLElement {
 		this._strictness = $(".strictness");
 		this._tabHint = $(".tab-hint");
 		this._tryRandom = $(".try-random");
+		this._soundPanel = $(".sound-panel");
+		this._soundHost = $(".sound-host");
+		this._soundSummary = $(".sound-summary");
 		this._back = $(".back");
 		this._next = $(".next");
 		this._delete = $(".delete");
@@ -270,6 +299,9 @@ export class WaTaskDialog extends HTMLElement {
 		);
 		this.shadowRoot.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => this._switchTab(t.dataset.tab)));
 		this.shadowRoot.querySelectorAll("[data-listen]").forEach((b) => b.addEventListener("click", () => this._listen(b.dataset.listen)));
+		this.shadowRoot.querySelector(".change-sound").addEventListener("click", () => this._openSoundPanel());
+		this.shadowRoot.querySelector(".cancel-sound").addEventListener("click", () => (this._soundPanel.hidden = true));
+		this.shadowRoot.querySelector(".apply-sound").addEventListener("click", () => this._applySound());
 		this._tryRandom.addEventListener("click", () => {
 			const bytes = new Uint8Array(6);
 			crypto.getRandomValues(bytes);
@@ -289,7 +321,7 @@ export class WaTaskDialog extends HTMLElement {
 	// ── opening ──
 	open() {
 		this._viewId = null;
-		this._spec = { title: "Match the sound", instruction: DEFAULT_INSTRUCTION, source: { kind: "file", src: "", wave: "sine", frequency: 220 }, display: "objects", slots: new Set(["peaking"]) };
+		this._spec = { title: "Match the sound", instruction: DEFAULT_INSTRUCTION, source: { kind: "file", src: "", wave: "sine", frequency: 220 }, display: "objects", slots: new Set(["pk"]) };
 		this._title.value = this._spec.title;
 		this._instruction.value = this._spec.instruction;
 		this._goTo("sound");
@@ -325,7 +357,7 @@ export class WaTaskDialog extends HTMLElement {
 		this.shadowRoot.querySelectorAll(".pane").forEach((p) => (p.hidden = p.dataset.pane !== step));
 		const names = { sound: "Sound", display: "What is shown", objects: "Objects", setup: "Set up A and B" };
 		this._steps.innerHTML = this._flow.map((s) => `<span class="${s === step ? "current" : ""}">${names[s]}</span>`).join("");
-		if (step === "sound") this._renderSources();
+		if (step === "sound") this._renderSources({ spec: this._spec, host: this._sources });
 		if (step === "display" || step === "objects") this._renderChoices();
 		if (step === "setup") this._enterSetup();
 		else this._unwatch();
@@ -362,9 +394,13 @@ export class WaTaskDialog extends HTMLElement {
 	}
 
 	// ── step: sound ──
-	_renderSources() {
-		const spec = this._spec;
-		this._sources.innerHTML = "";
+	// The sound chooser, in the first step (for the new task) or in the set-up (to change
+	// the sound of a task already made): `ctx` is { spec: { source }, host }.
+	_renderSources(ctx = this._sourceCtx) {
+		this._sourceCtx = ctx;
+		const spec = ctx.spec;
+		const host = ctx.host;
+		host.innerHTML = "";
 		const files = vfs.allFiles().filter(isPreviewableAudioFile);
 		const make = (kind, label, sub) => {
 			const box = document.createElement("label");
@@ -377,7 +413,7 @@ export class WaTaskDialog extends HTMLElement {
 			radio.checked = spec.source.kind === kind;
 			radio.addEventListener("change", () => {
 				spec.source.kind = kind;
-				this._renderSources();
+				this._renderSources(ctx);
 			});
 			head.append(radio, document.createTextNode(label));
 			box.appendChild(head);
@@ -429,8 +465,8 @@ export class WaTaskDialog extends HTMLElement {
 		hint.style.flexBasis = "100%";
 		hint.textContent = files.length ? "From the project's files, or upload one — it is put in the audio folder." : "There is no audio file in the project yet — upload one.";
 		fileSub.appendChild(hint);
-		this._sources.appendChild(make("file", "A sound from the project", fileSub));
-		this._sources.appendChild(make("noise", "Noise", null));
+		host.appendChild(make("file", "A sound from the project", fileSub));
+		host.appendChild(make("noise", "Noise", null));
 		const waveSelect = document.createElement("select");
 		OSCILLATOR_WAVES.forEach((w) => {
 			const opt = document.createElement("option");
@@ -455,12 +491,12 @@ export class WaTaskDialog extends HTMLElement {
 		const oscSub = document.createElement("div");
 		oscSub.style.cssText = "display:flex;align-items:center;gap:0.5rem";
 		oscSub.append(waveSelect, freqInput, document.createTextNode("Hz"));
-		this._sources.appendChild(make("oscillator", "A tone (oscillator)", oscSub));
+		host.appendChild(make("oscillator", "A tone (oscillator)", oscSub));
 		if (xmlStore.root?.children.some((c) => c.tagName === "Composition")) {
 			const later = document.createElement("div");
 			later.className = "choice disabled";
 			later.innerHTML = `<div class="choice-head"><input type="radio" disabled />A Section of this project's Composition</div><div class="hint" style="margin:0.3rem 0 0 1.6rem">Coming later — for matching the balance between the tracks of a mix.</div>`;
-			this._sources.appendChild(later);
+			host.appendChild(later);
 		}
 	}
 
@@ -480,8 +516,8 @@ export class WaTaskDialog extends HTMLElement {
 		let name = file.name;
 		for (let i = 2; taken.has(name); i++) name = `${base} (${i})${ext}`;
 		const node = vfs.uploadFile(parentId, name === file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified }));
-		this._spec.source.src = vfs.getExportPath(node.id);
-		this._renderSources();
+		this._sourceCtx.spec.source.src = vfs.getExportPath(node.id);
+		this._renderSources(this._sourceCtx);
 	}
 
 	// ── steps: display and objects ──
@@ -551,11 +587,41 @@ export class WaTaskDialog extends HTMLElement {
 		showToast("The task was deleted.", { kind: "info" });
 	}
 
+	// Another sound for a task already made. The old file stays in the project (another task
+	// may be using it); this task's buttons trig this task's own sound, by its id.
+	_openSoundPanel() {
+		const meta = taskOfView(this._viewId);
+		if (!meta) return;
+		this._soundPanel.hidden = false;
+		this._renderSources({ spec: { source: { wave: "sine", frequency: 220, ...meta.source } }, host: this._soundHost });
+	}
+
+	_applySound() {
+		const source = this._sourceCtx.spec.source;
+		if (source.kind === "file" && !source.src) {
+			showToast("Choose a sound file first.", { kind: "warning" });
+			return;
+		}
+		this._stopSound();
+		this._report_(changeSource(this._viewId, { ...source }), true);
+		this._soundPanel.hidden = true;
+		this._soundSummary.textContent = this._sourceText(taskOfView(this._viewId)?.source);
+	}
+
+	_sourceText(source) {
+		if (!source) return "";
+		if (source.kind === "file") return source.src || "(none)";
+		if (source.kind === "noise") return "Noise";
+		return `${WAVE_LABELS[source.wave] || source.wave} tone, ${source.frequency || 220} Hz`;
+	}
+
 	// ── step: set up A and B ──
 	_enterSetup() {
 		const meta = taskOfView(this._viewId);
 		if (!meta) return;
 		this._strictness.value = meta.strictness || "medium";
+		this._soundPanel.hidden = true;
+		this._soundSummary.textContent = this._sourceText(meta.source);
 		this._before = readStrip(meta, "a");
 		xmlStore.addEventListener("change", this._onXmlChange);
 		window.addEventListener("pointerup", this._onPointerUp, true);
@@ -597,14 +663,26 @@ export class WaTaskDialog extends HTMLElement {
 			strip.style.width = "220px";
 			strip.style.flex = "0 0 auto";
 			this._controls.appendChild(strip);
-			const keys = meta.slots.flatMap((slot) => slotAttributes(slot).map((attr) => `${elementId(meta.prefix, this._tab, slot)}.${attr}`));
-			strip.setEmbeddedStrip(chainId(meta.prefix, this._tab), keys);
+			// on A everything can be turned; on B only what the student adjusts (the rest is A's)
+			const keys = (meta.parts || []).flatMap((part) =>
+				partAttributes(part)
+					.filter((attr) => this._tab === "a" || meta.editable.includes(editableKey(part.id, attr)))
+					.map((attr) => `${elementId(meta.prefix, this._tab, part.id)}.${attr}`)
+			);
+			// the random ranges, shown on A's controls
+			const ranges = {};
+			if (this._tab === "a") Object.entries(meta.ranges || {}).forEach(([key, range]) => (ranges[`${elementId(meta.prefix, "a", key.split(".")[0])}.${key.split(".")[1]}`] = range));
+			strip.setEmbeddedStrip(chainId(meta.prefix, this._tab), this._tab === "a" ? null : keys, { structure: true, ranges });
 			return;
 		}
-		meta.slots.forEach((slot) => {
+		(meta.shown || []).forEach((id) => {
 			const card = document.createElement("wa-chain-view");
 			this._controls.appendChild(card);
-			card.setCardNode(elementId(meta.prefix, this._tab, slot), { editable: null, publicLabels: true });
+			const part = partOf(meta, id);
+			const editable = this._tab === "a" ? null : partAttributes(part).filter((attr) => meta.editable.includes(editableKey(id, attr)));
+			const ranges = {};
+			if (this._tab === "a") Object.entries(meta.ranges || {}).forEach(([key, range]) => key.startsWith(`${id}.`) && (ranges[key.split(".")[1]] = range));
+			card.setCardNode(elementId(meta.prefix, this._tab, id), { editable, publicLabels: true, dimLocked: true, ranges });
 		});
 	}
 
@@ -623,14 +701,16 @@ export class WaTaskDialog extends HTMLElement {
 		this._attrs.innerHTML = "";
 		if (!meta) return;
 		const onA = this._tab === "a";
-		meta.slots.forEach((slot) => {
+		const listed = meta.display === "strip" ? (meta.parts || []).filter((part) => partAttributes(part).length) : (meta.shown || []).map((id) => partOf(meta, id)).filter(Boolean);
+		listed.forEach((part) => {
+			const slot = part.id;
 			const group = document.createElement("div");
 			group.className = "attr-group";
 			const name = document.createElement("div");
 			name.className = "attr-group-name";
-			name.textContent = SLOTS[slot].label;
+			name.textContent = part.label;
 			group.appendChild(name);
-			slotAttributes(slot).forEach((attr) => {
+			partAttributes(part).forEach((attr) => {
 				const key = editableKey(slot, attr);
 				const editable = meta.editable.includes(key);
 				const row = document.createElement("div");
@@ -678,8 +758,14 @@ export class WaTaskDialog extends HTMLElement {
 						const r = document.createElement("span");
 						r.className = "range";
 						r.textContent = `random ${this._valueText(attr, range.min)} … ${this._valueText(attr, range.max)}`;
+						r.title = "Double-click to type the range";
+						r.addEventListener("dblclick", () => this._editRange(row, key, attr, range));
 						row.appendChild(r);
 					}
+					// the range can also be typed: double-click the value
+					v.title = "Double-click to type a random range for this value";
+					v.style.cursor = "text";
+					v.addEventListener("dblclick", () => this._editRange(row, key, attr, range));
 				} else {
 					row.appendChild(document.createElement("span"));
 				}
@@ -714,6 +800,58 @@ export class WaTaskDialog extends HTMLElement {
 		hint.textContent = `full marks within ±${t.full}${t.unit ? " " + t.unit : ""}, none beyond ±${t.zero}${t.unit ? " " + t.unit : ""}`;
 		row.append(select, hint);
 		return row;
+	}
+
+	// The random range typed in: a small field in the value's row, taken on Enter or when
+	// it loses focus ("300 - 3000", "300 3000", "0.2 to 0.8"; "2k" for 2000; empty takes the
+	// range away). Escape leaves it as it was.
+	_editRange(row, key, attr, range) {
+		if (row.querySelector(".range-edit")) return;
+		row.querySelector(".range")?.remove();
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "range-edit";
+		input.style.cssText = "grid-column:2 / 4;width:100%";
+		const unit = ATTRIBUTES[attr].unit;
+		input.placeholder = `min – max${unit ? ` (${unit})` : ""}`;
+		input.value = range ? `${this._plain(attr, range.min)} – ${this._plain(attr, range.max)}` : "";
+		row.appendChild(input);
+		input.focus();
+		input.select();
+		let done = false;
+		const finish = (commit) => {
+			if (done) return;
+			done = true;
+			if (!commit) {
+				this._renderAttrs();
+				return;
+			}
+			const text = input.value.trim();
+			if (!text) {
+				this._report_(setRange(this._viewId, key, null), true);
+				return;
+			}
+			const parsed = parseRange(text);
+			if (!parsed) {
+				showToast("Type two numbers, for example 300 – 3000.", { kind: "warning" });
+				this._renderAttrs();
+				return;
+			}
+			this._report_(setRange(this._viewId, key, parsed), true);
+		};
+		input.addEventListener("keydown", (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") {
+				e.preventDefault();
+				finish(true);
+			} else if (e.key === "Escape") finish(false);
+		});
+		input.addEventListener("blur", () => finish(true));
+	}
+
+	// A number as it is typed (no unit).
+	_plain(attr, value) {
+		return attr === "frequency" ? String(Math.round(value)) : String(Math.round(value * 1000) / 1000);
 	}
 
 	// ── rnd: the range a target is drawn from ──
@@ -754,6 +892,7 @@ export class WaTaskDialog extends HTMLElement {
 		if (!meta) return;
 		this._report_(updateTaskMeta(this._viewId, { ranges: { ...(meta.ranges || {}), [a.key]: { min: a.min, max: a.max } } }));
 		this._renderAttrs();
+		this._renderControls(); // the range is now shown on the control
 	}
 
 	// ── following the document ──
@@ -797,7 +936,10 @@ export class WaTaskDialog extends HTMLElement {
 		const hasTargets = !!assessmentStore.get(this._viewId)?.targets?.length;
 		this._tryRandom.hidden = !hasTargets;
 		this._report.innerHTML = lines.join("");
-		if (rerender) this._renderAttrs();
+		if (rerender) {
+			this._renderAttrs();
+			this._renderControls(); // what is locked on B follows the ticks; A shows its ranges
+		}
 	}
 
 	// ── listening, to hear what is being set up ──

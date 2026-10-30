@@ -33,6 +33,7 @@ import { compressorOutputDb } from "../xml-editor/compressor-math.js";
 import { computeMapPoints, mapStage1 } from "../xml-editor/var-mapper-math.js";
 import { defaultBezierPoints, sampleBezierToCurve } from "../xml-editor/waveshaper-math.js";
 import { wireKnobDrag } from "../utils/knob-drag.js";
+import { rangeArcSvg, rangeBand, RANGE_FILL, RANGE_COLOR } from "../utils/range-marks.js";
 import { buildParamChip, isParamVarControlled } from "../utils/param-binding.js";
 import { getLiveProperty } from "../waxml-integration/live-property.js";
 import "./wa-panner-view.js";
@@ -332,6 +333,11 @@ template.innerHTML = `
 			text-align: center;
 			margin-top: 2rem;
 			padding: 0 0.5rem;
+		}
+		.card-locked {
+			opacity: 0.35;
+			filter: grayscale(0.6);
+			pointer-events: none;
 		}
 		.chain-stack {
 			display: flex;
@@ -1036,8 +1042,14 @@ export class WaChainView extends HTMLElement {
 	// control is hidden, not just locked (null = no restriction) — and
 	// `publicLabels` — the card's small id text then only shows the element's own
 	// `label`, never its id. Per Hans (2026-10-17).
-	setCardNode(elementId, { editable = null, publicLabels = false } = {}) {
+	// `dimLocked`: a control that is out of bounds is drawn, dimmed and dead, instead of
+	// left out — for the author, who has to see everything (the task creator's B tab).
+	// `ranges` ({ attribute: { min, max } }): the random ranges of this element's values,
+	// shown on its controls (the task creator).
+	setCardNode(elementId, { editable = null, publicLabels = false, dimLocked = false, ranges = null } = {}) {
 		this._cardElementId = elementId || null;
+		this._cardRanges = ranges;
+		this._dimLocked = !!dimLocked;
 		this._cardEditable = Array.isArray(editable) ? new Set(editable) : null;
 		this._publicLabels = !!publicLabels;
 		this.toggleAttribute("card-only", !!this._cardElementId);
@@ -1048,6 +1060,18 @@ export class WaChainView extends HTMLElement {
 	// card (see setCardNode's `editable`): it is then not drawn at all.
 	_locked(attrName) {
 		return !!this._cardElementId && !!this._cardEditable && !this._cardEditable.has(attrName);
+	}
+
+	// Whether it is left out altogether (a locked control is, unless it is only dimmed).
+	_hidden(attrName) {
+		return this._locked(attrName) && !this._dimLocked;
+	}
+
+	// A locked control: hidden, or — for the author — dimmed and dead.
+	_hideOrDim(el, attrName) {
+		if (!this._locked(attrName)) return;
+		if (this._dimLocked) el.classList.add("card-locked");
+		else el.style.display = "none";
 	}
 
 	_findElementByAttributeId(elementId) {
@@ -1736,7 +1760,7 @@ export class WaChainView extends HTMLElement {
 			select.appendChild(opt);
 		});
 		select.value = node.attributes[attrName] || defaultValue;
-		if (this._locked(attrName)) select.style.display = "none";
+		this._hideOrDim(select, attrName);
 		select.addEventListener("pointerdown", (e) => e.stopPropagation());
 		select.addEventListener("click", (e) => e.stopPropagation());
 		select.addEventListener("change", () => {
@@ -1758,7 +1782,7 @@ export class WaChainView extends HTMLElement {
 	_buildNumberField(node, attrName, unit) {
 		const row = document.createElement("div");
 		row.className = "field-row";
-		if (this._locked(attrName)) row.style.display = "none";
+		this._hideOrDim(row, attrName);
 		const label = document.createElement("span");
 		label.className = "field-label";
 		label.textContent = attrName;
@@ -1785,7 +1809,8 @@ export class WaChainView extends HTMLElement {
 	_buildKnobSkeleton(labelText, sizePx = 26) {
 		const wrap = document.createElement("div");
 		wrap.className = "knob-wrap";
-		wrap.appendChild(this._buildKnobTicks(sizePx));
+		const ticks = this._buildKnobTicks(sizePx);
+		wrap.appendChild(ticks);
 		const knob = document.createElement("div");
 		knob.className = "knob";
 		if (sizePx > 30) knob.classList.add("knob-large");
@@ -1801,7 +1826,7 @@ export class WaChainView extends HTMLElement {
 			labelEl.textContent = labelText;
 			wrap.appendChild(labelEl);
 		}
-		return { wrap, knob, dial };
+		return { wrap, knob, dial, ticks, sizePx };
 	}
 
 	// The ring is centred on the knob itself: .knob-wrap is as wide as its
@@ -1868,8 +1893,11 @@ export class WaChainView extends HTMLElement {
 	// Watcher, same reasoning as wa-mixer-view.js's own
 	// _lockRemoteControlled) — the chip stays live for re-typing/re-mapping.
 	_buildSimpleKnob(node, attrName, min, max, labelText, formatFn, defaultValue, onChange) {
-		const { wrap, knob, dial } = this._buildKnobSkeleton(labelText, 24);
-		if (this._locked(attrName)) wrap.style.display = "none";
+		const skeleton = this._buildKnobSkeleton(labelText, 24);
+		const { wrap, knob, dial } = skeleton;
+		const range = this._cardRanges?.[attrName];
+		if (range && max > min) skeleton.ticks.appendChild(rangeArcSvg(24, (range.min - min) / (max - min), (range.max - min) / (max - min)));
+		this._hideOrDim(wrap, attrName);
 		const applyVisual = (v) => this._applyKnobRotation(dial, v, min, max);
 
 		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName });
@@ -2035,6 +2063,8 @@ export class WaChainView extends HTMLElement {
 			tick.appendChild(tickLabel);
 			track.appendChild(tick);
 		});
+		const gainRange = this._cardRanges?.gain;
+		if (gainRange) track.appendChild(rangeBand(dbToFaderPosition(gainRange.min), dbToFaderPosition(gainRange.max)));
 		const handle = document.createElement("div");
 		handle.className = "fader-handle";
 		handle.title = "Volume";
@@ -2044,7 +2074,7 @@ export class WaChainView extends HTMLElement {
 		const { el: chip, render: renderChip } = buildParamChip({ getNode: () => findNodeById(xmlStore.root, node.id), attrName: "gain" });
 		chip.classList.add("knob-value-label");
 		wrap.appendChild(chip);
-		if (this._locked("gain")) wrap.style.display = "none";
+		this._hideOrDim(wrap, "gain");
 		card.appendChild(wrap);
 
 		const applyVisual = (db) => {
@@ -2170,15 +2200,18 @@ export class WaChainView extends HTMLElement {
 			const freqLocked = isParamVarControlled(nodeNow, "frequency");
 			freqChip.el.classList.toggle("var-controlled", freqLocked);
 			freqChip.render(freqLocked ? nodeNow.attributes.frequency : `${formatValue(state.freq, 10000)} Hz`);
-			if (!this._locked("frequency")) chipRow.appendChild(freqChip.el);
+			freqChip.el.classList.toggle("card-locked", this._locked("frequency"));
+			if (!this._hidden("frequency")) chipRow.appendChild(freqChip.el);
 
-			if (BIQUAD_Q_TYPES.has(type) && !this._locked("Q")) {
+			if (BIQUAD_Q_TYPES.has(type) && !this._hidden("Q")) {
+				qChip.el.classList.toggle("card-locked", this._locked("Q"));
 				const qLocked = isParamVarControlled(nodeNow, "Q");
 				qChip.el.classList.toggle("var-controlled", qLocked);
 				qChip.render(qLocked ? nodeNow.attributes.Q : `Q ${formatValue(state.Q, 100)}`);
 				chipRow.appendChild(qChip.el);
 			}
-			if (BIQUAD_GAIN_TYPES.has(type) && !this._locked("gain")) {
+			if (BIQUAD_GAIN_TYPES.has(type) && !this._hidden("gain")) {
+				gainChip.el.classList.toggle("card-locked", this._locked("gain"));
 				const gainLocked = isParamVarControlled(nodeNow, "gain");
 				gainChip.el.classList.toggle("var-controlled", gainLocked);
 				gainChip.render(gainLocked ? nodeNow.attributes.gain : `${formatValue(state.gainDb, 100)} dB`);
@@ -2484,6 +2517,22 @@ export class WaChainView extends HTMLElement {
 			h = canvas.height;
 		ctx.clearRect(0, 0, w, h);
 
+		// Where the point may be drawn from (a task's random ranges): a field over the
+		// frequency and gain ranges, a band when only one of them has a range.
+		const rf = this._cardRanges?.frequency;
+		const rg = this._cardRanges?.gain;
+		if (rf || rg) {
+			const x0 = rf ? biquadFreqToXPixel(w, rf.min) : 0;
+			const x1 = rf ? biquadFreqToXPixel(w, rf.max) : w;
+			const y0 = rg ? biquadDbToYPixel(h, Math.min(BIQUAD_DB_RANGE, rg.max)) : 0;
+			const y1 = rg ? biquadDbToYPixel(h, Math.max(-BIQUAD_DB_RANGE, rg.min)) : h;
+			ctx.fillStyle = RANGE_FILL;
+			ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+			ctx.strokeStyle = RANGE_COLOR;
+			ctx.lineWidth = 1;
+			ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0 - 1, y1 - y0 - 1);
+		}
+
 		// The band box under everything else — only while it is wanted (see the
 		// card's pointer handlers); it brightens while its edges are hovered or dragged.
 		const edges = state.bandOn ? this._biquadBandEdges(type, state, w) : null;
@@ -2578,8 +2627,10 @@ export class WaChainView extends HTMLElement {
 			ratioChip.el.classList.toggle("var-controlled", ratioLocked());
 			ratioChip.render(ratioLocked() ? nodeNow.attributes.ratio : `${formatValue(state.ratio, 100)}:1`);
 		};
-		if (!this._locked("threshold")) chipRow.append(thresholdChip.el);
-		if (!this._locked("ratio")) chipRow.append(ratioChip.el);
+		thresholdChip.el.classList.toggle("card-locked", this._locked("threshold"));
+		ratioChip.el.classList.toggle("card-locked", this._locked("ratio"));
+		if (!this._hidden("threshold")) chipRow.append(thresholdChip.el);
+		if (!this._hidden("ratio")) chipRow.append(ratioChip.el);
 		if (chipRow.children.length) card.appendChild(chipRow);
 		refreshChips();
 
@@ -2943,9 +2994,10 @@ export class WaChainView extends HTMLElement {
 			maxDbChip.render(`${formatValue(readNum(nodeNow, "maxDecibels", -30), 200)} dB`);
 			smoothChip.render(`smooth ${formatValue(readNum(nodeNow, "smoothingTimeConstant", ANALYSER_DEFAULT_SMOOTHING), 1)}`);
 		};
-		if (!this._locked("minDecibels")) chipRow.append(minDbChip.el);
-		if (!this._locked("maxDecibels")) chipRow.append(maxDbChip.el);
-		if (!this._locked("smoothingTimeConstant")) chipRow.append(smoothChip.el);
+		[["minDecibels", minDbChip], ["maxDecibels", maxDbChip], ["smoothingTimeConstant", smoothChip]].forEach(([attr, chip]) => {
+			chip.el.classList.toggle("card-locked", this._locked(attr));
+			if (!this._hidden(attr)) chipRow.append(chip.el);
+		});
 		if (chipRow.children.length) card.appendChild(chipRow);
 		refreshChips();
 

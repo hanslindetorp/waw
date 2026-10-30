@@ -1230,3 +1230,77 @@ tills de låter lika; en balansuppgift är samma sak (volymen mot en referens).
   eleven). Item-typen `strip` är en `wa-mixer-view` i inbäddat läge
   (`setEmbeddedStrip`): bara en kanalremsa, och bara de angivna
   `"<id>.<attribut>"` går att vrida — övriga syns men är nedtonade.
+
+### Uppgifternas delar, konfigurering och levande koppling (2026-11-02)
+
+- **Delar (`meta.parts`, version 2):** en uppgifts remsor består av delar som
+  namnges av det som följer efter `<prefix>-a-` / `<prefix>-b-` i elementets id
+  (`hs`, `pk`, `ls`, `pan`, `vol` från början; det läraren lägger till får `x1`,
+  `x2`, …). `meta.parts` beskriver dem (`id`, `tagName`, `label`, `start`) och
+  hålls i takt med dokumentet av `refreshParts`; nycklarna (`editable`, `fixed`,
+  `ranges`, `precision`) är `<del>.<attribut>`, t.ex. `pk.frequency`. Uppgifter
+  från före version 2 läses som om de gjorts idag (`normalizeMeta`). Matchbara
+  värden: filtrets frekvens/gain/Q, pan och en GainNodes gain; en `<Wam>` eller
+  `<ConvolverNode>` är en fast del (lika i A och B).
+- **Dokumentet är sanningen.** I guiden med "full channel strip" kan läraren
+  lägga till och radera filter och inserts direkt på remsan (`wa-mixer-view` i
+  inbäddat läge med `structure`: "+"-rutor och ett litet × per filter/insert).
+  `reconcileStrips` håller A och B lika: ett nytt element (som Mixern gett sitt
+  eget id) får uppgiftens id och en tvilling i den andra remsan; raderas ett
+  element ur ena raderas det ur andra (`meta.known` skiljer "nytt" från
+  "raderat"). Efter varje strukturell ändring synkas Stage-vyn (kort för delar
+  som försvunnit tas bort; remsan på Stage följer dokumentet själv).
+- **Raderingsskydd:** `xmlStore.addRemovalGuard` / `removeNode(id, { force })`.
+  Uppgifterna anmäler vad de behöver (källa, Commands, Mixer, remsorna, delar
+  eleven ser eller justerar); raderar man något sådant, var som helst (trädet,
+  Mixerns förhandsvisning, …), nekas det med en förklarande ruta. En del som bara
+  är en fixerad förinställning får raderas (och tvillingen med).
+- **Byta ljud i efterhand:** `changeSource(viewId, source)`. Samma sorts källa
+  ändras på plats; byts sort byts källelementen (och grind-`<Var>`) och
+  start/stop-Commands skrivs om. Den gamla filen ligger kvar i projektet. Varje
+  uppgifts knappar triggar sin egen källa via dess id (`#abN-src`), så flera
+  uppgifter i ett projekt ljuder var för sig.
+- **Visa slumpintervall:** `utils/range-marks.js` — en båge utanför en ratt, ett
+  band längs en faders spår och en ruta i ett filters graf (över frekvens- och
+  gainintervallet) i det ljusgröna; visas bara på A-fliken. Intervall kan också
+  skrivas in (dubbelklick på värdet eller intervallet; `300 – 3000`, `0.2 to 0.8`,
+  `2k`; Enter eller blur tar emot, tomt tar bort, Esc ångrar).
+- **Lås mellan A och B:** på A kan allt vridas; på B kan bara de ikryssade
+  värdena ändras (kort och remsa visar övriga nedtonade och döda, `dimLocked` /
+  `embed-locked`, så i en punkt i filtergrafen går bara de ikryssade riktningarna
+  att dra). Ändras ett fixerat värde på A följer B med.
+- **Dela testet:** knappen "Share…" i Stage-verktygsfältet (för en vy som
+  bedöms) ger adressen till testet och LTI-adressen för uppgiften
+  (`project/share-urls.js`: `PUBLISH_BASE` är det enda som byts när molntjänsten
+  tar över) och kopierar den förra till urklipp. Projektets filnamn på servern
+  frågas en gång och kommer ihåg.
+
+### Bibliotek och mallar (planerat, byggs inte än)
+
+Inloggade användare ska få ett online-bibliotek med alla tester. Ett test är en
+vanlig del av ett WAXML-projekt, så biblioteket blir i grunden *samma bibliotek
+som projekten* med en sökning ovanpå (namn, titel, instruktion, ljud, vad som
+matchas) — ett projekt kan innehålla flera tester. I guiden för att skapa en ny
+uppgift ska man kunna välja bland sparade tester med sökning, och få en kopia i
+sitt projekt. Det som redan är förberett:
+- Allt en uppgift lägger i dokumentet har id som börjar med uppgiftens prefix
+  (`abN-…`, Var-namn `soloabN` och `gateabN`, Commands, Mixer, remsor, källa) och
+  Stage-vyn och bedömningen hänvisar bara till dem. En uppgift kan alltså kopieras
+  in i ett annat projekt genom att byta prefix (textersättning över dokument-
+  delen, vyn och bedömningen) och ge vyn nytt id.
+- En uppgift är ett *paket*: dokumentdelen (de rotnoder vars id börjar med
+  prefixet, samt Var), Stage-vyn (`stage.json`), assessmentet (`assessment.json`
+  med `task`, `targets`) och ljudfilen som källan pekar på. Ljudfilen är det enda
+  som inte ligger i dokumentet; i molnet ska den vara innehållsadresserad (hash)
+  och refereras, inte bäddas in.
+- `taskSummary(viewId)` (`ab-task.js`) ger det ett bibliotek skulle söka i: titel
+  (Stage-rubriken), namn, instruktion, receptet, ljudets sort och hur många värden
+  som matchas. Titel och instruktion ändras på Stage och är därför alltid de
+  aktuella.
+- `allTasks()` listar uppgifterna i ett projekt; `deleteAbTask` tar bort en helt
+  (lika bra för "ta bort från mitt projekt").
+- Receptdata (`task`) är versionsmärkt (`version: 2`) så att äldre paket kan läsas
+  in och uppgraderas (`normalizeMeta`).
+Det som återstår när biblioteket byggs: lagring och inloggning (servern),
+export/import av ett paket (prefixbyte som ovan), sökindex, och ljudfilens
+hantering (rättigheter, hashad lagring).

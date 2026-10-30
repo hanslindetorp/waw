@@ -256,8 +256,11 @@ class StageStore extends EventTarget {
 	// what is generated for a view while another is showing (the task recipes).
 	editViewItems(viewId, fn) {
 		this._materialize();
-		if (!this._views.some((v) => v.id === viewId)) return;
-		this._commit(this._views.map((v) => (v.id === viewId ? { ...v, items: fn(v.items) } : v)));
+		const view = this._views.find((v) => v.id === viewId);
+		if (!view) return;
+		const items = fn(view.items);
+		if (JSON.stringify(items) === JSON.stringify(view.items)) return; // nothing changed: no edit
+		this._commit(this._views.map((v) => (v.id === viewId ? { ...v, items } : v)));
 	}
 
 	_editCurrentView(fn) {

@@ -11,6 +11,7 @@ import { openIoPicker } from "./wa-io-picker.js";
 import { confirmDialog } from "./wa-confirm-dialog.js";
 import { showNotice } from "./wa-notice-dialog.js";
 import { lacksAudioInput } from "../xml-editor/chain-rules.js";
+import { rangeArcSvg, rangeBand } from "../utils/range-marks.js";
 import { FILTER_TYPE_DEFAULT_FREQUENCY } from "../xml-editor/default-attributes.js";
 import { vfs } from "../vfs/VFS.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
@@ -1455,6 +1456,40 @@ template.innerHTML = `
 		:host([embed]) .divider {
 			display: none !important;
 		}
+		/* ...and for the task creator, who also builds the strip: filters and inserts
+		   can be added, and every one has a small x. */
+		:host([embed-structure]) .add-filter-wrap,
+		:host([embed-structure]) .insert-section,
+		:host([embed-structure]) .ins-label,
+		:host([embed-structure]) .row-label-divider,
+		:host([embed-structure]) .divider {
+			display: revert !important;
+		}
+		:host([embed-structure]) .filter-row,
+		:host([embed-structure]) .insert-slot.filled {
+			position: relative;
+		}
+		.remove-part {
+			position: absolute;
+			top: 1px;
+			right: 1px;
+			z-index: 3;
+			width: 16px;
+			height: 16px;
+			padding: 0;
+			font-size: 11px;
+			line-height: 14px;
+			border: none;
+			border-radius: 50%;
+			background: rgba(0, 0, 0, 0.55);
+			color: #e8ecef;
+			cursor: pointer;
+			opacity: 0.55;
+		}
+		.remove-part:hover {
+			opacity: 1;
+			background: #c0392b;
+		}
 		.embed-locked {
 			opacity: 0.35;
 			filter: grayscale(0.6);
@@ -1619,6 +1654,8 @@ export class WaMixerView extends HTMLElement {
 		// "<element id>.<attribute>" pairs the viewer may change.
 		this._embedChainId = null;
 		this._embedEditable = new Set();
+		this._embedStructure = false;
+		this._embedRanges = null;
 		// Set around every xmlStore.updateAttributes call fired from a knob/
 		// fader's own continuous drag (see _commitAttributes) — xmlStore's
 		// "change" event fires synchronously, and without this guard the
@@ -2041,10 +2078,15 @@ export class WaMixerView extends HTMLElement {
 	// the Stage. Only the attributes in `editable` ("<element id>.<attribute>")
 	// can be turned; every other control is there, dimmed and dead, so the
 	// strip looks like the Mixer's. Per Hans (2026-10-30).
-	setEmbeddedStrip(chainId, editable = []) {
+	// `editable === null` means everything can be turned. `structure: true` (the task
+	// creator): filters and inserts can be added to the strip and deleted from it.
+	setEmbeddedStrip(chainId, editable = [], { structure = false, ranges = null } = {}) {
 		this._embedChainId = chainId || null;
-		this._embedEditable = new Set(editable);
+		this._embedRanges = ranges; // { "<element id>.<attribute>": { min, max } } — shown on the controls (task creator)
+		this._embedEditable = editable === null ? null : new Set(editable);
+		this._embedStructure = !!structure;
 		this.toggleAttribute("embed", !!this._embedChainId);
+		this.toggleAttribute("embed-structure", !!this._embedChainId && !!structure);
 		this._lastRenderedRoot = null;
 		if (this.isConnected) this._embedRefresh();
 	}
@@ -2066,7 +2108,7 @@ export class WaMixerView extends HTMLElement {
 
 	// Whether a control for `attr` of `node` is out of bounds in an embedded strip.
 	_embedLocked(node, attr) {
-		return !!this._embedChainId && !this._embedEditable.has(`${node.attributes.id}.${attr}`);
+		return !!this._embedChainId && !!this._embedEditable && !this._embedEditable.has(`${node.attributes.id}.${attr}`);
 	}
 
 	// Whether a strip's node is part of the document's selection — the
@@ -3876,11 +3918,27 @@ export class WaMixerView extends HTMLElement {
 
 	// --- filter row: one large gain knob + small freq/Q knobs ---
 
+	// The small x on a filter or an insert of a strip being built (see setEmbeddedStrip).
+	_buildRemoveButton(node) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "remove-part";
+		btn.textContent = "×";
+		btn.title = "Delete";
+		btn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			xmlStore.removeNode(node.id); // refused, with a sentence why, for what the task needs
+		});
+		btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+		return btn;
+	}
+
 	_buildFilterRow(node) {
 		const row = document.createElement("div");
 		row.className = "filter-row";
 		row.style.height = `${FILTER_ROW_HEIGHT}px`;
 		this._markPart(row, node);
+		if (this._embedStructure) row.appendChild(this._buildRemoveButton(node));
 
 		const top = document.createElement("div");
 		top.className = "filter-row-top";
@@ -4024,7 +4082,9 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	_buildFilterGainKnob(node) {
-		const { wrap, knob, dial } = this._buildKnobSkeleton("", 32);
+		const skeleton = this._buildKnobSkeleton("", 32);
+		const { wrap, knob, dial } = skeleton;
+		this._addRangeArc(skeleton, node, "gain", (db) => (db - EQ_MIN_DB) / (EQ_MAX_DB - EQ_MIN_DB));
 		knob.classList.add("knob-large", "knob-gain");
 		const applyVisual = (db) => this._applyKnobRotation(dial, db, EQ_MIN_DB, EQ_MAX_DB);
 		const startDb = parseGainAttributeToDb(node.tagName, node.attributes.gain);
@@ -4070,7 +4130,9 @@ export class WaMixerView extends HTMLElement {
 	// freqToKnobT/knobTToFreq, so an equal drag distance always covers an
 	// equal number of octaves, regardless of where on the range you start.
 	_buildFreqKnob(node) {
-		const { wrap, knob, dial } = this._buildKnobSkeleton("f", 22);
+		const skeleton = this._buildKnobSkeleton("f", 22);
+		const { wrap, knob, dial } = skeleton;
+		this._addRangeArc(skeleton, node, "frequency", freqToKnobT);
 		knob.classList.add("knob-small", "knob-freq");
 		const applyVisual = (t) => this._applyKnobRotation(dial, t, 0, 1);
 		const startT = freqToKnobT(readFrequency(node));
@@ -4114,7 +4176,9 @@ export class WaMixerView extends HTMLElement {
 	}
 
 	_buildQKnob(node) {
-		const { wrap, knob, dial } = this._buildKnobSkeleton("Q", 22);
+		const skeleton = this._buildKnobSkeleton("Q", 22);
+		const { wrap, knob, dial } = skeleton;
+		this._addRangeArc(skeleton, node, "Q", (q) => (q - Q_MIN) / (Q_MAX - Q_MIN));
 		knob.classList.add("knob-small", "knob-q");
 		const applyVisual = (q) => this._applyKnobRotation(dial, q, Q_MIN, Q_MAX);
 		applyVisual(readQ(node));
@@ -4153,7 +4217,9 @@ export class WaMixerView extends HTMLElement {
 	// --- pan knob (-1 to 1) ---
 
 	_buildPanKnob(node) {
-		const { wrap, knob, dial } = this._buildKnobSkeleton("", 26);
+		const skeleton = this._buildKnobSkeleton("", 26);
+		const { wrap, knob, dial } = skeleton;
+		this._addRangeArc(skeleton, node, "pan", (pan) => (pan + 1) / 2);
 		knob.classList.add("pan-knob");
 		const applyVisual = (pan) => this._applyKnobRotation(dial, pan, -1, 1);
 		applyVisual(readPan(node));
@@ -4192,7 +4258,8 @@ export class WaMixerView extends HTMLElement {
 	_buildKnobSkeleton(labelText, sizePx = 26) {
 		const wrap = document.createElement("div");
 		wrap.className = "knob-wrap";
-		wrap.appendChild(this._buildKnobTicks(sizePx));
+		const ticks = this._buildKnobTicks(sizePx);
+		wrap.appendChild(ticks);
 		const knob = document.createElement("div");
 		knob.className = "knob";
 		const dial = document.createElement("div");
@@ -4205,7 +4272,16 @@ export class WaMixerView extends HTMLElement {
 			labelEl.textContent = labelText;
 			wrap.appendChild(labelEl);
 		}
-		return { wrap, knob, dial };
+		return { wrap, knob, dial, ticks, sizePx };
+	}
+
+	// The random range of a value (see setEmbeddedStrip), as an arc outside its knob.
+	_addRangeArc(skeleton, node, attr, toT) {
+		const r = this._embedRanges?.[`${node.attributes.id}.${attr}`];
+		if (!r) return;
+		const t0 = toT(r.min);
+		const t1 = toT(r.max);
+		if (Number.isFinite(t0) && Number.isFinite(t1) && t1 > t0) skeleton.ticks.appendChild(rangeArcSvg(skeleton.sizePx, t0, t1));
 	}
 
 	// Small white tick marks printed around a knob's rotational range (a
@@ -4351,6 +4427,8 @@ export class WaMixerView extends HTMLElement {
 			track.appendChild(tick);
 		});
 
+		const faderRange = gainNode && this._embedRanges?.[`${gainNode.attributes.id}.gain`];
+		if (faderRange) track.appendChild(rangeBand(dbToFaderPosition(faderRange.min), dbToFaderPosition(faderRange.max)));
 		const handle = document.createElement("div");
 		handle.className = "fader-handle";
 		track.appendChild(handle);
@@ -4441,7 +4519,11 @@ export class WaMixerView extends HTMLElement {
 		const section = document.createElement("div");
 		section.className = "insert-section";
 		section.style.height = `${height}px`;
-		roles.inserts.forEach((insert) => section.appendChild(this._buildInsertSlot(insert, chainNode)));
+		roles.inserts.forEach((insert) => {
+			const slot = this._buildInsertSlot(insert, chainNode);
+			if (this._embedStructure) slot.appendChild(this._buildRemoveButton(insert));
+			section.appendChild(slot);
+		});
 		section.appendChild(this._buildAddInsertSlot(chainNode, roles));
 		return section;
 	}

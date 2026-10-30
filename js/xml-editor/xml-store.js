@@ -337,14 +337,31 @@ class XmlStore extends EventTarget {
 	// own subtree is selected (Section preview, Mixer preview) would
 	// otherwise vanish out from under the user the moment they delete
 	// whatever they were just looking at.
-	removeNode(nodeId) {
-		if (!this.root) return;
+	// Something that must not be deleted can say so: a guard is called with the id
+	// of the node about to be removed and returns a sentence saying why not (the user
+	// is shown it), or null. (The task recipes use it for what a task is made of.)
+	addRemovalGuard(guard) {
+		this._removalGuards = [...(this._removalGuards || []), guard];
+	}
+
+	removeNode(nodeId, { force = false } = {}) {
+		if (!this.root) return false;
+		if (!force) {
+			for (const guard of this._removalGuards || []) {
+				const reason = guard(nodeId);
+				if (reason) {
+					this.dispatchEvent(new CustomEvent("notice", { detail: { message: reason } }));
+					return false;
+				}
+			}
+		}
 		if (this.selectedNodeId === nodeId) {
 			const node = ops.findNodeById(this.root, nodeId);
 			this.selectedNodeId = node?.parent ?? null;
 		}
 		this.root = ops.removeNode(this.root, nodeId);
 		this._syncCode();
+		return true;
 	}
 
 	// --- copy / cut / paste (see wa-edit-menu.js, wa-xml-tree.js) ---

@@ -524,6 +524,7 @@ template.innerHTML = `
 			<button type="button" data-orient="portrait">Portrait</button>
 		</span>
 		<span class="spacer"></span>
+		<button type="button" data-share="1" title="The address of this test, ready to copy" hidden>Share…</button>
 		<button type="button" data-task="edit" title="Set up this task: A, B and what the student may adjust" hidden>Task…</button>
 		<button type="button" data-assess="toggle" title="How this view is assessed">Assessment</button>
 		<button type="button" data-assess="test" title="Try the assessment on the page as it is now">Test run</button>
@@ -642,6 +643,7 @@ export class WaStageView extends HTMLElement {
 		);
 
 		this.shadowRoot.querySelector('[data-task="edit"]').addEventListener("click", () => document.querySelector("wa-task-dialog")?.openFor(stageStore.currentViewId));
+		this.shadowRoot.querySelector('[data-share="1"]').addEventListener("click", () => document.querySelector("wa-test-share")?.open(stageStore.currentViewId));
 
 		const toggle = this.shadowRoot.querySelector('[data-assess="toggle"]');
 		toggle.addEventListener("click", () => {
@@ -934,6 +936,8 @@ export class WaStageView extends HTMLElement {
 
 	_updateTaskButton() {
 		this.shadowRoot.querySelector('[data-task="edit"]').hidden = this.readonly || !assessmentStore.get(stageStore.currentViewId)?.task;
+		// a view that is assessed is an assignment: it has an address to share
+		this.shadowRoot.querySelector('[data-share="1"]').hidden = this.readonly || !assessmentStore.has(stageStore.currentViewId);
 	}
 
 	_renderTabs() {

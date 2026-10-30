@@ -1,4 +1,4 @@
-import { formatGainAttribute } from "../waxml-integration/gain-units.js";
+import { formatGainAttribute, parseGainAttributeToDb } from "../waxml-integration/gain-units.js";
 import { evaluate, requiredReads, readKey } from "../assessment/evaluate.js";
 import { drawTargets } from "../assessment/targets.js";
 
@@ -40,16 +40,36 @@ const GATE_LEVEL = 0.25; // an oscillator or noise is much louder than a recorde
 export const OSCILLATOR_WAVES = ["sine", "triangle", "square", "sawtooth"];
 export const SOURCE_KINDS = ["file", "noise", "oscillator"];
 
-// The parts of the strip a task can be about, in signal order (as the Mixer
-// builds them). `start` is what a newly created element is set to — the same
-// values as the Mixer's, so B starts where a fresh strip starts.
+// The parts of a strip. A task's strips are the Mixer's "Full Channel Strip" — twice —
+// and a part is one element of it, named by what follows "<prefix>-a-" / "<prefix>-b-"
+// in its id: the five below to begin with (in signal order, as the Mixer builds them),
+// and whatever the author adds in the set-up (filters, inserts), which get ids of
+// their own (x1, x2, ...). A task keeps a description of its parts, `meta.parts`
+// ({ id, tagName, label, start }), kept in step with the document (ab-task.js);
+// `start` holds what a newly created element is set to for the values that can be
+// matched (the same values as the Mixer's, so B starts where a fresh strip starts).
 export const SLOTS = {
-	highshelf: { suffix: "hs", tagName: "BiquadFilterNode", label: "High shelf", start: { frequency: 4000, gain: 0, Q: 1 } },
-	peaking: { suffix: "pk", tagName: "BiquadFilterNode", label: "Peaking", start: { frequency: 400, gain: 0, Q: 1 } },
-	lowshelf: { suffix: "ls", tagName: "BiquadFilterNode", label: "Low shelf", start: { frequency: 150, gain: 0, Q: 1 } },
-	pan: { suffix: "pan", tagName: "StereoPannerNode", label: "Pan", start: { pan: 0 } },
-	volume: { suffix: "vol", tagName: "GainNode", label: "Volume", start: { gain: 0 } }
+	hs: { tagName: "BiquadFilterNode", filterType: "highshelf", label: "High shelf", start: { frequency: 4000, gain: 0, Q: 1 } },
+	pk: { tagName: "BiquadFilterNode", filterType: "peaking", label: "Peaking", start: { frequency: 400, gain: 0, Q: 1 } },
+	ls: { tagName: "BiquadFilterNode", filterType: "lowshelf", label: "Low shelf", start: { frequency: 150, gain: 0, Q: 1 } },
+	pan: { tagName: "StereoPannerNode", label: "Pan", start: { pan: 0 } },
+	vol: { tagName: "GainNode", label: "Volume", start: { gain: 0 } }
 };
+
+// What can be matched on an element, by its tag (a Wam or a Convolver is fixed: it is
+// the same in A and B and the student can't be asked to find it).
+const MATCHABLE = { BiquadFilterNode: ["frequency", "gain", "Q"], StereoPannerNode: ["pan"], GainNode: ["gain"] };
+
+// The values of an element a task can match, as numbers: { frequency: 400, gain: 0, ... } (gain in dB).
+export function startsOf(tagName, attributes) {
+	const start = {};
+	(MATCHABLE[tagName] || []).forEach((attr) => {
+		const raw = attributes[attr];
+		if (attr === "gain") start.gain = raw === undefined ? 0 : parseGainAttributeToDb(tagName, raw);
+		else if (Number.isFinite(parseFloat(raw))) start[attr] = parseFloat(raw);
+	});
+	return start;
+}
 
 // How an attribute is compared: octaves for frequency and Q (doubling is what
 // matters), dB or plain units for the rest.
@@ -89,32 +109,36 @@ export function toleranceText(attr, level) {
 
 export const DEFAULT_INSTRUCTION = "Listen to A, then to B. Adjust B until it sounds like A. Press Done when you think they match.";
 
-export const slotAttributes = (slot) => Object.keys(SLOTS[slot]?.start || {});
-export const editableKey = (slot, attr) => `${slot}.${attr}`;
-export const elementId = (prefix, chain, slot) => `${prefix}-${chain}-${SLOTS[slot].suffix}`;
+export const partAttributes = (part) => Object.keys(part?.start || {});
+export const editableKey = (part, attr) => `${part}.${attr}`;
+export const elementId = (prefix, chain, part) => `${prefix}-${chain}-${part}`;
 export const chainId = (prefix, chain) => `${prefix}-${chain}`;
+export const partOf = (meta, id) => (meta.parts || []).find((p) => p.id === id) || (SLOTS[id] ? { id, ...SLOTS[id] } : null);
 
 // A value is "back at its start" when it is this close to it (a knob rounds
 // what it writes): frequency within 1 %, gain 0.05 dB, Q 0.02, pan 0.01.
-export function isAtStart(slot, attr, value) {
-	const start = SLOTS[slot]?.start[attr];
+export function isAtStart(part, attr, value) {
+	const start = part?.start?.[attr];
 	if (!Number.isFinite(value) || !Number.isFinite(start)) return false;
 	const tolerance = { frequency: 0.01 * Math.abs(start), gain: 0.05, Q: 0.02, pan: 0.01 }[attr] ?? 1e-6;
 	return Math.abs(value - start) <= tolerance;
 }
 
-// The element attribute for a value of a slot, as written in the document.
-export function attributeText(slot, attr, value) {
-	if (slot === "volume" && attr === "gain") return formatGainAttribute("GainNode", value);
+// The element attribute for a value, as written in the document: a GainNode's gain
+// is an explicit "XdB" string (a bare number would be a linear ratio), everything
+// else — a filter's gain is dB already — a plain number.
+export function attributeText(tagName, attr, value) {
+	if (tagName === "GainNode" && attr === "gain") return formatGainAttribute("GainNode", value);
 	return String(Math.round(value * 1000) / 1000);
 }
 
-function slotElement(prefix, chain, slot) {
-	const def = SLOTS[slot];
-	const attributes = { id: elementId(prefix, chain, slot), label: def.label };
-	if (def.tagName === "BiquadFilterNode") attributes.type = slot;
+// A strip's element for a base part.
+function slotElement(prefix, chain, part) {
+	const def = SLOTS[part];
+	const attributes = { id: elementId(prefix, chain, part), label: def.label };
+	if (def.filterType) attributes.type = def.filterType;
 	Object.keys(def.start).forEach((attr) => {
-		attributes[attr] = attributeText(slot, attr, def.start[attr]);
+		attributes[attr] = attributeText(def.tagName, attr, def.start[attr]);
 	});
 	return { tagName: def.tagName, attributes, children: [] };
 }
@@ -124,7 +148,7 @@ function node(tagName, attributes, children = []) {
 }
 
 // The source, with what starts and stops it. -> { nodes: [root elements], start: Command attributes, stop: Command attributes }
-function sourceParts(prefix, source) {
+export function sourceParts(prefix, source) {
 	const id = `${prefix}-src`;
 	const both = `#${chainId(prefix, "a")}, #${chainId(prefix, "b")}`;
 	if (source?.kind === "file") {
@@ -154,6 +178,7 @@ export function buildAbGraph(spec) {
 	const soloVar = `solo${prefix}`;
 	const slots = (spec.slots || []).filter((s) => SLOTS[s]);
 	const source = sourceParts(prefix, spec.source);
+	const parts = Object.keys(SLOTS).map((id) => ({ id, tagName: SLOTS[id].tagName, label: SLOTS[id].label, start: { ...SLOTS[id].start } }));
 	const strip = (chain) =>
 		node("Chain", { id: chainId(prefix, chain), label: chain === "a" ? "A (reference)" : "B (yours)" }, [
 			node("GainNode", { id: `${chainId(prefix, chain)}${MUTE_SUFFIX}`, label: "Mute", gain: "1" }),
@@ -171,7 +196,10 @@ export function buildAbGraph(spec) {
 		prefix,
 		source: { ...spec.source },
 		display: spec.display === "strip" ? "strip" : "objects",
-		slots,
+		version: 2,
+		parts, // what the strips are made of (see SLOTS)
+		known: parts.map((p) => p.id), // the parts the strips had when last compared (ab-task.js reconcileStrips)
+		shown: spec.display === "strip" ? parts.map((p) => p.id) : slots, // the parts the student sees as cards
 		editable: [],
 		fixed: [], // values the author took out of what the student adjusts: B follows A's
 		ranges: {},
@@ -199,14 +227,15 @@ export function buildStageItems(meta, { title, instruction } = {}) {
 	if (meta.display === "strip") {
 		items.push({ type: "strip", x: 24, y: 240, w: 360, ref: chainId(p, "b"), editable: editableList(meta), inactiveWhen });
 	} else {
-		meta.slots.forEach((slot, i) => {
+		meta.shown.forEach((id, i) => {
+			const part = partOf(meta, id);
 			items.push({
 				type: "element",
 				x: 24 + (i % 3) * 296,
 				y: 240 + Math.floor(i / 3) * 270,
 				w: 280,
-				ref: elementId(p, "b", slot),
-				editable: slotAttributes(slot).filter((attr) => meta.editable.includes(editableKey(slot, attr))),
+				ref: elementId(p, "b", id),
+				editable: partAttributes(part).filter((attr) => meta.editable.includes(editableKey(id, attr))),
 				inactiveWhen
 			});
 		});
@@ -217,8 +246,8 @@ export function buildStageItems(meta, { title, instruction } = {}) {
 // For a strip: what is editable, as "<element id>.<attribute>".
 export function editableList(meta) {
 	return meta.editable.map((key) => {
-		const [slot, attr] = key.split(".");
-		return `${elementId(meta.prefix, "b", slot)}.${attr}`;
+		const [part, attr] = key.split(".");
+		return `${elementId(meta.prefix, "b", part)}.${attr}`;
 	});
 }
 
@@ -226,18 +255,19 @@ export function editableList(meta) {
 export function criteriaFor(meta) {
 	const criteria = [];
 	meta.editable.forEach((key) => {
-		const [slot, attr] = key.split(".");
+		const [id, attr] = key.split(".");
+		const part = partOf(meta, id);
 		const kind = ATTRIBUTES[attr];
-		if (!SLOTS[slot] || !kind || !(attr in SLOTS[slot].start)) return;
+		if (!part || !kind || !(attr in part.start)) return;
 		const [full, zero] = STRICTNESS[precisionOf(meta, key)][attr];
 		const asDb = attr === "gain";
 		criteria.push({
-			id: `${slot}-${attr}`,
-			label: `${SLOTS[slot].label} ${kind.label.toLowerCase()}`,
+			id: `${id}-${attr}`,
+			label: `${part.label} ${kind.label.toLowerCase()}`,
 			weight: 1,
 			type: "match",
-			a: { ref: elementId(meta.prefix, "b", slot), attr, ...(asDb ? { as: "db" } : {}) },
-			b: { ref: elementId(meta.prefix, "a", slot), attr, ...(asDb ? { as: "db" } : {}) },
+			a: { ref: elementId(meta.prefix, "b", id), attr, ...(asDb ? { as: "db" } : {}) },
+			b: { ref: elementId(meta.prefix, "a", id), attr, ...(asDb ? { as: "db" } : {}) },
 			scale: kind.scale,
 			full,
 			zero
@@ -258,16 +288,17 @@ export function targetsFor(meta, startValues = {}) {
 	const targets = [];
 	meta.editable.forEach((key) => {
 		const range = meta.ranges?.[key];
-		const [slot, attr] = key.split(".");
-		if (!range || !SLOTS[slot] || !(attr in SLOTS[slot].start) || !(range.max > range.min)) return;
-		const ref = elementId(meta.prefix, "a", slot);
+		const [id, attr] = key.split(".");
+		const part = partOf(meta, id);
+		if (!range || !part || !(attr in part.start) || !(range.max > range.min)) return;
+		const ref = elementId(meta.prefix, "a", id);
 		const asDb = attr === "gain";
 		const scale = ATTRIBUTES[attr].scale === "log2" && range.min > 0 ? "log2" : "linear";
 		targets.push({
 			key: readKey({ ref, attr, as: asDb ? "db" : "number" }),
 			ref,
 			attr,
-			write: slot === "volume" && attr === "gain" ? "dB" : "number",
+			write: part.tagName === "GainNode" && attr === "gain" ? "dB" : "number",
 			min: range.min,
 			max: range.max,
 			scale,
