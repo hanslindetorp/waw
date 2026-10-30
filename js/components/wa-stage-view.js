@@ -21,6 +21,7 @@ import { runAssessment } from "../assessment/run.js";
 import { showAssessmentResult } from "./wa-assessment-result.js";
 import "./wa-assessment-editor.js";
 import "./wa-var-knobs.js";
+import "./wa-mixer-view.js";
 import { CARD_ATTRIBUTES } from "./wa-chain-view.js";
 
 // The Stage panel: a flat page (see project/stage-store.js) with headings,
@@ -407,6 +408,27 @@ template.innerHTML = `
 		.command-btn.blink {
 			animation: blink 0.25s ease-out;
 		}
+		/* A toggle (the A / B buttons of a task): lit while it is the chosen one. */
+		.command-btn.toggle {
+			min-width: 3.2rem;
+			justify-content: center;
+		}
+		.command-btn.on {
+			border-color: var(--waw-accent, #4fa3ff);
+			color: #06131f;
+			background: var(--waw-accent, #4fa3ff);
+			box-shadow: 0 0 10px rgba(79, 163, 255, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+			font-weight: 600;
+		}
+		.item.hidden-item { opacity: 0.35; }
+		:host([readonly]) .item.hidden-item, :host([view-id]) .item.hidden-item { display: none; }
+		/* What the user can't touch right now (B's controls while A is what is heard). */
+		.item.inactive > :first-child {
+			opacity: 0.3;
+			filter: grayscale(0.7);
+			pointer-events: none;
+			transition: opacity 0.15s;
+		}
 		@keyframes blink {
 			0% { background: var(--waw-accent, #4fa3ff); }
 			100% { background: linear-gradient(180deg, #383c42, #1d1f22 80%); }
@@ -502,6 +524,7 @@ template.innerHTML = `
 			<button type="button" data-orient="portrait">Portrait</button>
 		</span>
 		<span class="spacer"></span>
+		<button type="button" data-task="edit" title="Set up this task: A, B and what the student may adjust" hidden>Task…</button>
 		<button type="button" data-assess="toggle" title="How this view is assessed">Assessment</button>
 		<button type="button" data-assess="test" title="Try the assessment on the page as it is now">Test run</button>
 	</div>
@@ -526,9 +549,15 @@ export class WaStageView extends HTMLElement {
 		this._scaler = this.shadowRoot.querySelector(".scaler");
 		this._stage = this.shadowRoot.querySelector(".stage");
 		this._scale = 1;
+		// Toggle groups of Command buttons (a task's A / B): group -> the chosen
+		// command's id; and the groups whose sound is running (so choosing A or B
+		// starts it only when it isn't). Stop clears both. Per Hans (2026-10-30).
+		this._groupChoice = new Map();
+		this._groupRunning = new Set();
 		this._selectedId = null;
 		this._editingId = null;
 		this._onChange = () => this._render();
+		this._onAssessmentChange = () => this._updateTaskButton();
 		// Embedded cards and knobs follow the document themselves; the Stage
 		// only has to be rebuilt when what its items refer to appears,
 		// disappears or (for a Command's button) changes — never on every
@@ -592,6 +621,7 @@ export class WaStageView extends HTMLElement {
 
 	connectedCallback() {
 		stageStore.addEventListener("change", this._onChange);
+		assessmentStore.addEventListener("change", this._onAssessmentChange);
 		xmlStore.addEventListener("change", this._onXmlChange);
 		// Capture phase: while the Stage is where the user last selected something, its keys
 		// (Backspace/Delete, the arrows) are its own — no other handler gets them.
@@ -610,6 +640,8 @@ export class WaStageView extends HTMLElement {
 				this._select(null);
 			})
 		);
+
+		this.shadowRoot.querySelector('[data-task="edit"]').addEventListener("click", () => document.querySelector("wa-task-dialog")?.openFor(stageStore.currentViewId));
 
 		const toggle = this.shadowRoot.querySelector('[data-assess="toggle"]');
 		toggle.addEventListener("click", () => {
@@ -667,6 +699,7 @@ export class WaStageView extends HTMLElement {
 
 	disconnectedCallback() {
 		stageStore.removeEventListener("change", this._onChange);
+		assessmentStore.removeEventListener("change", this._onAssessmentChange);
 		xmlStore.removeEventListener("change", this._onXmlChange);
 		document.removeEventListener("keydown", this._onKeyDown, true);
 		document.removeEventListener("pointerdown", this._onDocPointerDown, true);
@@ -873,6 +906,8 @@ export class WaStageView extends HTMLElement {
 		const orientation = this._orientation();
 		this.shadowRoot.querySelectorAll("[data-orient]").forEach((btn) => btn.classList.toggle("active", btn.dataset.orient === orientation));
 		if (!this.readonly) this._assessmentEditor.setViewId(stageStore.currentViewId);
+		// a task made by a recipe has its own set-up
+		this._updateTaskButton();
 		this._stage.innerHTML = "";
 		const view = this._shownView();
 		if (!view) {
@@ -895,6 +930,10 @@ export class WaStageView extends HTMLElement {
 		if (items.some((i) => i.type === "input")) this._ensureInputTick();
 		else this._stopInputTick();
 		this._fit();
+	}
+
+	_updateTaskButton() {
+		this.shadowRoot.querySelector('[data-task="edit"]').hidden = this.readonly || !assessmentStore.get(stageStore.currentViewId)?.task;
 	}
 
 	_renderTabs() {
@@ -988,6 +1027,17 @@ export class WaStageView extends HTMLElement {
 		el.style.width = `${g.w}px`;
 		this._applyScale(el, g.s);
 		if (item.id === this._selectedId) el.classList.add("selected");
+		if (item.hidden) {
+			// something generated that has nothing to show (a task's part the student
+			// can't adjust): not there on a page, faint in the editor
+			el.classList.add("hidden-item");
+			el.title = "Not shown to the student: nothing here can be adjusted.";
+		}
+		if (item.inactiveWhen) {
+			el.dataset.inactiveGroup = item.inactiveWhen.group;
+			el.dataset.inactiveRef = item.inactiveWhen.ref;
+			el.classList.toggle("inactive", this._groupChoice.get(item.inactiveWhen.group) === item.inactiveWhen.ref);
+		}
 
 		el.appendChild(this._buildContent(item));
 
@@ -1041,6 +1091,11 @@ export class WaStageView extends HTMLElement {
 			}
 			case "input":
 				return this._buildInput(item);
+			case "strip": {
+				const strip = document.createElement("wa-mixer-view");
+				strip.setEmbeddedStrip(item.ref, Array.isArray(item.editable) ? item.editable : []);
+				return strip;
+			}
 			case "element": {
 				const card = document.createElement("wa-chain-view");
 				card.setCardNode(item.ref, { editable: Array.isArray(item.editable) ? item.editable : null, publicLabels: true });
@@ -1166,20 +1221,43 @@ export class WaStageView extends HTMLElement {
 		btn.title = !this.readonly && !cmd.attributes.label ? (type === "set" ? `${cmd.attributes.variable}=${value}` : `${type}(${value})`) : cmd.attributes.label || "";
 		if (!label.textContent) label.hidden = true;
 		btn.append(label, glyph);
+		if (item.toggleGroup) {
+			btn.classList.add("toggle", "on-off");
+			btn.dataset.group = item.toggleGroup;
+			btn.dataset.ref = item.ref;
+			btn.classList.toggle("on", this._groupChoice.get(item.toggleGroup) === item.ref);
+			glyph.hidden = true;
+		}
 		btn.addEventListener("click", () => {
 			btn.classList.remove("blink");
 			void btn.offsetWidth;
 			btn.classList.add("blink");
-			if (type === "set") {
-				const parsed = parseFloat(value);
-				playerStore.setVariable(cmd.attributes.variable, Number.isFinite(parsed) ? parsed : value);
-			} else if (type === "stop") {
-				playerStore.stopShortcut(value);
-			} else {
-				playerStore.trigShortcut(value);
+			// Choosing from a toggle group (A / B) also starts the sound, unless it is running.
+			if (item.toggleGroup && item.starts && !this._groupRunning.has(item.toggleGroup)) {
+				const start = this._findByAttributeId(item.starts, "Command");
+				if (start) this._runCommand(start);
+				this._groupRunning.add(item.toggleGroup);
 			}
+			this._runCommand(cmd);
+			if (item.toggleGroup) this._groupChoice.set(item.toggleGroup, item.ref);
+			if (item.clears) {
+				this._groupChoice.delete(item.clears);
+				this._groupRunning.delete(item.clears);
+			}
+			this._applyGroupState();
 		});
 		return btn;
+	}
+
+	_runCommand(cmd) {
+		playerStore.runCommand(cmd);
+	}
+
+	// Lights the chosen button of each toggle group and dims what is inactive
+	// while a given choice is made.
+	_applyGroupState() {
+		this._stage.querySelectorAll(".command-btn[data-group]").forEach((btn) => btn.classList.toggle("on", this._groupChoice.get(btn.dataset.group) === btn.dataset.ref));
+		this._stage.querySelectorAll(".item[data-inactive-group]").forEach((el) => el.classList.toggle("inactive", this._groupChoice.get(el.dataset.inactiveGroup) === el.dataset.inactiveRef));
 	}
 
 	_findByAttributeId(elementId, tagName) {

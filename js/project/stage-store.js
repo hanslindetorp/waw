@@ -82,8 +82,8 @@ export const viewHasPortrait = (view) => !!view?.portrait;
 
 const FORMAT_VERSION = 2;
 const SAVE_DEBOUNCE_MS = 400;
-const DEFAULT_WIDTHS = { heading: 600, text: 600, command: 150, var: 100, element: 260, input: 260 };
-const ESTIMATED_HEIGHTS = { heading: 44, text: 90, command: 40, var: 110, element: 240, input: 90 };
+const DEFAULT_WIDTHS = { heading: 600, text: 600, command: 150, var: 100, element: 260, input: 260, strip: 360 };
+const ESTIMATED_HEIGHTS = { heading: 44, text: 90, command: 40, var: 110, element: 240, input: 90, strip: 560 };
 const ITEM_GAP = 16;
 const ELEMENT_COLUMN_STEP = 280;
 const PORTRAIT_MARGIN = 20;
@@ -250,6 +250,14 @@ class StageStore extends EventTarget {
 		this.dispatchEvent(new CustomEvent("edit"));
 		clearTimeout(this._saveTimer);
 		this._saveTimer = setTimeout(() => this.flush(), SAVE_DEBOUNCE_MS);
+	}
+
+	// Edits the items of a given view (not necessarily the current one) — for
+	// what is generated for a view while another is showing (the task recipes).
+	editViewItems(viewId, fn) {
+		this._materialize();
+		if (!this._views.some((v) => v.id === viewId)) return;
+		this._commit(this._views.map((v) => (v.id === viewId ? { ...v, items: fn(v.items) } : v)));
 	}
 
 	_editCurrentView(fn) {
@@ -508,7 +516,7 @@ function isValidItem(i) {
 		i &&
 		typeof i === "object" &&
 		typeof i.id === "string" &&
-		["heading", "text", "command", "var", "element", "input"].includes(i.type) &&
+		["heading", "text", "command", "var", "element", "input", "strip"].includes(i.type) &&
 		Number.isFinite(i.x) &&
 		Number.isFinite(i.y)
 	);

@@ -36,6 +36,11 @@ export class VFS extends EventTarget {
 		return folder.children.map((childId) => this._nodes.get(childId));
 	}
 
+	// Every file in the whole tree (not folders), in no particular order.
+	allFiles() {
+		return [...this._nodes.values()].filter((n) => n.type === "file");
+	}
+
 	createFolder(parentId = ROOT_ID, name) {
 		const parent = this._requireType(parentId, "folder");
 		const node = { id: nextId(), type: "folder", name, parentId, children: [] };

@@ -388,6 +388,22 @@ class PlayerStore extends EventTarget {
 		this._emit();
 	}
 
+	// Does what a <Command> element says: sets its variable (type "set"), stops
+	// (type "stop") or trigs (the default) its selector. For anything that shows a
+	// Command as a button (the Stage, the task editor).
+	runCommand(cmd) {
+		const type = cmd.attributes.type || "trig";
+		const value = cmd.attributes.value ?? "";
+		if (type === "set") {
+			const parsed = parseFloat(value);
+			this.setVariable(cmd.attributes.variable, Number.isFinite(parsed) ? parsed : value);
+		} else if (type === "stop") {
+			this.stopShortcut(value);
+		} else {
+			this.trigShortcut(value);
+		}
+	}
+
 	// Fires a one-off, selector-scoped stop (a trigger-shortcut Command
 	// button's type="stop") — waxml.stop(selector) only stops whatever
 	// matches that selector, unlike stop() above which is the transport-

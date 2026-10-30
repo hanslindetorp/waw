@@ -113,6 +113,7 @@ template.innerHTML = `
 			     internal wiring string, never shown) — per Hans (2026-09-27):
 			     "Share" is reserved for a different, future feature. -->
 			<button class="menu-item" type="button" data-action="share">Export...</button>
+			<button class="menu-item" type="button" data-action="create-task">Create task...</button>
 			<!-- Filled from templates/manifest.json (see _loadTemplateList). -->
 			<div class="templates" hidden>
 				<div class="menu-divider"></div>
@@ -183,6 +184,12 @@ export class WaFileMenu extends HTMLElement {
 			e.stopPropagation();
 			this._close();
 			document.querySelector("wa-share-dialog")?.open();
+		});
+
+		this._dropdown.querySelector('[data-action="create-task"]').addEventListener("click", (e) => {
+			e.stopPropagation();
+			this._close();
+			document.querySelector("wa-task-dialog")?.open();
 		});
 
 		this._fileInput.addEventListener("click", (e) => e.stopPropagation());

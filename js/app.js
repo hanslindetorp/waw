@@ -11,6 +11,7 @@ import "./components/wa-xml-editor.js";
 import "./components/wa-xml-code.js";
 import "./components/wa-library-view.js";
 import "./components/wa-share-dialog.js";
+import "./components/wa-task-dialog.js";
 import { showNotice } from "./components/wa-notice-dialog.js";
 
 import { xmlStore } from "./xml-editor/xml-store.js";

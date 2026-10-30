@@ -1148,3 +1148,47 @@ webbappen kräver den; viewern fungerar fristående.
 - **Tester:** `php lti/tests/run.php` (95 kontroller: JWT/JWK, hela launch-flödet mot en låtsas-Canvas,
   poäng och betygsboksanrop, bedömningen mot JS-resultaten). Provat med PHP 8.5 i Docker; en
   provkörning av alla sidor över HTTP gick igenom, men inget är provat mot ett riktigt Canvas ännu.
+
+## Uppgiftsrecept (js/tasks/, wa-task-dialog.js)
+
+"Skapa uppgift" bygger på **recept**: rena, deterministiska generatorer av
+ljudgraf, Stage-vy och bedömning (en AI-assistent kan senare bara fylla i
+receptets val). Första receptet är **A/B-matchning** (`ab-matching.js`, ren
+data) med `ab-task.js` som lägger in det i projektet och håller det i takt med
+dokumentet: eleven hör en referens (A) och sin egen version (B) och justerar B
+tills de låter lika; en balansuppgift är samma sak (volymen mot en referens).
+
+- **Ljudkällan** (`source: { kind }`, så att fler kan tillkomma): `file` =
+  en `<AudioBufferSourceNode loop="true">` som startas/stoppas med trig/stop
+  av dess id; `noise` (`<Noise>`) och `oscillator` (`<OscillatorNode type>`)
+  går hela tiden och styrs därför av en grind (`<GainNode gain="$gateN">`
+  och en `<Var>`). En Section ur en befintlig `<Composition>` (för att matcha
+  balans mellan spår) är planerad men inte byggd. Källan kopplas till båda
+  remsorna med `output="#abN-a, #abN-b"`.
+- **Mixer:** två fulla kanalremsor (A = referens, B = elevens) i en `<Mixer
+  solo="$soloabN" blend="0" transitionTime="0">`; A/B-Commands sätter solo
+  till 0/1 (blend 0 = hårt byte, inget mellanvärde läcker igenom båda).
+- **Uppgiftens data** (`task`) ligger i vyns assessment (författarens, ej
+  publicerad): källa, vad som visas (`display`: `objects` | `strip`), delarna,
+  `editable` (vilka värden eleven får ändra, `"peaking.frequency"`), `ranges`
+  (intervall för slumpade mål) och stränghet. Kriterierna (ett jämförelse-
+  kriterium per ändringsbart värde) och Stage-objektens `editable` härleds ur
+  det i `syncAbTask`, som också kör självtestet (facit = B satt som A ger full
+  poäng; B som den startar får inte godkännas).
+- **Guiden** (File > Create task…, och "Task…" i Stage-verktygsfältet för att
+  öppna en befintlig): ljud → vad som visas (hel kanalremsa eller separata
+  objekt) → vilka objekt → *Set up A and B*. Där finns flikar A och B med de
+  riktiga reglagen (kort eller en inbäddad remsa) bundna till dokumentet. På A
+  ställer man in referensen; allt som ändras markeras automatiskt som något
+  eleven ska hitta (`markChanged`) och varje numeriskt värde har en "rnd"-knapp
+  (blinkar tills man vrider på reglaget; värdena man svepar över blir
+  intervallet, som visas bredvid). På B ställer man in startvärden och kryssar
+  vad eleven får ändra. Att *dra ett slumpmål ur intervallet* per elev är inte
+  byggt än.
+- **Stage-körning:** Commands kan ha `toggleGroup` (A/B lyser tills Stop),
+  `starts` (att välja A/B startar ljudet om det inte spelas) och `clears`
+  (Stop); element/strip-objekt kan ha `inactiveWhen` (tonas ned och stängs av
+  medan A hörs) och `hidden` (en del utan något att justera visas inte för
+  eleven). Item-typen `strip` är en `wa-mixer-view` i inbäddat läge
+  (`setEmbeddedStrip`): bara en kanalremsa, och bara de angivna
+  `"<id>.<attribut>"` går att vrida — övriga syns men är nedtonade.

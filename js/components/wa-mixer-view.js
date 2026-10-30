@@ -1427,6 +1427,39 @@ template.innerHTML = `
 		   click outside it neither closes it nor is swallowed — it must stay
 		   possible to use a Command button or a Snapshot with it open. Only the
 		   window itself takes pointer events; it closes with × or Escape. */
+		/* One channel strip on the Stage (see setEmbeddedStrip): the strip and its
+		   row labels alone; what the viewer may not turn is dimmed and dead. */
+		:host([embed]) {
+			height: auto;
+		}
+		:host([embed]) .mixer,
+		:host([embed]) .mixer-body {
+			height: auto;
+		}
+		:host([embed]) .master-host,
+		:host([embed]) .bottom-row,
+		:host([embed]) .mini-sliders,
+		:host([embed]) .on-solo-label,
+		:host([embed]) .on-solo-row,
+		:host([embed]) .mini-sliders-row-spacer,
+		:host([embed]) .source-label,
+		:host([embed]) .ins-label,
+		:host([embed]) .send-label,
+		:host([embed]) .row-label-divider,
+		:host([embed]) .source-section,
+		:host([embed]) .insert-section,
+		:host([embed]) .sends-section,
+		:host([embed]) .add-filter-wrap,
+		:host([embed]) .panner-3d-toggle,
+		:host([embed]) .solo-btn,
+		:host([embed]) .divider {
+			display: none !important;
+		}
+		.embed-locked {
+			opacity: 0.35;
+			filter: grayscale(0.6);
+			pointer-events: none;
+		}
 		.panner-popup-backdrop {
 			position: fixed;
 			inset: 0;
@@ -1581,6 +1614,11 @@ export class WaMixerView extends HTMLElement {
 		// ("solo", "blend", "transitionTime"): not elements, so they're held
 		// here, and a Snapshot captures the ones selected (see _createSnapshot).
 		this._mixerParts = new Set();
+		// Embedded as ONE channel strip (the Stage's "strip" item, see
+		// setEmbeddedStrip): the id of the <Chain> shown, and the
+		// "<element id>.<attribute>" pairs the viewer may change.
+		this._embedChainId = null;
+		this._embedEditable = new Set();
 		// Set around every xmlStore.updateAttributes call fired from a knob/
 		// fader's own continuous drag (see _commitAttributes) — xmlStore's
 		// "change" event fires synchronously, and without this guard the
@@ -1649,6 +1687,7 @@ export class WaMixerView extends HTMLElement {
 		// gaps around strips, the bottom-row area. Selects <Mixer> itself,
 		// per Hans.
 		this._mixerRoot.addEventListener("click", () => {
+			if (this._embedChainId) return;
 			if (this._activeMixerId) xmlStore.selectNode(this._activeMixerId);
 		});
 		this.shadowRoot.querySelector(".panner-popup-close").addEventListener("click", () => this._closePannerPopup());
@@ -1954,6 +1993,10 @@ export class WaMixerView extends HTMLElement {
 	// matching MIXER_CONTEXT_TAGS carve-out).
 	_onStoreChange() {
 		if (this._isLocalEdit) return;
+		if (this._embedChainId) {
+			this._embedRefresh();
+			return;
+		}
 		const sig = this._selectionSig();
 		if (sig !== this._lastSelectionSig) {
 			if (!this._ownSelect) this._mixerParts.clear();
@@ -1993,6 +2036,39 @@ export class WaMixerView extends HTMLElement {
 		this._render(mixerNode);
 	}
 
+	// Shows just the channel strip of the <Chain> with this XML id — no other
+	// channels, master, solo slider or Snapshots, nothing to add or rename — for
+	// the Stage. Only the attributes in `editable` ("<element id>.<attribute>")
+	// can be turned; every other control is there, dimmed and dead, so the
+	// strip looks like the Mixer's. Per Hans (2026-10-30).
+	setEmbeddedStrip(chainId, editable = []) {
+		this._embedChainId = chainId || null;
+		this._embedEditable = new Set(editable);
+		this.toggleAttribute("embed", !!this._embedChainId);
+		this._lastRenderedRoot = null;
+		if (this.isConnected) this._embedRefresh();
+	}
+
+	_embedRefresh() {
+		const root = xmlStore.root;
+		const walk = (n) => (n.attributes.id === this._embedChainId ? n : n.children.map(walk).find(Boolean));
+		const chain = root ? walk(root) : null;
+		const mixer = chain?.parent ? ops.findNodeById(root, chain.parent) : null;
+		if (!mixer || mixer.tagName !== "Mixer") {
+			this._activeMixerId = null;
+			this._channels.innerHTML = "";
+			return;
+		}
+		this._activeMixerId = mixer.id;
+		if (root === this._lastRenderedRoot) return;
+		this._render(mixer);
+	}
+
+	// Whether a control for `attr` of `node` is out of bounds in an embedded strip.
+	_embedLocked(node, attr) {
+		return !!this._embedChainId && !this._embedEditable.has(`${node.attributes.id}.${attr}`);
+	}
+
 	// Whether a strip's node is part of the document's selection — the
 	// primary one or any of a multi-selection (shared with the XML editor,
 	// which highlights the same set).
@@ -2021,6 +2097,7 @@ export class WaMixerView extends HTMLElement {
 	// container" behavior as wa-section-view's own delete handling, since
 	// xmlStore.removeNode only clears selectedNodeId, never _activeMixerId.
 	_onKeyDown(e) {
+		if (this._embedChainId) return; // a strip on the Stage has no keys of its own
 		if (e.key === "Escape" && !this._pannerPopupBackdrop.hidden) {
 			this._closePannerPopup();
 			return;
@@ -2317,14 +2394,16 @@ export class WaMixerView extends HTMLElement {
 		// totalCount are computed from this same filtered list so the solo
 		// crossfade position (index/(totalCount-1), see _buildSoloButton)
 		// only ever spans the channels actually shown, not skipped ones.
-		const signalChildren = mixerNode.children.filter(hasAudioSignal);
+		const signalChildren = mixerNode.children.filter(hasAudioSignal).filter((c) => !this._embedChainId || c.attributes.id === this._embedChainId);
 		const totalCount = signalChildren.length;
 		signalChildren.forEach((child, index) => {
 			this._channels.appendChild(this._buildChannelStrip(child, index, totalCount, sectionHeights));
 		});
-		this._channels.appendChild(this._buildAddChannelStrip(mixerNode));
 		this._masterHost.innerHTML = "";
-		this._masterHost.appendChild(this._buildMasterStrip(mixerNode, sectionHeights));
+		if (!this._embedChainId) {
+			this._channels.appendChild(this._buildAddChannelStrip(mixerNode));
+			this._masterHost.appendChild(this._buildMasterStrip(mixerNode, sectionHeights));
+		}
 
 		const soloRaw = mixerNode.attributes.solo;
 		const soloValue = soloRaw !== undefined ? parseFloat(soloRaw) : undefined;
@@ -2696,6 +2775,7 @@ export class WaMixerView extends HTMLElement {
 	// either (see connectedCallback) — a click inside a channel strip is
 	// always this strip's own business, control or not.
 	_wireStripSelect(strip, child) {
+		if (this._embedChainId) return; // a strip on the Stage selects nothing in the document
 		strip.addEventListener("click", (e) => this._onStripClick(e, child.id));
 		if (child.tagName !== "Chain") return;
 		// Alt-click on anything belonging to a part selects the part instead of
@@ -3918,6 +3998,10 @@ export class WaMixerView extends HTMLElement {
 			xmlStore.updateAttributes(node.id, attrs);
 		});
 		select.addEventListener("pointerdown", (e) => e.stopPropagation());
+		if (this._embedLocked(node, "type")) {
+			select.disabled = true;
+			select.classList.add("embed-locked");
+		}
 		return select;
 	}
 
@@ -3933,6 +4017,7 @@ export class WaMixerView extends HTMLElement {
 	// remote-controlled (locked) knob, so it can still be retyped/remapped
 	// from here instead of only from the Inspector. Per Hans (2026-09-29).
 	_wireParamEntry(el, node, attrName) {
+		if (this._embedChainId) return; // no typing a value or mapping a Var onto a strip on the Stage
 		const getNode = () => ops.findNodeById(xmlStore.root, node.id);
 		wireMapClaim(el, { getNode, attrName });
 		wireInlineTextEdit(el, { getNode, attrName, inputClassName: "knob-inline-input", eventName: "contextmenu" });
@@ -3952,7 +4037,7 @@ export class WaMixerView extends HTMLElement {
 			const db = getLiveProperty(node.attributes.id, "gain"); // BiquadFilterNode.gain is native dB
 			if (typeof db !== "number" || !Number.isFinite(db)) return;
 			applyVisual(db);
-		});
+		}, node, "gain");
 		if (locked) return wrap;
 
 		this._wireVerticalDrag(
@@ -3998,7 +4083,7 @@ export class WaMixerView extends HTMLElement {
 			const freq = getLiveProperty(node.attributes.id, "frequency");
 			if (typeof freq !== "number" || !Number.isFinite(freq)) return;
 			applyVisual(freqToKnobT(freq));
-		});
+		}, node, "frequency");
 		if (locked) return wrap;
 
 		// Same per-type frequency FILTER_TYPE_DEFAULT_FREQUENCY uses for a
@@ -4041,7 +4126,7 @@ export class WaMixerView extends HTMLElement {
 			const q = getLiveProperty(node.attributes.id, "Q");
 			if (typeof q !== "number" || !Number.isFinite(q)) return;
 			applyVisual(q);
-		});
+		}, node, "Q");
 		if (locked) return wrap;
 
 		this._wireVerticalDrag(
@@ -4080,7 +4165,7 @@ export class WaMixerView extends HTMLElement {
 			const pan = getLiveProperty(node.attributes.id, "pan");
 			if (typeof pan !== "number" || !Number.isFinite(pan)) return;
 			applyVisual(pan);
-		});
+		}, node, "pan");
 		if (locked) return wrap;
 
 		this._wireVerticalDrag(
@@ -4192,7 +4277,12 @@ export class WaMixerView extends HTMLElement {
 	//
 	// Returns true (and adds the "remote-controlled" class) when locked, so
 	// callers know to skip their own drag wiring entirely; false otherwise.
-	_lockRemoteControlled(el, rawAttrValue, tick) {
+	_lockRemoteControlled(el, rawAttrValue, tick, node = null, attr = null) {
+		// A control the viewer of an embedded strip may not turn: shown, dimmed, dead.
+		if (node && this._embedLocked(node, attr)) {
+			el.classList.add("embed-locked");
+			return true;
+		}
 		if (!isVariableControlled(rawAttrValue)) return false;
 		el.classList.add("remote-controlled");
 		const varName = variableNameFromValue(rawAttrValue);
@@ -4299,7 +4389,7 @@ export class WaMixerView extends HTMLElement {
 			if (typeof linear !== "number" || !Number.isFinite(linear)) return;
 			const db = linear > 0 ? 20 * Math.log10(linear) : FADER_MIN_DB;
 			applyVisual(db);
-		});
+		}, gainNode, "gain");
 		if (locked) return wrap;
 
 		const resetToDefault = () => {

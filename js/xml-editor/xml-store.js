@@ -287,6 +287,28 @@ class XmlStore extends EventTarget {
 		return node;
 	}
 
+	// Inserts a ready-made element tree — { tagName, attributes, children: [...] },
+	// attributes written exactly as given (no defaults added) — as one edit,
+	// one undo step. For things that create a whole structure at once (the task
+	// recipes, see js/tasks/). Never selects anything by default.
+	insertNodeTree(parentId, spec, index, { select = false } = {}) {
+		if (!this.root) return null;
+		const build = (s, parent) => {
+			const node = ops.createXmlNode(s.tagName, parent);
+			node.attributes = { ...s.attributes };
+			node.children = (s.children || []).map((c) => build(c, node.id));
+			return node;
+		};
+		const node = build(spec, parentId);
+		this.root = ops.insertChild(this.root, parentId, node, index);
+		if (select) {
+			this.selectedNodeId = node.id;
+			this.selectedNodeIds = new Set([node.id]);
+		}
+		this._syncCode(true, { newNodeId: node.id });
+		return node;
+	}
+
 	// Creates a new root-level <Var>, in the same "grouped with every other
 	// root Var" spot wa-bottom-bar.js's own "+" button already used (right
 	// after the last existing root Var, else right after the last root
