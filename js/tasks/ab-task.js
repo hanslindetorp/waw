@@ -3,7 +3,7 @@ import { stageStore } from "../project/stage-store.js";
 import { assessmentStore } from "../project/assessment-store.js";
 import { collectValues } from "../assessment/collect.js";
 import { readKey } from "../assessment/evaluate.js";
-import { buildAbGraph, buildStageItems, buildAssessment, selfTestAbMatching, SLOTS, editableKey, elementId, editableList, slotAttributes } from "./ab-matching.js";
+import { buildAbGraph, buildStageItems, buildAssessment, selfTestAbMatching, SLOTS, editableKey, elementId, editableList, slotAttributes, attributeText, isAtStart } from "./ab-matching.js";
 
 // Puts an A/B task (see ab-matching.js) into the open project and keeps it in
 // step with the document afterwards. A project holds many tasks (one Stage
@@ -119,15 +119,55 @@ export function readStrip(meta, chain) {
 	return values;
 }
 
-// What changed in strip A since `before` (a readStrip result) becomes editable.
-// Returns the new `before`.
+// What changed in strip A since `before` (a readStrip result) becomes editable —
+// and what was changed but is back at its starting value (a double-click on a
+// control resets it) stops being. Returns the new `before`.
 export function markChanged(viewId, before) {
 	const meta = taskOfView(viewId);
 	if (!meta) return before;
 	const now = readStrip(meta, "a");
-	const changed = Object.keys(now).filter((key) => Number.isFinite(now[key]) && before[key] !== now[key] && !meta.editable.includes(key));
-	if (changed.length) updateTaskMeta(viewId, { editable: [...meta.editable, ...changed] });
+	const added = [];
+	const dropped = [];
+	Object.keys(now).forEach((key) => {
+		if (!Number.isFinite(now[key])) return;
+		const [slot, attr] = key.split(".");
+		const atStart = isAtStart(slot, attr, now[key]);
+		if (before[key] !== now[key] && !atStart && !meta.editable.includes(key)) added.push(key);
+		if (atStart && meta.editable.includes(key) && before[key] !== now[key]) dropped.push(key);
+	});
+	if (added.length || dropped.length) {
+		const ranges = { ...(meta.ranges || {}) };
+		dropped.forEach((key) => delete ranges[key]);
+		updateTaskMeta(viewId, { editable: [...meta.editable.filter((k) => !dropped.includes(k)), ...added], ranges });
+	}
 	return now;
+}
+
+// Puts a value of strip A back to where it starts and takes it out of the task
+// (the mark on A, and any random range).
+export function resetAttribute(viewId, slot, attr) {
+	const meta = taskOfView(viewId);
+	if (!meta) return null;
+	const el = findElement(elementId(meta.prefix, "a", slot));
+	if (el) xmlStore.updateAttributes(el.id, { ...el.attributes, [attr]: attributeText(slot, attr, SLOTS[slot].start[attr]) });
+	const key = editableKey(slot, attr);
+	const ranges = { ...(meta.ranges || {}) };
+	delete ranges[key];
+	return updateTaskMeta(viewId, { editable: meta.editable.filter((k) => k !== key), ranges });
+}
+
+// Takes the random range of a value away.
+export function clearRange(viewId, key) {
+	const meta = taskOfView(viewId);
+	if (!meta?.ranges?.[key]) return null;
+	const ranges = { ...meta.ranges };
+	delete ranges[key];
+	return updateTaskMeta(viewId, { ranges });
+}
+
+function findElement(id) {
+	const walk = (n) => (n.attributes.id === id ? n : n.children.map(walk).find(Boolean));
+	return xmlStore.root ? walk(xmlStore.root) : null;
 }
 
 // Removes a task altogether: its Stage view, its assessment and everything it

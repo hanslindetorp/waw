@@ -25,6 +25,11 @@ import { formatGainAttribute } from "../waxml-integration/gain-units.js";
 // since 2026-10-22 they capture only what is written, which is why creation
 // values matter.)
 
+// The frequency a newly created filter of a type starts at, and what a
+// double-click on its frequency control resets to — a sensible starting point
+// per type (any other type starts at a plain midrange 300 Hz).
+export const FILTER_TYPE_DEFAULT_FREQUENCY = { highshelf: 4000, peaking: 400, lowshelf: 150 };
+
 export const ENGINE_DEFAULTS = {
 	OscillatorNode: { frequency: 440 },
 	BiquadFilterNode: { frequency: 350, Q: 1, gain: 0 },

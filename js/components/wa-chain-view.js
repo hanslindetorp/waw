@@ -15,7 +15,7 @@ import { isEditableContext } from "../project/edit-history.js";
 import { stageStore } from "../project/stage-store.js";
 import { setCardDragImage } from "../utils/drag-image.js";
 import { selectionSurface } from "../state/selection-surface.js";
-import { engineDefault } from "../xml-editor/default-attributes.js";
+import { engineDefault, FILTER_TYPE_DEFAULT_FREQUENCY } from "../xml-editor/default-attributes.js";
 import { showNotice } from "./wa-notice-dialog.js";
 import {
 	biquadResponseCurve,
@@ -2370,6 +2370,39 @@ export class WaChainView extends HTMLElement {
 			canvas.addEventListener("pointermove", onMove);
 			canvas.addEventListener("pointerup", onUp);
 			canvas.addEventListener("pointercancel", onUp);
+		});
+
+		// Double-click on the point: back to where it starts — the type's usual
+		// frequency and 0 dB (or Q 1, while Q is what the point's height is) — the
+		// same quick reset every knob and fader has. Per Hans (2026-10-31).
+		canvas.addEventListener("dblclick", (e) => {
+			const { px, py } = canvasPointFromEvent(canvas, e);
+			if (!dotNearPoint(px, py)) return;
+			const mode = yDragMode(select.value);
+			const freqLocked = !canDragX() || isParamVarControlled(node, "frequency");
+			const yLocked = !canDragY(select.value) || (mode === "gain" ? isParamVarControlled(node, "gain") : mode === "q" ? isParamVarControlled(node, "Q") : true);
+			const nodeNow = findNodeById(xmlStore.root, node.id);
+			if (!nodeNow) return;
+			const patch = { ...nodeNow.attributes };
+			const live = {};
+			if (!freqLocked) {
+				state.freq = FILTER_TYPE_DEFAULT_FREQUENCY[select.value] ?? 300;
+				patch.frequency = String(Math.round(state.freq));
+				live.frequency = state.freq;
+			}
+			if (!yLocked && mode === "gain") {
+				state.gainDb = 0;
+				patch.gain = formatGainAttribute(node.tagName, 0);
+				live.gain = patch.gain;
+			} else if (!yLocked && mode === "q") {
+				state.Q = 1;
+				patch.Q = "1";
+				live.Q = 1;
+			}
+			this._redrawBiquadCanvas(canvas, state, select.value);
+			refreshChips(select.value);
+			this._commitAttributes(node.id, patch);
+			if (nodeNow.attributes.id) Object.entries(live).forEach(([attr, v]) => applyLiveProperty(nodeNow.attributes.id, attr, v));
 		});
 
 		canvas.addEventListener(

@@ -73,6 +73,15 @@ export const editableKey = (slot, attr) => `${slot}.${attr}`;
 export const elementId = (prefix, chain, slot) => `${prefix}-${chain}-${SLOTS[slot].suffix}`;
 export const chainId = (prefix, chain) => `${prefix}-${chain}`;
 
+// A value is "back at its start" when it is this close to it (a knob rounds
+// what it writes): frequency within 1 %, gain 0.05 dB, Q 0.02, pan 0.01.
+export function isAtStart(slot, attr, value) {
+	const start = SLOTS[slot]?.start[attr];
+	if (!Number.isFinite(value) || !Number.isFinite(start)) return false;
+	const tolerance = { frequency: 0.01 * Math.abs(start), gain: 0.05, Q: 0.02, pan: 0.01 }[attr] ?? 1e-6;
+	return Math.abs(value - start) <= tolerance;
+}
+
 // The element attribute for a value of a slot, as written in the document.
 export function attributeText(slot, attr, value) {
 	if (slot === "volume" && attr === "gain") return formatGainAttribute("GainNode", value);

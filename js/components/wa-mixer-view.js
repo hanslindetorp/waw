@@ -11,6 +11,7 @@ import { openIoPicker } from "./wa-io-picker.js";
 import { confirmDialog } from "./wa-confirm-dialog.js";
 import { showNotice } from "./wa-notice-dialog.js";
 import { lacksAudioInput } from "../xml-editor/chain-rules.js";
+import { FILTER_TYPE_DEFAULT_FREQUENCY } from "../xml-editor/default-attributes.js";
 import { vfs } from "../vfs/VFS.js";
 import { VFS_FILE_DRAG_TYPE, vfsDragState, getDraggedFileIds } from "../vfs/drag-types.js";
 import { isPreviewableAudioFile } from "./wa-file-preview.js";
@@ -282,7 +283,6 @@ function getBiquadTypeOptions() {
 // a filter added one at a time via the Filter section's own "+" menu starts
 // in the same sensible spot; any type without its own tuned default falls
 // back to a plain midrange frequency.
-const FILTER_TYPE_DEFAULT_FREQUENCY = { highshelf: 4000, peaking: 400, lowshelf: 150 };
 
 // Every element the Mixer view creates gets a label saying what it is for
 // (shown in the XML editor and in the Chain preview's card headers), per Hans

@@ -6,7 +6,7 @@ import { isPreviewableAudioFile } from "./wa-file-preview.js";
 import "./wa-chain-view.js";
 import "./wa-mixer-view.js";
 import { SLOTS, ATTRIBUTES, OSCILLATOR_WAVES, DEFAULT_INSTRUCTION, slotAttributes, editableKey, elementId, chainId } from "../tasks/ab-matching.js";
-import { createAbTask, taskOfView, syncAbTask, setEditable, updateTaskMeta, readStrip, markChanged, deleteAbTask, readDocumentValue } from "../tasks/ab-task.js";
+import { createAbTask, taskOfView, syncAbTask, setEditable, updateTaskMeta, readStrip, markChanged, deleteAbTask, readDocumentValue, resetAttribute, clearRange } from "../tasks/ab-task.js";
 
 // File > Create task...: sets up an "A/B matching" task (js/tasks/ab-matching.js)
 // the way an author sets up anything in the workstation — by turning the real
@@ -272,7 +272,7 @@ export class WaTaskDialog extends HTMLElement {
 	// ── opening ──
 	open() {
 		this._viewId = null;
-		this._spec = { title: "Match the sound", instruction: DEFAULT_INSTRUCTION, source: { kind: "file", src: "", wave: "sine" }, display: "objects", slots: new Set(["peaking"]) };
+		this._spec = { title: "Match the sound", instruction: DEFAULT_INSTRUCTION, source: { kind: "file", src: "", wave: "sine", frequency: 220 }, display: "objects", slots: new Set(["peaking"]) };
 		this._title.value = this._spec.title;
 		this._instruction.value = this._spec.instruction;
 		this._goTo("sound");
@@ -404,7 +404,22 @@ export class WaTaskDialog extends HTMLElement {
 		});
 		waveSelect.value = spec.source.wave;
 		waveSelect.addEventListener("change", () => (spec.source.wave = waveSelect.value));
-		this._sources.appendChild(make("oscillator", "A tone (oscillator)", waveSelect));
+		const freqInput = document.createElement("input");
+		freqInput.type = "number";
+		freqInput.min = "20";
+		freqInput.max = "20000";
+		freqInput.step = "any";
+		freqInput.style.width = "6rem";
+		freqInput.value = spec.source.frequency;
+		freqInput.title = "Frequency in Hz";
+		freqInput.addEventListener("input", () => {
+			const f = Number(freqInput.value);
+			if (Number.isFinite(f) && f > 0) spec.source.frequency = Math.min(20000, Math.max(20, f));
+		});
+		const oscSub = document.createElement("div");
+		oscSub.style.cssText = "display:flex;align-items:center;gap:0.5rem";
+		oscSub.append(waveSelect, freqInput, document.createTextNode("Hz"));
+		this._sources.appendChild(make("oscillator", "A tone (oscillator)", oscSub));
 		if (xmlStore.root?.children.some((c) => c.tagName === "Composition")) {
 			const later = document.createElement("div");
 			later.className = "choice disabled";
@@ -562,7 +577,14 @@ export class WaTaskDialog extends HTMLElement {
 				if (onA) {
 					lead.className = "mark";
 					lead.textContent = editable ? "✓" : "";
-					lead.title = editable ? "The student has to find this" : "";
+					if (editable) {
+						lead.title = "The student has to find this. Click to reset it and take it out of the task.";
+						lead.style.cursor = "pointer";
+						lead.addEventListener("click", () => {
+							this._report_(resetAttribute(this._viewId, slot, attr), true);
+							this._before = readStrip(taskOfView(this._viewId), "a");
+						});
+					}
 				} else {
 					const cb = document.createElement("input");
 					cb.type = "checkbox";
@@ -587,8 +609,14 @@ export class WaTaskDialog extends HTMLElement {
 					rnd.classList.toggle("armed", this._armed?.key === key);
 					rnd.classList.toggle("has", !!range);
 					rnd.textContent = "rnd";
-					rnd.title = range ? "Random target: click to draw a new range" : RANGE_SLOT_HINT;
-					rnd.addEventListener("click", () => this._arm(slot, attr, key));
+					rnd.title = range ? "A random target is drawn from this range. Click to take it away." : this._armed?.key === key ? "Turn the control, or click to cancel." : RANGE_SLOT_HINT;
+					rnd.addEventListener("click", () => {
+						if (range && this._armed?.key !== key) {
+							this._report_(clearRange(this._viewId, key), true);
+							return;
+						}
+						this._arm(slot, attr, key);
+					});
 					row.appendChild(rnd);
 					if (range) {
 						const r = document.createElement("span");
