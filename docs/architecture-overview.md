@@ -1183,8 +1183,41 @@ tills de låter lika; en balansuppgift är samma sak (volymen mot en referens).
   eleven ska hitta (`markChanged`) och varje numeriskt värde har en "rnd"-knapp
   (blinkar tills man vrider på reglaget; värdena man svepar över blir
   intervallet, som visas bredvid). På B ställer man in startvärden och kryssar
-  vad eleven får ändra. Att *dra ett slumpmål ur intervallet* per elev är inte
-  byggt än.
+  vad eleven får ändra. "Try a random target" sätter A till en slumpdragning för
+  att höra vad en elev får.
+- **Slumpade mål per elev** (`assessment/targets.js`): assessmentet listar
+  `targets` (ett per värde med rnd-intervall: `key`, `ref`, `attr`, `write`,
+  `min`, `max`, `scale` linear/log2 och `decimals`; härleds ur `task.ranges`
+  i `targetsFor`). `drawTargets(targets, seed)` är en ren dragning med en
+  seedad slumpgenerator (xmur3 + mulberry32, exakt 32-bitsaritmetik) och är
+  *samma* värden för samma seed; frekvens och Q dras log-likformigt (lika
+  chans per oktav). Servern gör samma dragning (`lti/lib/Targets.php`, hålls i
+  takt av `lti/tests/target-vectors.json` från `scripts/make-target-vectors.mjs`)
+  med seed = sha256(plattform, elev, resource link, projekt, vy) — samma elev
+  får samma mål varje gång — och *den* avgör: `done.php` har ett `targets`-anrop
+  som ger sidan elevens värden (utan intervallen), och vid Done skriver servern
+  över A-värdena sidan rapporterade med sina egna. Viewern (`viewer.js`)
+  skriver värdena i projektet innan eleven får börja (`apply-targets.js`). Utan
+  LTI (en sida som öppnas på egen hand) dras de lokalt, ur vyns egen lista
+  `targets` i stage.json (publik, följer med zippen — oberoende av "Keep the
+  assessments"), med ett seed som ligger kvar i webbläsaren. `syncAbTask`
+  skriver listan både i vyn (publik kopia) och i assessmentet (serverns).
+  Ett mål hålls
+  *borta från B:s startvärde* (`start`, `separation` = avståndet där
+  bedömningen inte ger några poäng): ligger dragningen för nära dras den om
+  (högst 20 gånger, därefter används den längsta). Självtestet provar 100
+  dragningar och varnar om B klarar sig orört i mer än 5 %, vilket händer när
+  intervallet inte ens rymmer ett tillräckligt avstånd.
+- **Precision per värde:** hur exakt eleven ska hitta ett värde väljer läraren
+  (Forgiving / Medium / Strict / Precise, `meta.precision`, annars uppgiftens
+  "Marking"); guiden visar vad nivån betyder i vanliga enheter (frekvens i cent,
+  Q i procent, gain i dB). Det styr både kriteriets toleranser och hur långt
+  från B:s start ett slumpmål hålls. Precise (±5 cent) är för att stämma tonhöjd
+  mot en annan oscillator.
+- **Snap i guiden:** på A-fliken, när musen släpps (`snapToStart`), sätts ett
+  värde som hamnat nära sitt startvärde (frekvens 4 %, gain 0,5 dB, Q 0,15, pan
+  0,05) exakt på startvärdet och tas ur uppgiften, som vid ett dubbelklick.
+  Gäller bara guiden — i övrigt har användaren full kontroll.
 - **Stage-körning:** Commands kan ha `toggleGroup` (A/B lyser tills Stop),
   `starts` (att välja A/B startar ljudet om det inte spelas) och `clears`
   (Stop); element/strip-objekt kan ha `inactiveWhen` (tonas ned och stängs av

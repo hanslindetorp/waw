@@ -1,5 +1,6 @@
 import { formatGainAttribute } from "../waxml-integration/gain-units.js";
 import { evaluate, requiredReads, readKey } from "../assessment/evaluate.js";
+import { drawTargets } from "../assessment/targets.js";
 
 // Recipe: "A/B matching". The student hears a reference (A) and their own
 // version (B) of the same sound and adjusts B until it matches A. A balance
@@ -60,11 +61,30 @@ export const ATTRIBUTES = {
 
 // Where a miss starts to cost points (`full`: still full marks) and where it
 // gives none (`zero`), per attribute, in the units of its scale.
+// "precise" is for a value the student can hear to a few cents — two oscillators
+// tuned against each other, say, where 1 Hz around 400 Hz (4 cents) is audible —
+// while "forgiving" suits a filter cutoff that is judged by ear to a fifth of an octave.
 export const STRICTNESS = {
-	strict: { frequency: [0.05, 0.5], Q: [0.1, 1], gain: [0.5, 3], pan: [0.05, 0.4] },
+	forgiving: { frequency: [0.2, 1.5], Q: [0.4, 2], gain: [2, 9], pan: [0.2, 1] },
 	medium: { frequency: [0.1, 1], Q: [0.2, 1.5], gain: [1, 6], pan: [0.1, 0.6] },
-	forgiving: { frequency: [0.2, 1.5], Q: [0.4, 2], gain: [2, 9], pan: [0.2, 1] }
+	strict: { frequency: [0.05, 0.5], Q: [0.1, 1], gain: [0.5, 3], pan: [0.05, 0.4] },
+	precise: { frequency: [0.005, 0.05], Q: [0.03, 0.3], gain: [0.1, 1], pan: [0.01, 0.1] }
 };
+export const PRECISION_LEVELS = Object.keys(STRICTNESS);
+export const PRECISION_LABELS = { forgiving: "Forgiving", medium: "Medium", strict: "Strict", precise: "Precise" };
+
+// The precision of one value: its own if the author set one, else the task's.
+export const precisionOf = (meta, key) => (STRICTNESS[meta.precision?.[key]] ? meta.precision[key] : STRICTNESS[meta.strictness] ? meta.strictness : "medium");
+
+// What a precision level means for an attribute, in units a teacher knows:
+// { full, zero, unit } — full marks within ±full, no points beyond ±zero. A
+// frequency is in cents (1/100 of a semitone), a Q in per cent.
+export function toleranceText(attr, level) {
+	const [full, zero] = (STRICTNESS[level] || STRICTNESS.medium)[attr];
+	const convert = { frequency: (x) => Math.round(x * 1200), Q: (x) => Math.round((Math.pow(2, x) - 1) * 100) }[attr] || ((x) => Math.round(x * 1000) / 1000);
+	const unit = { frequency: "cents", Q: "%", gain: "dB", pan: "" }[attr] || "";
+	return { full: convert(full), zero: convert(zero), unit };
+}
 
 export const DEFAULT_INSTRUCTION = "Listen to A, then to B. Adjust B until it sounds like A. Press Done when you think they match.";
 
@@ -153,6 +173,7 @@ export function buildAbGraph(spec) {
 		slots,
 		editable: [],
 		ranges: {},
+		precision: {},
 		strictness: STRICTNESS[spec.strictness] ? spec.strictness : "medium"
 	};
 	return { commands, sourceNodes: source.nodes, mixer, meta };
@@ -201,13 +222,12 @@ export function editableList(meta) {
 
 // One criterion per attribute the student may change: B's value against A's.
 export function criteriaFor(meta) {
-	const strictness = STRICTNESS[meta.strictness] || STRICTNESS.medium;
 	const criteria = [];
 	meta.editable.forEach((key) => {
 		const [slot, attr] = key.split(".");
 		const kind = ATTRIBUTES[attr];
 		if (!SLOTS[slot] || !kind || !(attr in SLOTS[slot].start)) return;
-		const [full, zero] = strictness[attr];
+		const [full, zero] = STRICTNESS[precisionOf(meta, key)][attr];
 		const asDb = attr === "gain";
 		criteria.push({
 			id: `${slot}-${attr}`,
@@ -224,6 +244,38 @@ export function criteriaFor(meta) {
 	return criteria;
 }
 
+// How many decimals a drawn value of an attribute has (what the controls write).
+const DRAW_DECIMALS = { frequency: 0, gain: 1, Q: 1, pan: 1 };
+
+// The targets that are drawn per student (see assessment/targets.js): strip A's
+// values that have a random range. Only values the student has to find count.
+// `startValues` ({ "<slot>.<attr>": number }, what B starts at) lets a target be
+// kept so far from B's start that B scores nothing on it: at least the distance
+// where the marking gives no points.
+export function targetsFor(meta, startValues = {}) {
+	const targets = [];
+	meta.editable.forEach((key) => {
+		const range = meta.ranges?.[key];
+		const [slot, attr] = key.split(".");
+		if (!range || !SLOTS[slot] || !(attr in SLOTS[slot].start) || !(range.max > range.min)) return;
+		const ref = elementId(meta.prefix, "a", slot);
+		const asDb = attr === "gain";
+		const scale = ATTRIBUTES[attr].scale === "log2" && range.min > 0 ? "log2" : "linear";
+		targets.push({
+			key: readKey({ ref, attr, as: asDb ? "db" : "number" }),
+			ref,
+			attr,
+			write: slot === "volume" && attr === "gain" ? "dB" : "number",
+			min: range.min,
+			max: range.max,
+			scale,
+			decimals: DRAW_DECIMALS[attr] ?? 2,
+			...(Number.isFinite(startValues[key]) ? { start: startValues[key], separation: STRICTNESS[precisionOf(meta, key)][attr][1] } : {})
+		});
+	});
+	return targets;
+}
+
 export const DEFAULT_BANDS = [
 	{ min: 0.9, text: "Excellent - B matches A." },
 	{ min: 0.6, text: "Getting there." },
@@ -233,13 +285,14 @@ export const DEFAULT_BANDS = [
 // The assessment of a task, with the recipe's own data (`task`) kept in it: it is
 // the author's, so it stays out of what is published (assessments are kept apart
 // from the project, see project-manager.js's exportForPublishing).
-export function buildAssessment(meta, previous = null) {
+export function buildAssessment(meta, previous = null, startValues = {}) {
 	return {
 		max: previous?.max ?? 10,
 		pass: previous?.pass ?? 0.6,
 		reveal: previous?.reveal ?? "direction",
 		bands: previous?.bands ?? DEFAULT_BANDS.map((b) => ({ ...b })),
 		criteria: criteriaFor(meta),
+		targets: targetsFor(meta, startValues),
 		task: meta
 	};
 }
@@ -271,5 +324,18 @@ export function selfTestAbMatching(assessment, read) {
 	if (wanted.some((r) => !Number.isFinite(start[readKey(r)]))) problems.push("A value could not be read from the document.");
 	if (facitResult.score < facitResult.max - 1e-9) problems.push("B set exactly to A does not give full marks.");
 	if (startResult.passed) problems.push("B as it starts already passes — A is too close to B's starting values.");
-	return { ok: !problems.length, facit: facitResult, start: startResult, problems };
+	// With random targets: how often would B as it starts already pass?
+	let passRate = null;
+	if (assessment.targets?.length) {
+		let passed = 0;
+		const draws = 100;
+		for (let i = 0; i < draws; i++) {
+			const values = { ...start };
+			drawTargets(assessment.targets, `check${i}`).forEach((t) => (values[t.key] = t.value));
+			if (evaluate(assessment, values).passed) passed++;
+		}
+		passRate = passed / draws;
+		if (passRate > 0.05) problems.push(`${Math.round(passRate * 100)} % of the possible random targets are so close to B's starting values that B passes without being touched.`);
+	}
+	return { ok: !problems.length, facit: facitResult, start: startResult, passRate, problems };
 }

@@ -4,8 +4,10 @@ import { xmlStore } from "./xml-editor/xml-store.js";
 import { parseXsdSchema } from "./xml-editor/schema-parser.js";
 import { openProjectFromFile } from "./project/project-manager.js";
 import { assessmentStore } from "./project/assessment-store.js";
+import { stageStore } from "./project/stage-store.js";
 import { runAssessment } from "./assessment/run.js";
 import { collectValues } from "./assessment/collect.js";
+import { applyTargets, drawAndApply, practiceSeed } from "./assessment/apply-targets.js";
 import { showAssessmentResult } from "./components/wa-assessment-result.js";
 
 // The viewer page (viewer.html): opens one published project (a zip) and
@@ -131,8 +133,15 @@ async function main() {
 		if (!res.ok) throw new Error(`the project file (${project}) was not found or could not be read: the server answered ${res.status}`);
 		const file = new File([await res.blob()], project.split("/").pop(), { type: "application/zip" });
 		await openProjectFromFile(file);
+		const lti = ltiLaunch(params);
+		// A task with random targets is set up for this student before they start: by
+		// the server when it is graded (it draws the targets itself and judges against
+		// them), or — a page opened on its own, which has the targets in its view —
+		// here, with a seed that stays the same in this browser.
+		if (lti) applyTargets((await postToTool(lti, { token: lti.token, action: "targets" })).targets);
+		else drawAndApply(stageStore.getView(view), practiceSeed(project, view));
 		stageEl.style.display = "";
-		setUpDone(view, ltiLaunch(params));
+		setUpDone(view, lti);
 	} catch (err) {
 		console.error("Viewer: could not open the project:", err);
 		// The reason is shown (it holds no secrets: a file name and a status) so a

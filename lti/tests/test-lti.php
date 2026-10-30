@@ -196,6 +196,19 @@ check('lti done: a refused score is reported with the platform\'s own message',
     $out['result']['score'] == 10.0 && $out['ags']['sent'] === false && str_contains($out['ags']['status'], '403') && str_contains($out['ags']['status'], 'may not post to this line item') && mb_strlen($out['ags']['status']) <= 180);
 $scoreResponse = ['status' => 200, 'body' => '{}'];
 
+// Random targets: the server draws this student's A, and the page cannot choose it.
+$withTargets = $assessment + ['targets' => [['key' => 'A.frequency.number', 'ref' => 'A', 'attr' => 'frequency', 'write' => 'number', 'min' => 200, 'max' => 4000, 'scale' => 'log2', 'decimals' => 0]]];
+$pdo->prepare('UPDATE waw_lti_assessments SET body = ? WHERE project = ? AND view_id = ?')->execute([json_encode($withTargets), 'filter-task', 'vabc123']);
+$drawn = $lti->targets($token);
+check('lti targets: one value, within the range, without the range', count($drawn) === 1 && $drawn[0]['ref'] === 'A' && $drawn[0]['value'] >= 200 && $drawn[0]['value'] <= 4000 && !array_key_exists('min', $drawn[0]));
+check('lti targets: the same student gets the same target again', $lti->targets($token) === $drawn);
+$mine = $drawn[0]['value'];
+$out = $lti->submit($token, ['B.frequency.number' => $mine, 'A.frequency.number' => 400]); // the page claims A = 400
+check('lti done: the server\'s target counts, not the one the page reports', $out['result']['score'] == 10.0);
+$sub = $pdo->query('SELECT * FROM waw_lti_submissions ORDER BY id DESC LIMIT 1')->fetch();
+check('lti done: the stored values hold the server\'s target', (json_decode($sub['values_json'], true)['A.frequency.number'] ?? null) == $mine);
+$pdo->prepare('UPDATE waw_lti_assessments SET body = ? WHERE project = ? AND view_id = ?')->execute([json_encode($assessment), 'filter-task', 'vabc123']);
+
 // A launch without a gradebook entry still scores, and says nothing was sent.
 [, $q5] = begin($lti);
 $noAgs = $lti->completeLaunch($sign(array_diff_key(launchClaims($q5['nonce']), ['https://purl.imsglobal.org/spec/lti-ags/claim/endpoint' => 1])), $q5['state']);

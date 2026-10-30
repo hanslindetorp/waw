@@ -71,8 +71,9 @@ export function syncAbTask(viewId) {
 	const previous = assessmentStore.get(viewId);
 	const meta = previous?.task;
 	if (!meta) return null;
-	const assessment = buildAssessment(meta, previous);
+	const assessment = buildAssessment(meta, previous, readStrip(meta, "b"));
 	assessmentStore.set(viewId, assessment);
+	stageStore.setViewTargets(viewId, assessment.targets);
 	const bySlot = new Map(meta.slots.map((slot) => [elementId(meta.prefix, "b", slot), slot]));
 	stageStore.editViewItems(viewId, (items) =>
 		items.map((item) => {
@@ -156,6 +157,41 @@ export function resetAttribute(viewId, slot, attr) {
 	return updateTaskMeta(viewId, { editable: meta.editable.filter((k) => k !== key), ranges });
 }
 
+// How near its start a value of strip A counts as "meant to be at the start" while a
+// task is being set up (a drag that comes back close to where it started): the
+// attribute is then put exactly at its start and taken out of the task, as a
+// double-click would. Only the task creator does this; elsewhere the user has
+// full control.
+const SNAP_TOLERANCE = { frequency: 0.04, gain: 0.5, Q: 0.15, pan: 0.05 }; // frequency: relative
+
+export function snapToStart(viewId) {
+	const meta = taskOfView(viewId);
+	if (!meta) return false;
+	const now = readStrip(meta, "a");
+	let snapped = false;
+	Object.keys(now).forEach((key) => {
+		const [slot, attr] = key.split(".");
+		const start = SLOTS[slot].start[attr];
+		const tolerance = attr === "frequency" ? SNAP_TOLERANCE.frequency * start : SNAP_TOLERANCE[attr];
+		if (!Number.isFinite(now[key]) || Math.abs(now[key] - start) > tolerance) return;
+		if (now[key] !== start || meta.editable.includes(key)) {
+			resetAttribute(viewId, slot, attr);
+			snapped = true;
+		}
+	});
+	return snapped;
+}
+
+// How precisely a value has to be found (a level of STRICTNESS), or null for the task's own.
+export function setPrecision(viewId, key, level) {
+	const meta = taskOfView(viewId);
+	if (!meta) return null;
+	const precision = { ...(meta.precision || {}) };
+	if (level) precision[key] = level;
+	else delete precision[key];
+	return updateTaskMeta(viewId, { precision });
+}
+
 // Takes the random range of a value away.
 export function clearRange(viewId, key) {
 	const meta = taskOfView(viewId);
@@ -182,5 +218,7 @@ export function deleteAbTask(viewId) {
 	stageStore.removeView(viewId);
 	return true;
 }
+
+
 
 export { SLOTS };

@@ -41,6 +41,10 @@ try {
     if (($data['action'] ?? '') === 'reads') {
         waw_json(200, ['reads' => waw_lti()->reads($data['token'])]);
     }
+    // Where the task draws random targets, the page asks for this student's.
+    if (($data['action'] ?? '') === 'targets') {
+        waw_json(200, ['targets' => waw_lti()->targets($data['token'])]);
+    }
     if (!is_array($data['values'] ?? null)) {
         waw_json(400, ['error' => 'The request is incomplete.']);
     }

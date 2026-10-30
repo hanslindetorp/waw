@@ -366,11 +366,30 @@ class StageStore extends EventTarget {
 		const source = this._views.find((v) => v.id === id);
 		if (!source) return null;
 		const items = source.items.map((i) => ({ ...i, id: `i${this._nextItemId++}` }));
-		const view = { id: newViewId(), name: `${source.name} copy`, items, ...(source.portrait ? { portrait: true } : {}) };
+		const view = { id: newViewId(), name: `${source.name} copy`, items, ...(source.portrait ? { portrait: true } : {}), ...(source.targets ? { targets: source.targets } : {}) };
 		this._commit([...this._views, view]);
 		this._currentId = view.id;
 		this.dispatchEvent(new CustomEvent("change"));
 		return view;
+	}
+
+	// The random targets of a view — values the page draws per student before they
+	// start (see assessment/targets.js). Public with the view, so a published page
+	// draws them outside a learning platform too; the grading server has its own
+	// copy (in the assessment) and is the one that counts there.
+	setViewTargets(viewId, targets) {
+		this._materialize();
+		const view = this._views.find((v) => v.id === viewId);
+		if (!view) return;
+		const next = targets && targets.length ? targets : null;
+		if (JSON.stringify(view.targets ?? null) === JSON.stringify(next)) return;
+		this._commit(
+			this._views.map((v) => {
+				if (v.id !== viewId) return v;
+				const { targets: _old, ...rest } = v;
+				return next ? { ...rest, targets: next } : rest;
+			})
+		);
 	}
 
 	renameView(id, name) {
@@ -474,6 +493,7 @@ function parseStageFile(data) {
 				id: v.id,
 				name: typeof v.name === "string" && v.name ? v.name : DEFAULT_VIEW_NAME,
 				...(v.portrait === true ? { portrait: true } : {}),
+				...(Array.isArray(v.targets) && v.targets.length ? { targets: v.targets.filter(isValidTarget) } : {}),
 				items: v.items.filter(isValidItem).map(cleanItem)
 			}));
 		return views.length ? views : null;
@@ -509,6 +529,11 @@ function estimatedHeight(item) {
 		h = Math.max(h, lines * (item.type === "heading" ? 36 : 24) + 8);
 	}
 	return h;
+}
+
+// A random target of a view (see assessment/targets.js).
+function isValidTarget(t) {
+	return t && typeof t === "object" && typeof t.ref === "string" && typeof t.attr === "string" && Number.isFinite(t.min) && Number.isFinite(t.max);
 }
 
 function isValidItem(i) {

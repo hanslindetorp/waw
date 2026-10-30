@@ -24,7 +24,7 @@ Vad som ligger var:
 | `jwks.php` | Verktygets publika nyckel (Canvas använder den för att kontrollera poängen) |
 | `done.php` | Viewerns Done: räknar om poängen, sparar, skickar till betygsboken |
 | `admin.php` | Kontrollsida: adresser, Canvas-inställningar, registrera Canvas, ladda upp facit, se resultat |
-| `lib/` | Koden (`Lti`, `Jwt`, `Evaluate` …). Skyddad av `.htaccess`. |
+| `lib/` | Koden (`Lti`, `Jwt`, `Evaluate`, `Targets` …). Skyddad av `.htaccess`. |
 | `tests/` | Tester. Behövs **inte** på servern. |
 | `config.sample.php` | Mall för `config.php` |
 

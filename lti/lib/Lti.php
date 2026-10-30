@@ -303,6 +303,30 @@ final class Lti
     }
 
     /**
+     * The values this student's task is set to, where the task draws random
+     * targets (its assessment lists `targets`): the same ones every time this
+     * student opens this assignment. The page writes them into the project before
+     * it lets the student start; the ranges they were drawn from stay here.
+     * @return array[] [{ ref, attr, write, value }]
+     */
+    public function targets(string $token): array
+    {
+        [$launch, $assessment] = $this->launchAndAssessment($token);
+        $out = [];
+        foreach (self::drawnTargets($launch, $assessment) as $t) {
+            $out[] = ['ref' => $t['ref'], 'attr' => $t['attr'], 'write' => $t['write'] ?? 'number', 'value' => $t['value']];
+        }
+        return $out;
+    }
+
+    /** @return array[] the assessment's targets with this student's drawn values */
+    private static function drawnTargets(array $launch, array $assessment): array
+    {
+        $targets = array_values(array_filter(is_array($assessment['targets'] ?? null) ? $assessment['targets'] : [], static fn ($t) => is_array($t) && isset($t['key'], $t['ref'], $t['attr'], $t['min'], $t['max'])));
+        return $targets ? Targets::draw($targets, Targets::seedFor($launch)) : [];
+    }
+
+    /**
      * The viewer's Done: evaluates the values it measured against the view's
      * assessment, stores the outcome and sends the score on to the gradebook.
      * @return array{result: array, ags: array}
@@ -315,6 +339,12 @@ final class Lti
         foreach (array_keys(Evaluate::requiredReads($assessment)) as $key) {
             $v = $values[$key] ?? null;
             $clean[$key] = (is_int($v) || is_float($v)) && is_finite((float) $v) ? $v : null;
+        }
+        // What the targets are is the server's to say, whatever the page measured.
+        foreach (self::drawnTargets($launch, $assessment) as $t) {
+            if (array_key_exists($t['key'], $clean)) {
+                $clean[$t['key']] = $t['value'];
+            }
         }
         $result = Evaluate::evaluate($assessment, $clean);
         $result['hasPass'] = is_int($assessment['pass'] ?? null) || is_float($assessment['pass'] ?? null); // for the page: does a pass level exist?

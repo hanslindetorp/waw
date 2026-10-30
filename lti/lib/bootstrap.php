@@ -7,7 +7,7 @@
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
-foreach (['Evaluate', 'Jwt', 'Http', 'Db', 'Lti'] as $file) {
+foreach (['Evaluate', 'Targets', 'Jwt', 'Http', 'Db', 'Lti'] as $file) {
     require_once __DIR__ . '/' . $file . '.php';
 }
 

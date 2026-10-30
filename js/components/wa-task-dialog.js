@@ -5,8 +5,10 @@ import { playerStore } from "../waxml-integration/player-store.js";
 import { isPreviewableAudioFile } from "./wa-file-preview.js";
 import "./wa-chain-view.js";
 import "./wa-mixer-view.js";
-import { SLOTS, ATTRIBUTES, OSCILLATOR_WAVES, DEFAULT_INSTRUCTION, slotAttributes, editableKey, elementId, chainId } from "../tasks/ab-matching.js";
-import { createAbTask, taskOfView, syncAbTask, setEditable, updateTaskMeta, readStrip, markChanged, deleteAbTask, readDocumentValue, resetAttribute, clearRange } from "../tasks/ab-task.js";
+import { SLOTS, ATTRIBUTES, OSCILLATOR_WAVES, DEFAULT_INSTRUCTION, PRECISION_LEVELS, PRECISION_LABELS, precisionOf, toleranceText, slotAttributes, editableKey, elementId, chainId } from "../tasks/ab-matching.js";
+import { assessmentStore } from "../project/assessment-store.js";
+import { drawAndApply } from "../assessment/apply-targets.js";
+import { createAbTask, taskOfView, syncAbTask, setEditable, updateTaskMeta, readStrip, markChanged, deleteAbTask, readDocumentValue, resetAttribute, clearRange, snapToStart, setPrecision } from "../tasks/ab-task.js";
 
 // File > Create task...: sets up an "A/B matching" task (js/tasks/ab-matching.js)
 // the way an author sets up anything in the workstation — by turning the real
@@ -114,6 +116,8 @@ template.innerHTML = `
 		.attr-row { display: grid; grid-template-columns: 1.1rem 1fr auto; gap: 0.1rem 0.45rem; align-items: center; padding: 0.15rem 0; }
 		.attr-row .range { grid-column: 2 / 4; color: var(--waw-teal, #45b58c); font-size: 0.76rem; }
 		.attr-value { color: var(--waw-muted, #8a8a8a); font-size: 0.78rem; margin-left: 0.4rem; }
+		.attr-row .precision { grid-column: 2 / 4; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.74rem; color: var(--waw-muted, #8a8a8a); }
+		.attr-row .precision select { font-size: 0.74rem; padding: 0.05rem 0.25rem; }
 		.rnd { font: inherit; font-size: 0.7rem; padding: 0.05rem 0.4rem; border-radius: 4px; border: 1px solid var(--waw-border, #2f2f2f); background: #232323; color: inherit; cursor: pointer; }
 		.rnd.armed { border-color: #e0b040; color: #e0b040; animation: rnd-blink 0.7s ease-in-out infinite; }
 		.rnd.has { color: var(--waw-teal, #45b58c); border-color: var(--waw-teal, #45b58c); }
@@ -187,11 +191,13 @@ template.innerHTML = `
 						<div class="attrs"></div>
 					</div>
 					<div class="setup-bar" style="margin-top:0.8rem">
-						<label>Marking <select class="strictness">
-							<option value="strict">Strict</option>
-							<option value="medium">Medium</option>
+						<label title="How exactly a value has to be found, unless you set it for a value of its own (on A)">Marking <select class="strictness">
 							<option value="forgiving">Forgiving</option>
+							<option value="medium">Medium</option>
+							<option value="strict">Strict</option>
+							<option value="precise">Precise</option>
 						</select></label>
+						<button class="action try-random" type="button" hidden title="Sets A to a random target drawn from the ranges, to hear what a student gets (undo brings yours back)">Try a random target</button>
 					</div>
 					<div class="report"></div>
 				</div>
@@ -222,6 +228,7 @@ export class WaTaskDialog extends HTMLElement {
 		this._report = $(".report");
 		this._strictness = $(".strictness");
 		this._tabHint = $(".tab-hint");
+		this._tryRandom = $(".try-random");
 		this._back = $(".back");
 		this._next = $(".next");
 		this._delete = $(".delete");
@@ -236,7 +243,11 @@ export class WaTaskDialog extends HTMLElement {
 		this._before = {};
 		this._scheduled = false;
 		this._onXmlChange = () => this._onDocumentChange();
-		this._onPointerUp = () => this._finishRandom();
+		this._onPointerUp = () => {
+			this._finishRandom();
+			// A value dragged back to near where it started is meant to be at the start.
+			if (this._tab === "a") setTimeout(() => this._snapToStart(), 80);
+		};
 		this._onKeyDown = (e) => {
 			if (e.key === "Escape" && !this.hidden) this.close();
 		};
@@ -258,6 +269,11 @@ export class WaTaskDialog extends HTMLElement {
 		);
 		this.shadowRoot.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => this._switchTab(t.dataset.tab)));
 		this.shadowRoot.querySelectorAll("[data-listen]").forEach((b) => b.addEventListener("click", () => this._listen(b.dataset.listen)));
+		this._tryRandom.addEventListener("click", () => {
+			const bytes = new Uint8Array(6);
+			crypto.getRandomValues(bytes);
+			drawAndApply(assessmentStore.get(this._viewId), [...bytes].map((b) => b.toString(16).padStart(2, "0")).join(""));
+		});
 		this._strictness.addEventListener("change", () => {
 			if (this._viewId) this._report_(updateTaskMeta(this._viewId, { strictness: this._strictness.value }));
 		});
@@ -618,6 +634,7 @@ export class WaTaskDialog extends HTMLElement {
 						this._arm(slot, attr, key);
 					});
 					row.appendChild(rnd);
+					if (editable) row.appendChild(this._precisionRow(meta, key, attr));
 					if (range) {
 						const r = document.createElement("span");
 						r.className = "range";
@@ -631,6 +648,33 @@ export class WaTaskDialog extends HTMLElement {
 			});
 			this._attrs.appendChild(group);
 		});
+	}
+
+	// How precisely this value has to be found: the task's marking, or its own — with
+	// what that means in units a teacher knows.
+	_precisionRow(meta, key, attr) {
+		const row = document.createElement("span");
+		row.className = "precision";
+		const select = document.createElement("select");
+		const own = meta.precision?.[key] || "";
+		const inherit = document.createElement("option");
+		inherit.value = "";
+		inherit.textContent = `${PRECISION_LABELS[meta.strictness] || "Medium"} (task)`;
+		select.appendChild(inherit);
+		PRECISION_LEVELS.forEach((level) => {
+			const opt = document.createElement("option");
+			opt.value = level;
+			opt.textContent = PRECISION_LABELS[level];
+			select.appendChild(opt);
+		});
+		select.value = own;
+		select.title = "How exactly the student has to find this value";
+		select.addEventListener("change", () => this._report_(setPrecision(this._viewId, key, select.value || null), true));
+		const t = toleranceText(attr, precisionOf(meta, key));
+		const hint = document.createElement("span");
+		hint.textContent = `full marks within ±${t.full}${t.unit ? " " + t.unit : ""}, none beyond ±${t.zero}${t.unit ? " " + t.unit : ""}`;
+		row.append(select, hint);
+		return row;
 	}
 
 	// ── rnd: the range a target is drawn from ──
@@ -667,6 +711,7 @@ export class WaTaskDialog extends HTMLElement {
 		if (!a || !a.started) return;
 		const meta = taskOfView(this._viewId);
 		this._armed = null;
+		this._noSnapUntil = Date.now() + 400; // a range that was just swept must not be snapped away
 		if (!meta) return;
 		this._report_(updateTaskMeta(this._viewId, { ranges: { ...(meta.ranges || {}), [a.key]: { min: a.min, max: a.max } } }));
 		this._renderAttrs();
@@ -686,6 +731,15 @@ export class WaTaskDialog extends HTMLElement {
 		}, 30);
 	}
 
+	_snapToStart() {
+		if (this.hidden || this._step !== "setup" || this._tab !== "a" || this._armed || Date.now() < (this._noSnapUntil || 0)) return;
+		if (snapToStart(this._viewId)) {
+			this._before = readStrip(taskOfView(this._viewId), "a");
+			this._renderAttrs();
+			this._runSelfTest();
+		}
+	}
+
 	_runSelfTest() {
 		this._report_(syncAbTask(this._viewId));
 	}
@@ -698,6 +752,11 @@ export class WaTaskDialog extends HTMLElement {
 			lines.push(`<div class="ok">✓ B set exactly to A gives full marks (${test.facit.score} of ${test.facit.max}).</div>`);
 			lines.push(`<div class="ok">✓ B as it starts does not pass (${test.start.score} of ${test.start.max}).</div>`);
 		}
+		if (test.passRate !== null && test.passRate !== undefined && test.passRate <= 0.05) {
+			lines.push(`<div class="ok">✓ Random targets: B passes untouched in ${Math.round(test.passRate * 100)} % of 100 draws.</div>`);
+		}
+		const hasTargets = !!assessmentStore.get(this._viewId)?.targets?.length;
+		this._tryRandom.hidden = !hasTargets;
 		this._report.innerHTML = lines.join("");
 		if (rerender) this._renderAttrs();
 	}
