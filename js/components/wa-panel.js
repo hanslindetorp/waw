@@ -4,10 +4,16 @@
 //
 // Collapsing a panel shrinks it to a minimal icon rail (icon-title-...icon="🎚️"
 // + the collapse button, no body) rather than just hiding its content at
-// full width, and hands the freed horizontal space to its nearest expanded
-// *left* neighbor — not just to whichever panel happens to be marked "fill"
-// — so collapsing e.g. Preview visibly widens XML Editor right next to it,
-// not XML Code three panels away.
+// full width.
+//
+// The row's layout rule (per Hans, 2026-10-28): the LAST OPEN panel (counted
+// from the left) always stretches to fill all the space up to the collapsed
+// rails after it, so there is never an empty area and the rails stay glued to
+// the right edge; every other open panel has a fixed width. A panel's right
+// edge (its resize handle) can only be dragged while some open panel lies to
+// its right — that stretching panel is what takes up the change — so the last
+// open panel has no handle. All of this is applied in WaPanel.layoutRow(),
+// run whenever a panel opens/closes, on load and on a window resize.
 
 const COLLAPSED_FLEX = "0 0 2.8rem";
 // Every panel keeps flex-shrink:0 while expanded (see _applyFlex/_baseFlex)
@@ -145,7 +151,7 @@ export class WaPanel extends HTMLElement {
 		this._resizeHandle = this.shadowRoot.querySelector(".resize-handle");
 		this._panelBody = this.shadowRoot.querySelector(".panel-body");
 		this._collapsed = false;
-		this._absorbing = false;
+		this._isStretch = false; // the last open panel of the row, see layoutRow
 		this._onResizeMove = this._onResizeMove.bind(this);
 		this._onResizeEnd = this._onResizeEnd.bind(this);
 	}
@@ -153,18 +159,10 @@ export class WaPanel extends HTMLElement {
 	connectedCallback() {
 		this._titleEl.textContent = this.getAttribute("panel-title") || "";
 		this._iconEl.textContent = this.getAttribute("icon") || "";
-		// Every panel defaults to a fixed width (resizable via the handle
-		// below), which on a wide window leaves empty space past the last one.
-		// The one panel marked "fill" (normally the trailing one) grows to
-		// soak up whatever's left instead of leaving a gap. _isFill is read
-		// by _applyFairShareOnOpen below, which must never overwrite this
-		// panel's _baseFlex with a fixed pixel value — doing so would
-		// permanently detach it from the container's trailing edge (per
-		// Hans, 2026-09-10: Code's own right edge should always stay glued
-		// to the window's right edge, including after a neighbor's divider
-		// gets dragged, not just at collapse/reopen time).
-		this._isFill = this.hasAttribute("fill");
-		this._baseFlex = this._isFill ? "1 1 auto" : `0 0 ${this.getAttribute("width") || "300px"}`;
+		// Every panel has a width of its own (resizable via the handle below,
+		// used while it isn't the last open one); the last open panel
+		// stretches instead — see layoutRow.
+		this._baseFlex = `0 0 ${this.getAttribute("width") || "300px"}`;
 		this._applyFlex();
 		this._collapseBtn.addEventListener("click", () => this.toggleCollapse());
 		this._resizeHandle.addEventListener("pointerdown", (e) => this._onResizeStart(e));
@@ -173,6 +171,7 @@ export class WaPanel extends HTMLElement {
 		// (if any) still wins once it applies, same as any other later
 		// toggleCollapse() call.
 		if (this.hasAttribute("collapsed")) this.toggleCollapse(true);
+		WaPanel._scheduleLayout(this.parentElement);
 	}
 
 	attributeChangedCallback(name, oldVal, newVal) {
@@ -201,112 +200,126 @@ export class WaPanel extends HTMLElement {
 	// applying workstation-state.json on load, so it deliberately does NOT
 	// dispatch "width-change" (that's reserved for an actual user drag, see
 	// _onResizeEnd) to avoid an immediate redundant save right after load.
-	// Ignored for the fill panel — a workstation-state.json exported before
-	// 2026-09-10 could still have a fixed pixel basis saved for it from the
-	// since-fixed _applyFairShareOnOpen bug; honoring that here would
-	// silently resurrect the "Code detaches from the window's right edge"
-	// bug on a project re-opened from such a file.
 	setWidthBasis(basis) {
-		if (this._isFill) return;
 		this._baseFlex = basis;
 		this._applyFlex();
+		WaPanel._scheduleLayout(this.parentElement);
 	}
 
 	toggleCollapse(force) {
 		const next = typeof force === "boolean" ? force : !this._collapsed;
 		if (next === this._collapsed) return;
+		// What the other open panels measure right now, before this one opens
+		// and takes room (see _applyFairShareOnOpen).
+		const widthsBefore = next ? null : this._openPanelWidths();
 		this._collapsed = next;
 		this.classList.toggle("collapsed", this._collapsed);
 		this._collapseBtn.textContent = this._collapsed ? "+" : "-";
 		this._header.title = this._collapsed ? this.getAttribute("panel-title") || "" : "";
-		this._applyFlex();
+		// A panel that just opened claims a fair share of the total width —
+		// see _applyFairShareOnOpen. Closing needs nothing special: the last
+		// open panel stretches over the freed space (layoutRow).
+		if (!this._collapsed) this._applyFairShareOnOpen(widthsBefore);
+		WaPanel.layoutRow(this.parentElement);
 		// Lets workstation-state.js (or anything else) persist panel layout
 		// without polling every panel's own .collapsed getter.
 		this.dispatchEvent(new CustomEvent("collapse-change", { bubbles: true, detail: { collapsed: this._collapsed } }));
-
-		// Hand this panel's freed (or reclaimed) width to the nearest
-		// expanded panel to its left, skipping past any that are themselves
-		// collapsed — not the default "fill" panel, which might be several
-		// panels further over.
-		const neighbor = this._findAbsorbingNeighbor();
-		if (neighbor) neighbor.setAbsorbing(this._collapsed);
-
-		// A panel that just opened claims a fair share of the total width —
-		// see _applyFairShareOnOpen. Nothing special happens on collapse: its
-		// freed space is already handled above by the absorbing neighbor.
-		if (!this._collapsed) this._applyFairShareOnOpen();
 	}
 
-	// Called by a collapsing/expanding right neighbor (see toggleCollapse) —
-	// not meant to be called directly for any other reason.
-	setAbsorbing(active) {
-		this._absorbing = active;
-		this._applyFlex();
+	_openPanelWidths() {
+		const container = this.parentElement;
+		const widths = new Map();
+		if (!container) return widths;
+		[...container.children].forEach((el) => {
+			if (el instanceof WaPanel && el !== this && !el.collapsed && !el.hidden) widths.set(el, el.getBoundingClientRect().width);
+		});
+		return widths;
 	}
 
-	_findAbsorbingNeighbor() {
-		let el = this.previousElementSibling;
-		while (el instanceof WaPanel && el.classList.contains("collapsed")) {
-			el = el.previousElementSibling;
+	// Gives every panel its flex: the last open one stretches (1 1 0), the
+	// other open ones keep their width, a collapsed one is a rail. Shows a
+	// panel's resize handle only when an open panel lies to its right. Then
+	// makes sure the row isn't wider than its container (see fitRow).
+	static layoutRow(container) {
+		if (!container) return;
+		const panels = [...container.children].filter((el) => el instanceof WaPanel && !el.hidden);
+		const open = panels.filter((p) => !p.collapsed);
+		const last = open[open.length - 1];
+		panels.forEach((p) => {
+			p._isStretch = p === last;
+			p._applyFlex();
+			p._resizeHandle.style.display = !p.collapsed && p !== last ? "" : "none";
+		});
+		WaPanel.fitRow(container);
+	}
+
+	// The fixed-width panels together with the stretching one at its minimum
+	// width and the collapsed rails must fit the container: when they don't
+	// (a smaller window, a wider panel) the fixed panels are narrowed in
+	// proportion to their widths, none below the minimum.
+	static fitRow(container) {
+		const panels = [...container.children].filter((el) => el instanceof WaPanel && !el.hidden);
+		const fixed = panels.filter((p) => !p.collapsed && !p._isStretch);
+		const stretch = panels.find((p) => p._isStretch);
+		if (!fixed.length) return;
+		const railsWidth = panels.filter((p) => p.collapsed).reduce((sum, p) => sum + p.getBoundingClientRect().width, 0);
+		const available = container.getBoundingClientRect().width - railsWidth - (stretch ? MIN_EXPANDED_WIDTH_PX : 0);
+		const widths = fixed.map((p) => p.getBoundingClientRect().width);
+		const total = widths.reduce((a, b) => a + b, 0);
+		if (total <= available || total <= 0) return;
+		fixed.forEach((p, i) => {
+			const width = Math.max(MIN_EXPANDED_WIDTH_PX, widths[i] * (available / total));
+			p._baseFlex = `0 0 ${width}px`;
+			p._applyFlex();
+		});
+	}
+
+	static _scheduleLayout(container) {
+		if (!container || container._wawLayoutPending) return;
+		container._wawLayoutPending = true;
+		queueMicrotask(() => {
+			container._wawLayoutPending = false;
+			WaPanel.layoutRow(container);
+		});
+		if (!container._wawLayoutObserver) {
+			container._wawLayoutObserver = new ResizeObserver(() => WaPanel.fitRow(container));
+			container._wawLayoutObserver.observe(container);
 		}
-		return el instanceof WaPanel ? el : null;
 	}
 
 	_applyFlex() {
 		if (this._collapsed) {
 			this.style.flex = COLLAPSED_FLEX;
-		} else if (this._absorbing) {
-			this.style.flex = "1 1 auto";
+		} else if (this._isStretch) {
+			this.style.flex = "1 1 0";
 		} else {
 			this.style.flex = this._baseFlex;
 		}
 	}
 
-	// Called right after this panel expands (see toggleCollapse). Every
-	// panel keeps flex-shrink:0 (see the MIN_EXPANDED_WIDTH_PX comment up
-	// top), so an opening panel that doesn't already have room just
-	// overflows the row instead of showing — this is what actually makes it
-	// visible: this panel claims 1/n of the container's width (n = now-
-	// visible panel count — 25% of 4, 33% of 3, 50% of 2), and the rest of
-	// the width is redistributed across the other visible panels in
-	// proportion to the relative widths they already had. Per Hans
-	// (2026-09-10). Works precisely because of the flex-shrink:0 above: at
-	// this point `this` has already been restored to its own last _baseFlex
-	// (see _applyFlex, called earlier in toggleCollapse) but nothing else has
-	// shrunk yet, so every other panel's getBoundingClientRect() below still
-	// reflects its true pre-reopen width.
-	//
-	// The fill panel (Code) is excluded from ever getting an explicit pixel
-	// _baseFlex here, in either role — as `this` (skip claiming a fixed
-	// targetWidth) or as one of `others` (skip assigning it a fixed share).
-	// It keeps flex:1 1 auto throughout, so it naturally absorbs whatever
-	// pixel amount the other panels *don't* explicitly claim below — which,
-	// since its own current width still counts toward othersWidth's totals,
-	// works out to the same proportional share anyway, while staying
-	// responsive to a plain browser-window resize too (a fixed px basis
-	// wouldn't be).
-	_applyFairShareOnOpen() {
+	// Called right after this panel expands (see toggleCollapse): this panel
+	// claims 1/n of the container's width (n = now-open panel count — 25% of
+	// 4, 33% of 3, 50% of 2), and the rest of the width is redistributed across
+	// the other open panels in proportion to the widths they had before
+	// (`widthsBefore`). Per Hans (2026-09-10). Whichever panel ends up last
+	// open stretches regardless (layoutRow), so these widths matter for the
+	// others; this panel's own is what it keeps when it isn't the last one.
+	_applyFairShareOnOpen(widthsBefore) {
 		const container = this.parentElement;
-		if (!container) return;
-		const panels = [...container.children].filter((el) => el instanceof WaPanel);
-		const visible = panels.filter((p) => !p.collapsed);
-		const others = visible.filter((p) => p !== this);
-		if (visible.length <= 1) return;
+		if (!container || !widthsBefore) return;
+		const others = [...widthsBefore.keys()];
+		const visibleCount = others.length + 1;
+		if (visibleCount <= 1) return;
 
 		const containerWidth = container.getBoundingClientRect().width;
-		const targetWidth = containerWidth / visible.length;
-		const othersWidth = others.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0);
+		const targetWidth = containerWidth / visibleCount;
+		const othersWidth = [...widthsBefore.values()].reduce((sum, w) => sum + w, 0);
 		const remaining = Math.max(0, containerWidth - targetWidth);
 
-		if (!this._isFill) {
-			this._baseFlex = `0 0 ${targetWidth}px`;
-			this._applyFlex();
-		}
-
+		this._baseFlex = `0 0 ${targetWidth}px`;
 		if (othersWidth <= 0) return;
 		others.forEach((p) => {
-			if (p._isFill) return;
-			const width = Math.max(MIN_EXPANDED_WIDTH_PX, remaining * (p.getBoundingClientRect().width / othersWidth));
+			const width = Math.max(MIN_EXPANDED_WIDTH_PX, remaining * (widthsBefore.get(p) / othersWidth));
 			p._baseFlex = `0 0 ${width}px`;
 			p._applyFlex();
 		});
@@ -316,14 +329,6 @@ export class WaPanel extends HTMLElement {
 		e.preventDefault();
 		this._resizeStartX = e.clientX;
 		this._resizeStartWidth = this.getBoundingClientRect().width;
-		// A panel currently absorbing a collapsed right neighbor's freed
-		// space (see setAbsorbing/_applyFlex) has its flex forced to
-		// "1 1 auto" regardless of _baseFlex — so without this, dragging its
-		// own handle would silently do nothing (_baseFlex changes underneath
-		// but _applyFlex keeps overriding it). A manual drag always wins.
-		// Per Hans (2026-09-26): automatic relative sizing must only ever
-		// happen on open/close, never fight an explicit drag.
-		this._absorbing = false;
 		window.addEventListener("pointermove", this._onResizeMove);
 		window.addEventListener("pointerup", this._onResizeEnd);
 	}
@@ -378,7 +383,7 @@ export class WaPanel extends HTMLElement {
 		const overflow = panels.reduce((sum, p) => sum + p.getBoundingClientRect().width, 0) - containerWidth;
 		if (overflow <= 0) return;
 
-		const shrinkable = panels.filter((p) => p !== this && !p.collapsed && !p._isFill);
+		const shrinkable = panels.filter((p) => p !== this && !p.collapsed && !p._isStretch);
 		if (!shrinkable.length) return;
 		const widths = shrinkable.map((p) => p.getBoundingClientRect().width);
 		const shrinkableTotal = widths.reduce((a, b) => a + b, 0);

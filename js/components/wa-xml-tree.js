@@ -14,6 +14,8 @@ const DEFAULT_COLUMNS = ["label", "class", "src", "output"];
 const MIN_COLUMN_WIDTH_PX = 50;
 const DEFAULT_ELEMENT_PANE_WIDTH_PX = 240;
 const MIN_ELEMENT_PANE_WIDTH_PX = 120;
+const ACTIONS_GAP_PX = 6; // .name-cell's gap between a row's content and its buttons
+const NAME_CELL_RIGHT_PADDING_PX = 12;
 // Changing an element's type by clicking its name here (opens the same
 // rename popover used elsewhere) is turned off per Hans (2026-09-03) — the
 // popover/rename machinery itself (_renderTagLabel's button branch,
@@ -578,6 +580,7 @@ export class WaXmlTree extends HTMLElement {
 			if (contentWrap) rowContents.push({ wrap: contentWrap, indent: indentPx });
 		});
 		this._alignRowActions(rowContents);
+		this._fitElementPaneToContent(rowContents);
 	}
 
 	// Pins every row's actions (+/copy/delete) to the same horizontal
@@ -588,11 +591,28 @@ export class WaXmlTree extends HTMLElement {
 	// `maxRight - indent` pushes its sibling .actions to start at the same
 	// maxRight for every row, since flex lays them out immediately after it.
 	_alignRowActions(rowContents) {
-		if (rowContents.length === 0) return;
+		if (rowContents.length === 0) return 0;
 		const maxRight = Math.max(...rowContents.map((r) => r.indent + r.wrap.getBoundingClientRect().width));
 		rowContents.forEach((r) => {
 			r.wrap.style.width = `${maxRight - r.indent}px`;
 		});
+		return maxRight;
+	}
+
+	// The Element column is at least as wide as its widest row needs: a deeply
+	// nested element's indent plus its name and its three buttons (+, copy,
+	// delete) must never be cut off, so the attribute columns are pushed to
+	// the right instead. Whatever width the user dragged the column to still
+	// counts when it is wider. Per Hans (2026-10-28).
+	_fitElementPaneToContent(rowContents) {
+		let needed = 0;
+		const actionWidths = [...this._container.querySelectorAll(".name-cell .actions")].map((a) => a.getBoundingClientRect().width);
+		if (rowContents.length && actionWidths.length) {
+			const maxRight = Math.max(...rowContents.map((r) => r.indent + r.wrap.getBoundingClientRect().width));
+			needed = Math.ceil(maxRight + Math.max(...actionWidths) + ACTIONS_GAP_PX + NAME_CELL_RIGHT_PADDING_PX);
+		}
+		this._neededPaneWidth = needed;
+		this._container.style.gridTemplateColumns = this._gridTemplateColumns();
 	}
 
 	// A resize handle usable on any header cell (the Element column's own,
@@ -645,7 +665,8 @@ export class WaXmlTree extends HTMLElement {
 				return width ? `${width}px` : "max-content";
 			})
 			.join(" ");
-		return attrCols ? `${this._elementPaneWidth}px ${attrCols}` : `${this._elementPaneWidth}px`;
+		const paneWidth = Math.max(this._elementPaneWidth, this._neededPaneWidth || 0);
+		return attrCols ? `${paneWidth}px ${attrCols}` : `${paneWidth}px`;
 	}
 
 	// Depth-first walk of the visible (non-collapsed) tree into a flat row

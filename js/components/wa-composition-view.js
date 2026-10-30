@@ -60,7 +60,11 @@ const RULER_HEIGHT = 28;
 // scrolla ut objekten ur vyn om man drar ... så långt till vänster."
 const LEFT_PAD_PX = 4000;
 
-const GAP_BARS_DEFAULT = 2;
+// The blank cell before a Section without transitions holds just the "+" button
+// for creating one — a fixed width in pixels (not bars, which at a slow tempo
+// made it take up half the view). Per Hans (2026-10-28).
+const GAP_PX = 44;
+const LEAD_IN_PX = 16; // blank space left of the very first "+" when a Composition opens
 const TRANSITION_LEFT_MARGIN_BARS = 1;
 const DEFAULT_TRANSITION_LENGTH = "2"; // bars, per Hans (2026-09-08)
 
@@ -139,7 +143,7 @@ function sectionLoopedDuration(sectionNode, info, compositionNode) {
 // ruler columns (one per x-range slot, including blank gaps), all in
 // seconds — the component converts to pixels via `_pxPerSecond` at render
 // time. Left-to-right accumulation only.
-function computeLayout(compositionNode) {
+function computeLayout(compositionNode, pxPerSecond) {
 	const { regulars, transitionsByTargetId, orphans } = groupCompositionSections(compositionNode);
 	const cells = [];
 	const columns = [];
@@ -150,7 +154,7 @@ function computeLayout(compositionNode) {
 		const transitions = transitionsByTargetId.get(section.id) || [];
 
 		if (transitions.length === 0) {
-			const gapSeconds = sectionInfo.barDuration * GAP_BARS_DEFAULT;
+			const gapSeconds = GAP_PX / pxPerSecond;
 			cells.push({ kind: "plus", targetId: section.id, startSeconds: cursor, durationSeconds: gapSeconds, row: 0 });
 			columns.push({ kind: "gap", startSeconds: cursor, durationSeconds: gapSeconds });
 			cursor += gapSeconds;
@@ -852,7 +856,7 @@ export class WaCompositionView extends HTMLElement {
 	// --- rendering ---
 
 	_renderComposition(node) {
-		const layout = computeLayout(node);
+		const layout = computeLayout(node, this._pxPerSecond);
 		this._lastLayout = layout;
 
 		const hasContent = layout.regulars.length > 0;
@@ -921,13 +925,13 @@ export class WaCompositionView extends HTMLElement {
 		// paint instead of inline here.
 		if (this._needsInitialScroll) {
 			this._needsInitialScroll = false;
-			// Leaves about one bar of the pad visible rather than scrolling
-			// all the way to its edge — landing exactly on LEFT_PAD_PX put
-			// the very first "+" button (and the start of the timeline)
-			// flush against the left edge of the view with zero lead-in,
-			// which read as an odd, arbitrary offset. Per Hans (2026-09-07).
-			const leadInInfo = readSectionInfo(layout.regulars[0], node);
-			const leadInPx = this._secondsToPx(leadInInfo.barDuration);
+			// Leaves a little of the pad visible rather than scrolling all the
+			// way to its edge — landing exactly on LEFT_PAD_PX put the very
+			// first "+" button (and the start of the timeline) flush against
+			// the left edge of the view with zero lead-in, which read as an
+			// odd, arbitrary offset. Per Hans (2026-09-07; a bar then, a
+			// fixed 16px since 2026-10-28).
+			const leadInPx = LEAD_IN_PX;
 			requestAnimationFrame(() => {
 				// The SAME "not-yet-laid-out" problem above also bit the
 				// totalWidth computed a moment ago: while this whole panel
