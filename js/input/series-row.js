@@ -1,7 +1,7 @@
 import { playerStore } from "../waxml-integration/player-store.js";
 import { inputTransport } from "./input-transport.js";
 import { inputView } from "./input-view.js";
-import { normalize, sampleSeries, waveformColumns } from "./data-series.js";
+import { normalize, percentileRange, sampleSeries, waveformColumns } from "./data-series.js";
 import { TARGET_PILL_CSS, armMapping, renderTargetPills } from "./target-pills.js";
 import "../components/wa-color-picker.js";
 
@@ -13,6 +13,7 @@ import "../components/wa-color-picker.js";
 // analysed video (wa-video-input.js): once the numbers exist, a row is a row.
 //
 // An entry is { id, key, name, detail?, color, invert, bypassed, min, max, mappings }
+// (plus `percentile`: 0, or how many % at either end are ignored when finding the range)
 // — the part that is saved. Where its values come from is `source()`, which returns
 // { data, series, interpolate } (data: { length, xs }, series: { filled, min, max },
 // see data-series.js), or null. `ctx` hands the row what only its section knows:
@@ -144,6 +145,14 @@ export const SERIES_ROW_CSS = `
 		font-size: 0.65rem;
 		color: var(--waw-muted, #8a8a8a);
 	}
+	.pct {
+		background: #111;
+		border: 1px solid var(--waw-border, #2f2f2f);
+		border-radius: 4px;
+		color: var(--waw-fg, #e8e8e8);
+		font-size: 0.68rem;
+		padding: 0.1rem 0.2rem;
+	}
 	.range input {
 		width: 3.3rem;
 		background: #111;
@@ -190,10 +199,26 @@ export class SeriesRow {
 		this.el = this._build();
 	}
 
-	// The values that become 0 and 1: the row's own, else the data's lowest and highest.
+	// The values that become 0 and 1 when nothing is typed in: the data's lowest and highest,
+	// or — with a percentile chosen — those left when that % at either end is ignored.
+	// (Worked out once per series and percentile; a series that is replaced is worked out anew.)
+	_autoRange() {
+		const series = this.source()?.series;
+		if (!series) return { lo: 0, hi: 1 };
+		const p = this.entry.percentile || 0;
+		if (!p) return { lo: series.min, hi: series.max };
+		const cache = (series._percentiles ??= new Map());
+		const hit = cache.get(p);
+		if (hit && hit.filled === series.filled) return hit.range;
+		const range = percentileRange(series.filled, p) ?? { lo: series.min, hi: series.max };
+		cache.set(p, { filled: series.filled, range });
+		return range;
+	}
+
+	// The values that become 0 and 1: the row's own, else the automatic ones.
 	_range() {
-		const src = this.source();
-		return { lo: this.entry.min ?? src?.series.min ?? 0, hi: this.entry.max ?? src?.series.max ?? 1 };
+		const auto = this._autoRange();
+		return { lo: this.entry.min ?? auto.lo, hi: this.entry.max ?? auto.hi };
 	}
 
 	_build() {
@@ -268,18 +293,33 @@ export class SeriesRow {
 			this.update({ force: true });
 			ctx.onChange();
 		});
+		const pct = document.createElement("select");
+		pct.className = "pct";
+		pct.title = "How the range of 0 and 1 is found: all of the values, or leaving out the most extreme ones at either end, so that one wild reading does not decide it";
+		[
+			[0, "Full range"],
+			[1, "1–99 %"],
+			[2, "2–98 %"],
+			[5, "5–95 %"]
+		].forEach(([value, label]) => {
+			const o = document.createElement("option");
+			o.value = value;
+			o.textContent = label;
+			pct.appendChild(o);
+		});
+		pct.value = String(entry.percentile || 0);
 		const range = document.createElement("span");
 		range.className = "range";
 		range.title = "The values that become 0 and 1 (empty: the lowest and highest in the data)";
 		const lo = document.createElement("input");
 		lo.type = "number";
 		lo.step = "any";
-		lo.placeholder = this._placeholder("min");
+		lo.placeholder = this._placeholder("lo");
 		lo.value = entry.min ?? "";
 		const hi = document.createElement("input");
 		hi.type = "number";
 		hi.step = "any";
-		hi.placeholder = this._placeholder("max");
+		hi.placeholder = this._placeholder("hi");
 		hi.value = entry.max ?? "";
 		const setRange = () => {
 			entry.min = lo.value === "" ? null : Number(lo.value);
@@ -290,6 +330,14 @@ export class SeriesRow {
 		};
 		lo.addEventListener("change", setRange);
 		hi.addEventListener("change", setRange);
+		pct.addEventListener("change", () => {
+			entry.percentile = Number(pct.value);
+			lo.placeholder = this._placeholder("lo");
+			hi.placeholder = this._placeholder("hi");
+			this.draw();
+			this.update({ force: true });
+			ctx.onChange();
+		});
 		range.append("0 =", lo, "1 =", hi);
 
 		const valueRow = document.createElement("div");
@@ -303,7 +351,7 @@ export class SeriesRow {
 		this.numEl.className = "value-num";
 		this.numEl.textContent = "—";
 		valueRow.append(bar, this.numEl);
-		controls.append(invert, range, valueRow);
+		controls.append(invert, pct, range, valueRow);
 
 		this.targetsEl = document.createElement("div");
 		this.targetsEl.className = "targets";
@@ -314,8 +362,7 @@ export class SeriesRow {
 	}
 
 	_placeholder(which) {
-		const s = this.source()?.series;
-		return s ? String(+s[which].toPrecision(4)) : "";
+		return this.source()?.series ? String(+this._autoRange()[which].toPrecision(4)) : "";
 	}
 
 	refreshTargets() {

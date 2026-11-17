@@ -3,7 +3,7 @@
 //   node scripts/test-csv.mjs
 import assert from "node:assert/strict";
 import { decodeBytes, parseCsv, parseNumber, sniffCsv } from "../js/input/csv-parse.js";
-import { buildDataset, guessLayout, normalize, sampleSeries, transpose, waveformColumns } from "../js/input/data-series.js";
+import { buildDataset, guessLayout, normalize, percentileRange, quantile, sampleSeries, transpose, waveformColumns } from "../js/input/data-series.js";
 
 let failures = 0;
 function test(name, fn) {
@@ -217,6 +217,25 @@ test("waveform: few points give a line, many give min/max columns", () => {
 	assert.ok(cols.lo && cols.hi && cols.lo.length === 50);
 	assert.equal(cols.lo[10], 0);
 	assert.equal(cols.hi[10], 1);
+});
+
+test("quantiles read between neighbours and skip missing values", () => {
+	assert.equal(quantile([1, 2, 3, 4, 5], 0), 1);
+	assert.equal(quantile([1, 2, 3, 4, 5], 0.5), 3);
+	assert.equal(quantile([1, 2, 3, 4, 5], 1), 5);
+	assert.equal(quantile([0, 10], 0.25), 2.5);
+	assert.equal(quantile([NaN, 4, NaN, 8], 0.5), 6);
+	assert.ok(Number.isNaN(quantile([NaN], 0.5)));
+});
+
+test("a percentile range ignores a wild reading", () => {
+	const v = Array.from({ length: 101 }, (_, i) => i / 100); // 0 … 1
+	v[50] = 40; // one glitch
+	assert.equal(Math.max(...v), 40);
+	const r = percentileRange(v, 2);
+	assert.ok(r.hi < 1.1 && r.hi > 0.9, `hi was ${r.hi}`);
+	assert.ok(Math.abs(r.lo - 0.02) < 0.011);
+	assert.equal(percentileRange([NaN], 2), null);
 });
 
 console.log(failures ? `\n${failures} failed` : "\nall passed");

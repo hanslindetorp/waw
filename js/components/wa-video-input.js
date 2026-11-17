@@ -11,6 +11,7 @@ import { ANALYSIS_RATES, analyzeVideo, ensureDuration } from "../input/video-ana
 import { frameAt, landmarksToCsv, parseLandmarkCsv, pointAt } from "../input/landmark-table.js";
 import { measureSeries } from "../input/video-series.js";
 import { angularOrder } from "../input/measures.js";
+import { LARGE_VIDEO_BYTES, VIDEO_NAME_RE, storeVideo } from "../input/video-files.js";
 import { colorForIndex, slug } from "./wa-data-input.js";
 
 // The INPUT panel's "Video" section: a video file as an input source next to the live
@@ -32,10 +33,8 @@ import { colorForIndex, slug } from "./wa-data-input.js";
 // What is saved is project content, in inputs.json under "video" (getProject()/applyProject()
 // — see project/inputs-store.js).
 
-const VIDEO_NAME_RE = /\.(mp4|m4v|mov|webm|ogv)$/i;
 const DATA_FOLDER = "Data";
 const NEAREST_PX = 24;
-const LARGE_VIDEO_BYTES = 100 * 1048576;
 const MODELS = ["hands", "pose", "face"];
 
 function baseName(name) {
@@ -495,6 +494,7 @@ export class WaVideoInput extends HTMLElement {
 						color: entry.color,
 						invert: !!entry.invert,
 						bypassed: !!entry.bypassed,
+						percentile: entry.percentile || 0,
 						min: entry.min ?? null,
 						max: entry.max ?? null,
 						mappings: entry.mappings.map((m) => ({ ...m }))
@@ -566,21 +566,19 @@ export class WaVideoInput extends HTMLElement {
 		});
 	}
 
-	// A video from the computer goes into the project (in a folder named video, if there
-	// is one, else at the top; the same name and size is the same file).
+	// A video from the computer goes into the project (in the video folder; the same name
+	// and size is the same file).
 	async _loadFile(file) {
-		const folder = vfs.listFolder(ROOT_ID).find((n) => n.type === "folder" && n.name.toLowerCase() === "video");
-		const parentId = folder?.id ?? ROOT_ID;
-		const existing = vfs.listFolder(parentId).filter((n) => n.type === "file");
-		let node = existing.find((n) => n.name === file.name && n.file?.size === file.size);
-		if (!node) {
-			let name = file.name;
-			const base = baseName(name);
-			const ext = name.slice(base.length);
-			for (let n = 2; existing.some((x) => x.name === name); n++) name = `${base}-${n}${ext}`;
-			node = vfs.uploadFile(parentId, new File([file], name, { type: file.type || "video/mp4" }));
-		}
+		await this._openNode(storeVideo(file, { reuse: true }));
+	}
+
+	// Makes a project video this input's video (the camera's recorder hands its recordings
+	// here). When a video with rows is already open `confirm(message)` is asked first, since
+	// the rows of the old one go. Resolves false when that was declined.
+	async open(node, confirm) {
+		if (this._item?.rows.length && confirm && !(await confirm("Replace the video? The rows made from the current one are removed."))) return false;
 		await this._openNode(node);
+		return true;
 	}
 
 	// Makes `node` the input's video. `saved` is what inputs.json held for it.
@@ -943,6 +941,7 @@ export class WaVideoInput extends HTMLElement {
 			color: raw.color,
 			invert: !!raw.invert,
 			bypassed: !!raw.bypassed,
+			percentile: raw.percentile || 0,
 			min: raw.min ?? null,
 			max: raw.max ?? null,
 			mappings: raw.mappings

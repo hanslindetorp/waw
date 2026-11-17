@@ -158,6 +158,26 @@ export function sampleSeries(dataset, series, pos, interpolate = "linear") {
 	return series.filled[i] + (series.filled[j] - series.filled[i]) * (f - i);
 }
 
+// The q-quantile (0–1) of the finite numbers in `values`, read between neighbours; NaN if
+// there are none.
+export function quantile(values, q) {
+	const a = Float64Array.from(Array.prototype.filter.call(values, Number.isFinite)).sort();
+	if (!a.length) return NaN;
+	const pos = (a.length - 1) * Math.min(1, Math.max(0, q));
+	const lo = Math.floor(pos);
+	const hi = Math.ceil(pos);
+	return a[lo] + (a[hi] - a[lo]) * (pos - lo);
+}
+
+// The range a series is read over when its most extreme `percent` % at either end is
+// ignored (2 gives the 2nd to the 98th percentile): one wild reading no longer decides
+// what 0 and 1 are. { lo, hi }, or null when there is nothing to go by.
+export function percentileRange(values, percent) {
+	const lo = quantile(values, percent / 100);
+	const hi = quantile(values, 1 - percent / 100);
+	return Number.isFinite(lo) && Number.isFinite(hi) ? { lo, hi } : null;
+}
+
 // 0–1 of `value` between lo and hi (clamped); `invert` runs it 1 to 0.
 export function normalize(value, lo, hi, invert = false) {
 	if (!Number.isFinite(value)) return undefined;

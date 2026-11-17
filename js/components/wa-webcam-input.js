@@ -5,6 +5,11 @@ import { inputSources } from "../state/input-sources.js";
 import { stageStore, STAGE_INPUT_DRAG_TYPE } from "../project/stage-store.js";
 import { setCardDragImage } from "../utils/drag-image.js";
 import { VISION_BUNDLE_URL, WASM_PATH, MODEL_URLS } from "../input/mediapipe.js";
+import { vfs } from "../vfs/VFS.js";
+import { showNotice } from "./wa-notice-dialog.js";
+import { confirmDialog } from "./wa-confirm-dialog.js";
+import { startRecording } from "../input/video-recorder.js";
+import { LARGE_VIDEO_BYTES, MAX_RECORDING_BYTES, formatSize, storeVideo } from "../input/video-files.js";
 import { armMapping, mappingFromPick, writeVarReference, renderTargetPills } from "../input/target-pills.js";
 import { angularOrder, area2d, axisMean, dist2d, emptyCalib, expandCalib, finalizeCalib, kindForCount, linePosition, normalizeSample, pushSample, sampleFor, widen } from "../input/measures.js";
 import "./wa-color-picker.js";
@@ -104,6 +109,73 @@ template.innerHTML = `
 		.start-btn.running {
 			background: var(--waw-danger, #e5484d);
 			color: #fff;
+		}
+		.rec-btn {
+			padding: 0.32rem 0.7rem;
+			border: 1.5px solid var(--waw-danger, #e5484d);
+			border-radius: 6px;
+			background: transparent;
+			color: var(--waw-danger, #e5484d);
+			cursor: pointer;
+			font-size: 0.8rem;
+			font-family: inherit;
+			font-weight: 600;
+		}
+		.rec-btn:disabled {
+			opacity: 0.4;
+			cursor: default;
+		}
+		.rec-btn.recording {
+			background: var(--waw-danger, #e5484d);
+			color: #fff;
+		}
+		.rec-sound {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.25rem;
+			font-size: 0.72rem;
+			color: var(--waw-muted, #8a8a8a);
+			cursor: pointer;
+		}
+		.rec-info {
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			font-size: 0.74rem;
+			color: var(--waw-danger, #e5484d);
+		}
+		.rec-info.large {
+			color: #fb923c;
+		}
+		.rec-saved {
+			display: flex;
+			align-items: center;
+			flex-wrap: wrap;
+			gap: 0.4rem;
+			font-size: 0.72rem;
+			color: var(--waw-muted, #8a8a8a);
+			margin-bottom: 0.6rem;
+		}
+		.rec-saved .name {
+			color: var(--waw-teal, #45b58c);
+			font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
+			word-break: break-all;
+		}
+		.rec-saved .error {
+			color: var(--waw-danger, #e5484d);
+		}
+		.rec-saved button {
+			border: 1.5px solid var(--waw-border, #2f2f2f);
+			border-radius: 6px;
+			background: #1a1c1f;
+			color: var(--waw-fg, #e8e8e8);
+			cursor: pointer;
+			font-size: 0.72rem;
+			padding: 0.2rem 0.5rem;
+		}
+		.rec-saved button:hover {
+			border-color: var(--waw-accent, #4fa3ff);
+		}
+		.rec-saved[hidden] {
+			display: none;
 		}
 		.video-wrapper {
 			position: relative;
@@ -513,8 +585,12 @@ template.innerHTML = `
 	</style>
 	<div class="row">
 		<button class="start-btn" type="button">Start</button>
+		<button class="rec-btn" type="button" disabled title="Record the camera picture to a video file in the project (start the camera first)">● Rec</button>
+		<label class="rec-sound" title="Record sound from the microphone too (the browser asks for permission the first time)"><input type="checkbox" /> sound</label>
+		<span class="rec-info" hidden></span>
 		<select class="camera-select" title="Camera"></select>
 	</div>
+	<div class="rec-saved" hidden></div>
 	<div class="video-wrapper">
 		<video autoplay playsinline muted></video>
 		<canvas></canvas>
@@ -557,6 +633,11 @@ export class WaWebcamInput extends HTMLElement {
 		this._statusOverlay = $(".status-overlay");
 		this._cameraSelect = $(".camera-select");
 		this._startBtn = $(".start-btn");
+		this._recBtn = $(".rec-btn");
+		this._recInfo = $(".rec-info");
+		this._recSound = $(".rec-sound input");
+		this._recSaved = $(".rec-saved");
+		this._recording = null; // { stop() } while the camera picture is being recorded
 		this._vidUi = $(".vid-ui");
 		this._addWrap = $(".add-wrap");
 		this._addBtn = $(".add-btn");
@@ -618,6 +699,20 @@ export class WaWebcamInput extends HTMLElement {
 		document.addEventListener("keydown", this._onKeyDown, true);
 		inputSources.register("webcam", this);
 		this._startBtn.addEventListener("click", () => (this._running ? this._stop() : this._start()));
+		this._recBtn.addEventListener("click", () => this._toggleRecording());
+		// Whether to record sound is remembered on this machine (not part of the project).
+		try {
+			this._recSound.checked = localStorage.getItem("waw.recordSound") === "1";
+		} catch {
+			// Storage can be blocked; the box then starts unticked each time.
+		}
+		this._recSound.addEventListener("change", () => {
+			try {
+				localStorage.setItem("waw.recordSound", this._recSound.checked ? "1" : "0");
+			} catch {
+				// Not worth a message.
+			}
+		});
 		this._cameraSelect.addEventListener("change", () => {
 			this._cameraDeviceId = this._cameraSelect.value || null;
 			if (this._running) this._startCamera(this._cameraDeviceId);
@@ -830,6 +925,7 @@ export class WaWebcamInput extends HTMLElement {
 			const activeId = await this._startCamera(this._cameraDeviceId);
 			await this._enumerateCameras(activeId);
 			this._running = true;
+			this._recBtn.disabled = false;
 			this._startBtn.textContent = "Stop";
 			this._startBtn.classList.add("running");
 			this._statusOverlay.hidden = true;
@@ -847,6 +943,9 @@ export class WaWebcamInput extends HTMLElement {
 	}
 
 	_stop() {
+		// The recording is closed first (and saved as far as it got), then the camera goes.
+		this._recording?.stop();
+		this._recBtn.disabled = true;
 		if (this._rafId !== null) {
 			cancelAnimationFrame(this._rafId);
 			this._rafId = null;
@@ -866,6 +965,111 @@ export class WaWebcamInput extends HTMLElement {
 		this._setStatus("Camera is off. Click Start to begin tracking.", false);
 		this._updateOverlay();
 		this.dispatchEvent(new CustomEvent("run-change"));
+	}
+
+	// ── Recording the camera picture to a video file ─────────────────────
+	// Record starts a MediaRecorder on the camera's stream; stopping saves the file in the
+	// project's video folder (made when missing), warns when it is large, and offers to use it
+	// as the Video section's video — the same trackers and rows then work on it (see
+	// wa-video-input.js). Only the picture is recorded (see input/video-recorder.js).
+	_toggleRecording() {
+		if (this._recording) {
+			this._recording.stop();
+			return Promise.resolve();
+		}
+		if (!this._currentStream || this._recStarting) return Promise.resolve();
+		return this._beginRecording();
+	}
+
+	async _beginRecording() {
+		this._recStarting = true;
+		this._recSaved.hidden = true;
+		let stream = this._currentStream;
+		let mic = null;
+		let note = "";
+		// The microphone is asked for only when "sound" is ticked; if it is refused the picture
+		// is still recorded, and the saved note says so.
+		if (this._recSound.checked) {
+			try {
+				mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+				stream = new MediaStream([...this._currentStream.getVideoTracks(), ...mic.getAudioTracks()]);
+			} catch (err) {
+				note = `No sound: the microphone could not be used (${err.message || err.name})`;
+			}
+		}
+		this._recStarting = false;
+		if (!this._currentStream) {
+			mic?.getTracks().forEach((t) => t.stop());
+			return; // the camera was switched off meanwhile
+		}
+		const mark = mic ? " 🎤" : "";
+		this._recBtn.classList.add("recording");
+		this._recBtn.textContent = "■ Stop";
+		this._recInfo.hidden = false;
+		this._recInfo.classList.remove("large");
+		this._recInfo.textContent = `● 0:00 · 0 kB${mark}`;
+		this._recording = startRecording(stream, {
+			onProgress: ({ bytes, seconds }) => {
+				const m = Math.floor(seconds / 60);
+				this._recInfo.textContent = `● ${m}:${String(Math.floor(seconds % 60)).padStart(2, "0")} · ${formatSize(bytes)}${mark}`;
+				if (bytes >= LARGE_VIDEO_BYTES) {
+					this._recInfo.classList.add("large");
+					this._recInfo.title = `A large recording (the limit is ${formatSize(MAX_RECORDING_BYTES)}) — consider stopping`;
+				}
+			},
+			onStop: (result) => {
+				mic?.getTracks().forEach((t) => t.stop());
+				this._onRecordingStopped(result, note);
+			}
+		});
+	}
+
+	_onRecordingStopped(result, note = "") {
+		this._recording = null;
+		this._recBtn.classList.remove("recording");
+		this._recBtn.textContent = "● Rec";
+		this._recInfo.hidden = true;
+		this._recInfo.title = "";
+		const box = this._recSaved;
+		box.hidden = false;
+		box.innerHTML = "";
+		const add = (el) => box.appendChild(el);
+		const span = (text, cls) => {
+			const e = document.createElement("span");
+			e.textContent = text;
+			if (cls) e.className = cls;
+			return e;
+		};
+		if (result.error) {
+			add(span(result.error, "error"));
+			return;
+		}
+		const node = storeVideo(result.file);
+		const path = vfs.getExportPath(node.id);
+		add(span("Saved"));
+		add(span(`${path} (${formatSize(result.bytes)}${result.sound ? ", with sound" : ""})`, "name"));
+		if (note) add(span(note, "error"));
+		const use = document.createElement("button");
+		use.type = "button";
+		use.textContent = "Use as video input";
+		use.title = "Open it in the Video section, where hand / body / face points can be mapped";
+		use.addEventListener("click", () => this._useRecording(node));
+		add(use);
+		if (result.limited) {
+			showNotice(`The recording stopped by itself at the size limit (${formatSize(MAX_RECORDING_BYTES)}). It has been saved.`);
+		} else if (result.bytes >= LARGE_VIDEO_BYTES) {
+			showNotice(
+				`The recording is ${formatSize(result.bytes)}. A large video is kept in memory, goes into the project's zip and takes long to analyse. It has been saved — shorter clips are easier to work with.`
+			);
+		}
+	}
+
+	// Hands a recording to the Video section and opens that section.
+	async _useRecording(node) {
+		const video = inputSources.get("video");
+		if (!video) return;
+		if (!(await video.open(node, confirmDialog))) return;
+		this.getRootNode().querySelector?.('[data-section="video"]')?.classList.remove("collapsed");
 	}
 
 	_setStatus(text, isError) {

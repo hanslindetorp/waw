@@ -290,6 +290,7 @@ export class WaDataInput extends HTMLElement {
 			color: e.color,
 			invert: !!e.invert,
 			bypassed: !!e.bypassed,
+			percentile: e.percentile || 0,
 			min: e.min ?? null,
 			max: e.max ?? null,
 			mappings: e.mappings.map((m) => ({ ...m }))
@@ -459,6 +460,7 @@ export class WaDataInput extends HTMLElement {
 				color: old?.color || colorForIndex(this._colorIndex++),
 				invert: !!old?.invert,
 				bypassed: !!old?.bypassed,
+				percentile: old?.percentile || 0,
 				min: old?.min ?? null,
 				max: old?.max ?? null,
 				mappings: (old?.mappings || []).map((m) => ({ ...m }))

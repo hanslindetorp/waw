@@ -83,9 +83,13 @@ export class VFS extends EventTarget {
 	// File in place, same as today's behavior, rather than failing the
 	// upload itself over a read that might still succeed later.
 	async _solidify(node) {
+		const original = node.file;
 		try {
-			const buffer = await node.file.arrayBuffer();
+			const buffer = await original.arrayBuffer();
 			if (this._nodes.get(node.id) !== node) return; // deleted/replaced meanwhile
+			// A file whose content was replaced meanwhile (updateFileContent) has newer bytes than
+			// the ones just read; putting these back would silently undo that edit.
+			if (node.file !== original) return;
 			const type = node.file.type;
 			if (node.sessionUrl) URL.revokeObjectURL(node.sessionUrl);
 			node.file = new File([buffer], node.name, { type });

@@ -498,7 +498,11 @@ ligger den utanför WAXML-dokumentet.
   `inputs.json` under `"transport"`. Videon tar över klockan via `setTimebase()` (se
   nedan), så att bild och data aldrig glider isär.
 - **Rad** (`js/input/series-row.js`, `SeriesRow` + `SERIES_ROW_CSS`): delas av CSV-
-  sektionen och videosektionen. Vågform: per rad i radens färg (auto ur `COLOR_PALETTE`, sedan gyllene vinkeln;
+  sektionen och videosektionen. Omfånget för 0 och 1 är som standard seriens lägsta och
+  högsta; en meny väljer i stället ett **percentilomfång** (1–99, 2–98 eller 5–95 %) som
+  lämnar de mest extrema värdena i vardera änden utanför, så att en enstaka felavläsning inte
+  avgör skalan (`percentileRange()` i `data-series.js`, `entry.percentile`; egna "0 =" och
+  "1 =" går före). Vågform: per rad i radens färg (auto ur `COLOR_PALETTE`, sedan gyllene vinkeln;
   fri färg via `wa-color-picker`), normaliserad 0–1 efter radens eget omfång (tomt =
   datats min/max, annars egna "0 =" och "1 ="; invert) och med ett vertikalt streck där
   vi är. Zoomen är gemensam för alla rader (knapparna, Ctrl/⌘ + hjul, nyp; sidleds
@@ -551,6 +555,17 @@ sina värden ur tabellen och fungerar som en CSV-rad.
   (högtalarknappen stänger av det). Punkterna visas över bilden ur tabellen, också vid scrub.
 - **Sparas** i `inputs.json` under `"video"` (`videos: [ … ]` — en video i taget i gränssnittet,
   strukturen är en lista). Provas med `node scripts/test-landmarks.mjs`.
+- **Spela in från kameran** (`● Rec` bredvid Start i Web Camera, aktiv när kameran går;
+  `js/input/video-recorder.js`, `video-files.js`): MediaRecorder på kamerans ström, bara bild
+  (kameran öppnas utan ljud; mikrofonen läggs till på begäran), kamerans egen ospeglade bild (så som en videofil läses och
+  analyseras), MP4 där webbläsaren kan annars WebM, 2,5 Mbit/s. Rutan "sound" intill Rec tar
+  med mikrofonen (frågas först då; 128 kbit/s; vald inställning minns på den här datorn,
+  `localStorage`); nekas mikrofonen spelas bilden in ändå och det sägs under sparfilen. Stoppar man (eller stänger av
+  kameran) sparas filen som `video/recording-<datum>-<tid>.<ext>` — mappen `video` skapas om
+  den saknas (hittas oavsett versaler). Över 100 MB varnar en ruta; vid 500 MB stoppar
+  inspelningen själv och sparas. Under inspelningen visas tid och storlek (orange över 100 MB).
+  "Use as video input" öppnar filen i Video-sektionen (frågar först om en video med rader redan
+  är öppen) och fäller upp sektionen; filen finns också alltid under *From the project…*.
 - **Ljud i WAXML-grafen — inte byggt:** `MediaStreamAudioSourceNode` i waxml.js har ett
   färdigt `initStream(stream)`, men finns ett sådant element i dokumentet ber waxml.js om
   mikrofonen och matar den in i noden. Videoljudet kan alltså inte skickas dit utan att
