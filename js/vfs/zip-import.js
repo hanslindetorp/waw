@@ -6,7 +6,8 @@ import { isHiddenName } from "./VFS.js";
 
 // .json is here for workstation-state.json (see workstation-state.js) —
 // Workstation's own editor-state companion file, not a WAXML content type.
-const SUPPORTED_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml", ".json"];
+// .csv/.tsv/.txt are the data files the INPUT panel's "Data (CSV)" section reads.
+const SUPPORTED_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml", ".json", ".csv", ".tsv", ".txt"];
 
 const MIME_BY_EXTENSION = {
 	".mp3": "audio/mpeg",
@@ -15,7 +16,10 @@ const MIME_BY_EXTENSION = {
 	".m4a": "audio/mp4",
 	".xml": "text/xml",
 	".waxml": "text/xml",
-	".json": "application/json"
+	".json": "application/json",
+	".csv": "text/csv",
+	".tsv": "text/tab-separated-values",
+	".txt": "text/plain"
 };
 
 // The folder (a path inside the archive, "" for its top) a project lives in,

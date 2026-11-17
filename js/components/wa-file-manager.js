@@ -12,7 +12,7 @@ import { openFileConflictDialog } from "./wa-file-conflict-dialog.js";
 // Library (DEMO) view, see wa-library-view.js — can actually be uploaded via
 // the Upload button, not just dragged in (drag-and-drop never enforced this
 // list anyway).
-const ACCEPTED = ".mp3,.wav,.ogg,.m4a,.xml,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg";
+const ACCEPTED = ".mp3,.wav,.ogg,.m4a,.xml,.csv,.tsv,.txt,.zip,.png,.jpg,.jpeg,.gif,.webp,.svg";
 
 const template = document.createElement("template");
 template.innerHTML = `

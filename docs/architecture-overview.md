@@ -464,6 +464,57 @@ ursprungliga fil-öppnings-klicket. Fixat genom att begära kameran och ladda
 modellerna parallellt i stället för seriellt (`_start()`) — kameran begärs
 nu så nära klicket som möjligt, och det är dessutom strikt snabbare.
 
+## Data (CSV) i INPUT-panelen (nytt, 2026-11-17)
+
+Andra sektionen i `inputPanel` (`js/components/wa-data-input.js`, bredvid Web
+Camera): en CSV-fil vars serier spelas upp längs en tidslinje och styr parametrar
+på samma sätt som kameraraderna — varje serie är en rad som kan mappas till vilken
+parameter (eller rot-`<Var>`) som helst och alltid skickar 0–1. Som övriga INPUT
+ligger den utanför WAXML-dokumentet.
+
+- **Import** (`wa-csv-import-dialog.js`, `openCsvImportDialog()`): förhandsvisar
+  första raderna som tabell med namn och tidsaxel markerade och visar hur många
+  serier × värden som blir av det. Allt som gissats kan ändras: teckenkodning
+  (auto: BOM, sedan UTF-8, annars Windows-1252 som svenska Excel skriver),
+  skiljetecken, citattecken, radslut (radbrytning eller `;`), decimaltecken (punkt och
+  komma läses båda som decimal, även blandat i samma fil; valet avgör bara `1,234`), vilket
+  håll serierna löper (rad eller kolumn), om första kolumnen/raden är namn och om
+  första serien är en tidsaxel. Tills layouten ändrats för hand gissas den om när
+  formatet ändras. Filen läggs som vanlig fil i projektet (File Manager) och
+  tolkningen sparas — dialogen kan öppnas igen (kugghjulet) utan att raderna och
+  deras mappningar tappas (de följer `sourceIndex`).
+- **Ren logik utan DOM** (`js/input/`): `csv-parse.js` (avkodning, delning i celler,
+  `sniffCsv()`, `parseNumber()`), `data-series.js` (`guessLayout()`, `buildDataset()`,
+  `sampleSeries()`, `normalize()`, `waveformColumns()`), provade med
+  `node scripts/test-csv.mjs` (alla format som nämnts ovan, gissningarna och
+  uppläsningen). Luckor (tomma celler) fylls: linjärt mellan värden, håller i kanterna.
+  Värdena fördelas jämnt över hela speltiden, eller placeras efter en tidskolumn.
+  Mellan värdena glider det (linear) eller hålls (step).
+- **Transport** (`js/input/input-transport.js`, `inputTransport`): en gemensam klocka
+  för allt tidsbaserat i INPUT — PLAY/paus, STOP (till början), längd i sekunder,
+  loop, scrub. En kommande video ska ta över den via `setTimebase()` (längden och
+  positionen kommer då från videon och play/stop/seek skickas vidare dit) så att bild
+  och data aldrig glider isär; inget annat behöver ändras.
+- **Vågformer**: per rad i radens färg (auto ur `COLOR_PALETTE`, sedan gyllene vinkeln;
+  fri färg via `wa-color-picker`), normaliserad 0–1 efter radens eget omfång (tomt =
+  datats min/max, annars egna "0 =" och "1 ="; invert) och med ett vertikalt streck där
+  vi är. Zoomen är gemensam för alla rader (knapparna, Ctrl/⌘ + hjul, nyp; sidleds
+  hjul panorerar); många punkter ritas som min/max per pixelkolumn, få som linje.
+  Man drar i en vågform (eller reglaget) för att scrubba; värdena skickas också vid scrub.
+- **Mappning**: raderna återanvänder kamerans mappningsdel, utbruten till
+  `js/input/target-pills.js` (`renderTargetPills`, `armMapping`, `writeVarReference`,
+  `TARGET_PILL_CSS`) — pillerna, Map…-läget (`input-map-mode.js`) och `<Var>` som skapas
+  för en parameter. Kameran använder nu samma kod. En rot-`<Var>` matas under
+  `data_<nyckel>` (nyckeln fastställs när raden skapas så att en senare namnändring i
+  filen inte bryter länken).
+- **Sparas** i `inputs.json` under `"data"` (`getProject()`/`applyProject()`; filens
+  sökväg följer en omdöpning via VFS `path-change`); `inputs-store.js` följer nu båda
+  källorna (`webcam`, `data`). Ett projekt som öppnas flyttar inget av sig självt —
+  värden skickas först vid uppspelning, scrub eller när en mappning görs.
+- `.csv`, `.tsv` och `.txt` är tillagda i zip-importens och File Managers listor.
+- **Inte med än:** Stage/viewer (källan registreras som `"data"` i `input-sources.js`
+  med samma gränssnitt som kameran, så det blir ett eget steg), video som tidskälla.
+
 ## View-meny, Library (DEMO) och Share-dialogen (nytt, 2026-09-10/13)
 
 `js/state/view.js` exporterar `viewState`, ett minimalt singleton-state

@@ -1,4 +1,5 @@
 import "./wa-webcam-input.js";
+import "./wa-data-input.js";
 
 // The INPUT panel's own content (see index.html's "inputPanel" <wa-panel>) —
 // a thin vertical stack of collapsible "input channel" sections. Per Hans
@@ -9,7 +10,7 @@ import "./wa-webcam-input.js";
 // own state (see workstation-state.js's own registerLayoutExtras, which
 // reaches straight into wa-webcam-input.js, one shadow-DOM hop from here).
 //
-// Only one section exists today: Web Camera.
+// Sections today: Web Camera and Data (CSV).
 
 const template = document.createElement("template");
 template.innerHTML = `
@@ -55,6 +56,15 @@ template.innerHTML = `
 		</div>
 		<div class="section-body">
 			<wa-webcam-input></wa-webcam-input>
+		</div>
+	</div>
+	<div class="section" data-section="data">
+		<div class="section-header">
+			<span class="section-disclosure">▾</span>
+			<span class="section-title">Data (CSV)</span>
+		</div>
+		<div class="section-body">
+			<wa-data-input></wa-data-input>
 		</div>
 	</div>
 `;

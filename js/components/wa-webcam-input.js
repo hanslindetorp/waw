@@ -4,6 +4,7 @@ import { inputMapMode } from "../state/input-map-mode.js";
 import { inputSources } from "../state/input-sources.js";
 import { stageStore, STAGE_INPUT_DRAG_TYPE } from "../project/stage-store.js";
 import { setCardDragImage } from "../utils/drag-image.js";
+import { armMapping, mappingFromPick, writeVarReference, renderTargetPills } from "../input/target-pills.js";
 import "./wa-color-picker.js";
 import { COLOR_PALETTE } from "./wa-color-picker.js";
 
@@ -1395,33 +1396,22 @@ export class WaWebcamInput extends HTMLElement {
 		this._updateOverlay();
 	}
 
-	// Arms input-map-mode.js (the same "arm a mode, let some other element
-	// claim the next click" shape var-map-mode.js uses) and calls
-	// onPick(detail) when a parameter or a root <Var> knob is picked. Used by
-	// the video's "map..." button and by each row's own. A numeric parameter
-	// anywhere gets a new <Var> made for it (see input-mapping.js); a root
-	// <Var> knob maps onto that existing Var.
+	// Arms input-map-mode.js and calls onPick(detail) when a parameter or a root
+	// <Var> knob is picked (see input/target-pills.js). Used by the video's
+	// "map..." button and by each row's own. A numeric parameter anywhere gets a
+	// new <Var> made for it (see input-mapping.js); a root <Var> knob maps onto that
+	// existing Var.
 	_armMapping(anchorEl, onPick) {
-		if (inputMapMode.armed) inputMapMode.disarm(); // re-arming for a different anchor — see the "change" cleanup below
-		inputMapMode.arm();
-		anchorEl.classList.add("armed");
-		const pick = (e) => onPick(e.detail);
-		const onChange = () => {
-			if (inputMapMode.armed) return;
-			inputMapMode.removeEventListener("pick", pick);
-			inputMapMode.removeEventListener("change", onChange);
-			anchorEl.classList.remove("armed");
+		armMapping(anchorEl, onPick, () => {
 			if (this._pendingMap) {
 				this._pendingMap = null;
 				this._updateOverlay();
 			}
-		};
-		inputMapMode.addEventListener("pick", pick);
-		inputMapMode.addEventListener("change", onChange);
+		});
 	}
 
 	_mappingFromPick(detail) {
-		return detail.direct ? { varName: detail.varName, direct: true, inputVar: detail.inputVar } : { varName: detail.varName };
+		return mappingFromPick(detail);
 	}
 
 	// A root <Var> target gets "value=$syntheticName" written onto it — the
@@ -1664,58 +1654,14 @@ export class WaWebcamInput extends HTMLElement {
 		return row;
 	}
 
-	// One pill per target (click to point it somewhere else, × to remove it)
-	// and a "Map..." that adds another.
+	// One pill per target (click to point it somewhere else, × to remove it) and a
+	// "Map..." that adds another — see input/target-pills.js.
 	_refreshTargets(entry) {
-		const wrap = entry.targetsEl;
-		wrap.innerHTML = "";
-		entry.mappings.forEach((mapping, index) => {
-			const pill = document.createElement("span");
-			pill.className = "sv-mapped";
-			pill.title = "Click to remap";
-			const nameSpan = document.createElement("span");
-			nameSpan.textContent = mapping.varName;
-			nameSpan.addEventListener("click", (e) => {
-				// Without this, the very click that arms input-map-mode.js keeps
-				// bubbling to document, where its "unclaimed click disarms"
-				// listener would immediately undo the arm.
-				e.stopPropagation();
-				this._armMapping(pill, (detail) => {
-					const next = this._mappingFromPick(detail);
-					entry.mappings[index] = next;
-					this._afterMappingAdded(entry, next, index);
-					this._refreshTargets(entry);
-					this._dispatchStateChange();
-				});
-			});
-			const xBtn = document.createElement("button");
-			xBtn.type = "button";
-			xBtn.className = "sv-unmap";
-			xBtn.textContent = "×";
-			xBtn.title = "Unmap";
-			xBtn.addEventListener("click", () => {
-				entry.mappings.splice(index, 1);
-				this._refreshTargets(entry);
-				this._dispatchStateChange();
-			});
-			pill.append(nameSpan, xBtn);
-			wrap.appendChild(pill);
+		renderTargetPills(entry.targetsEl, entry, {
+			syntheticName: (index) => this._syntheticVarName(entry, index),
+			onChange: () => this._dispatchStateChange(),
+			armFn: (anchorEl, onPick) => this._armMapping(anchorEl, onPick)
 		});
-		const btn = document.createElement("button");
-		btn.type = "button";
-		btn.className = "sv-map-btn";
-		btn.textContent = "Map...";
-		btn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			this._armMapping(btn, (detail) => {
-				const mapping = this._mappingFromPick(detail);
-				entry.mappings.push(mapping);
-				this._afterMappingAdded(entry, mapping, entry.mappings.length - 1);
-				this._refreshTargets(entry);
-				this._dispatchStateChange();
-			});
-		});
-		wrap.appendChild(btn);
 	}
 
 	// A stable name for what a root-<Var> target of this row is fed under —
@@ -1729,15 +1675,11 @@ export class WaWebcamInput extends HTMLElement {
 		return mappingIndex > 0 ? `${base}_${mappingIndex + 1}` : base;
 	}
 
-	// Writes "$syntheticName" onto `targetVarName`'s own "value" attribute —
-	// the explicit XML-visible counterpart to _sendValue's own
-	// playerStore.setVariable(syntheticName, ...) push. wa-var-knobs.js's own
-	// pushFromTarget keeps that Var's live value following along afterward.
+	// Writes "$syntheticName" onto `targetVarName`'s own "value" attribute (see
+	// input/target-pills.js) — the explicit XML-visible counterpart to _sendValue's own
+	// playerStore.setVariable(syntheticName, ...) push.
 	_writeVarReference(targetVarName, syntheticName) {
-		if (!xmlStore.root) return;
-		const targetNode = xmlStore.root.children.find((c) => c.tagName === "Var" && (c.attributes.name || c.attributes.id) === targetVarName);
-		if (!targetNode) return;
-		xmlStore.updateAttributes(targetNode.id, { ...targetNode.attributes, value: `$${syntheticName}` });
+		writeVarReference(targetVarName, syntheticName);
 	}
 
 	// Calibration of a row: while on, its range is measured anew (starting
