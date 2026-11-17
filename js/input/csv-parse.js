@@ -113,6 +113,26 @@ export function parseCsv(text, { delimiter = ",", quote = '"', recordSeparator =
 	return rows;
 }
 
+// The reverse of parseCsv: records of cells as text, with the same delimiter, quote and
+// record separator. A cell is quoted only when it has to be (it holds the delimiter, a quote,
+// a line break, the record separator, or white space at either end that would be trimmed away).
+export function stringifyCsv(table, { delimiter = ",", quote = '"', recordSeparator = "auto" } = {}) {
+	const end = recordSeparator === "auto" ? "\n" : recordSeparator;
+	const cellText = (cell) => {
+		const text = cell === undefined || cell === null ? "" : String(cell);
+		const needs = text !== text.trim() || text.includes(delimiter) || /[\r\n]/.test(text) || text.includes(end) || (quote && text.includes(quote));
+		if (!needs || !quote) return text;
+		return quote + text.split(quote).join(quote + quote) + quote;
+	};
+	return table.map((row) => row.map(cellText).join(delimiter)).join(end) + (recordSeparator === "auto" ? "\n" : "");
+}
+
+// A number as a cell: enough digits to read back what was drawn, with the file's decimal sign.
+export function formatNumber(value, decimal = ".") {
+	const text = String(Number(value.toPrecision(10)));
+	return decimal === "," ? text.replace(".", ",") : text;
+}
+
 const NUMBER_RE = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
 
 // A cell as a number, or NaN (empty, text, "NaN", "n/a"…). A point and a comma

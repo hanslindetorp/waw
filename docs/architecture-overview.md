@@ -493,9 +493,15 @@ ligger den utanför WAXML-dokumentet.
 - **Transport** (`js/input/input-transport.js`, `inputTransport`; baren är
   `wa-input-transport.js` överst i INPUT-panelen, synlig så länge en sektion har något
   tidsbaserat — `inputTransport.use(nyckel)`): en gemensam klocka för allt tidsbaserat i
-  INPUT — PLAY/paus, STOP (till början), längd i sekunder, loop, scrub och zoom
-  (`input-view.js`, gemensam för alla rader i alla sektioner). Längd och loop sparas i
-  `inputs.json` under `"transport"`. Videon tar över klockan via `setTimebase()` (se
+  INPUT — PLAY/paus, STOP (till början), loop (ikon), **hastighet** (en ratt, ½×–2×,
+  logaritmisk så att mitten är normal fart; dubbelklick = 1×), positionen, längden vid vald
+  hastighet, scrub och zoom (förstoringsglas och en "fit"-ikon; `input-view.js`, gemensam för
+  alla rader i alla sektioner). Hastigheten (`inputTransport.rate`) styr klockan och, när en
+  video är tidskälla, videons `playbackRate` — så videon, dess ljud och datan följs åt och
+  allt tar `längd / hastighet` sekunder. `position` och `duration` är filens egna sekunder,
+  `effectivePosition`/`effectiveDuration` det en lyssnare upplever; ett skrivet *Length*
+  betyder tiden vid vald hastighet. Längd, loop och hastighet sparas i `inputs.json` under
+  `"transport"` (zoomen sparas inte — den är bara hur vågformerna ses). Videon tar över klockan via `setTimebase()` (se
   nedan), så att bild och data aldrig glider isär.
 - **Rad** (`js/input/series-row.js`, `SeriesRow` + `SERIES_ROW_CSS`): delas av CSV-
   sektionen och videosektionen. Omfånget för 0 och 1 är som standard seriens lägsta och
@@ -521,6 +527,26 @@ ligger den utanför WAXML-dokumentet.
 - `.csv`, `.tsv` och `.txt` är tillagda i zip-importens och File Managers listor.
 - **Inte med än:** Stage/viewer (källan registreras som `"data"` i `input-sources.js`
   med samma gränssnitt som kameran, så det blir ett eget steg).
+
+### Rita om en vågform och ta bort spikar (CSV- och videorader)
+
+Dubbelklick på en rads vågform går in i ritläget (`SeriesRow.setEditing`, `js/input/series-row.js`): pekaren blir en penna, vågformen blir högre (120 px), raden får en ram i sin färg och en **OK**-knapp. OK, Esc eller ett nytt dubbelklick avslutar (de två prickar som dubbelklicket ritade tas bort). Bara en rad ritas på åt gången. En rad får funktionen när dess `ctx.edit` finns (CSV-rader och videorader).
+
+- Ett drag sätter värdena under pekaren till höjden den är på (0–1 efter radens eget omfång och invert, tillbaka till rått värde); en snabb rörelse fylls i mellan punkterna (`indexesBetween` i `data-series.js`). Värden hamnar alltid inom radens 0=/1=-omfång.
+- När draget slutar skrivs de nya värdena in i CSV-filen: `js/input/csv-edit.js` (`writeCells`, delad av båda sektionerna) ändrar cellerna i den inlästa tabellen (`cellAddress` ger rätt cell för både rader och kolumner), läser om serien (`refreshSeries`: luckor fylls, min/max och percentilcache räknas om) och skriver tillbaka tabellen med `stringifyCsv` med filens egna avgränsare, citattecken, radslut och decimaltecken. Andra celler och serier rörs inte. Filen skrivs alltid som UTF-8 (importinställningen sätts till utf-8 om den var något annat), och `state-change` sparar `inputs.json`.
+- Cmd/Ctrl+Z tar tillbaka ett drag i taget (cellens ursprungliga text sätts tillbaka, även för tomma celler).
+- **Spike-filter** (rullgardinen "Spikes: off / light / medium / strong" = fönster om ±2/4/8 bilder, sparas som `spikes` på raden): ett filter, inte en redigering. `SeriesRow._view()` läser raden genom `despike()` (`data-series.js`): värden som ligger längre från grannarnas median än några typiska steg (bruset och kurvans lutning räknas in, så vanligt brus flaggas inte; spikarna själva påverkar inte stegmåttet) får den medianen. Filtret syns i vågformen, i auto-omfånget och i det som skickas, och "off" visar datan som den är. Det rör inte filen, så en videorad lyfts inte ut av det. Börjar du rita med filtret på skrivs det filtrerade resultatet först in i filen (`_bakeSpikes`, ett steg för ångra) och filtret slås av.
+- Auto-omfånget (lägsta/högsta i datan) räknas om efter en ändring och med spike-filtret, så när spikarna är borta fyller kurvan 0–1 igen. Skriv in 0=/1= för att hålla det fast.
+
+**Videorader.** Första ändringen (första ritdraget, inte dubbelklicket) lyfter radens uppmätta spår ut till `Data/<video>.<rad>.csv` (`time` + värde 0–1 per bild, `_detach` i `wa-video-input.js`). Därefter läser raden sina värden från filen (sparas som `track` på raden i `inputs.json`), raden märks "edited · Revert", och en ny analys av videon rör den inte. **Revert** raderar filen och mäter från analystabellen igen (kräver att analysen finns kvar). Filen kan också öppnas i ett kalkylprogram; den läses då i det format den sparats i (`sniffCsv`) och skrivs tillbaka likadant. Ett borttaget rad-spår lämnar filen kvar i `Data` (som analystabellerna).
+
+### Inställningar per mappning (målknappar)
+
+Knappen för en mappning (en "pill" med parameterns namn, `js/input/target-pills.js`) markeras med ett klick (blå ram, inget nytt mappningsläge). Då visas en rad knappar under den, och ett klick utanför (när ingen mappning pågår) lägger bort dem. Raden har: **invertera** (⇅), **f′ / f″ / f‴** (1:a–3:e derivatan), **gate** (⊓) och **remap** (sikte; det klick på knappen gjorde förut, och inställningarna följer med). De valda inställningarna syns som små tecken på knappen. En mappning är `{ varName, direct?, inputVar?, invert?, mode? }` med `mode` = `"d1" | "d2" | "d3" | "gate"` (inget = värdet), sparas som vanligt i `inputs.json`.
+
+- `mappingOutput(mapping, norm, derivative)` avgör vad som skickas: värdet, derivatan eller gate (1 när värdet är över ca 0,55, 0 under 0,45 — hysteres så att ett värde på gränsen inte fladdrar), och sedan, vid invert, 1 − det. Radens egen invert gäller först och mappningens ovanpå, så är båda på blir det normalt igen. Skickas bara när det ändrats.
+- Derivatan (`SeriesRow._derivatives`) räknas på radens värden efter omfång, invert och spike-filter, med centrala differenser längs spelfältet (upprepat för 2:a och 3:e), och skalas så att de 1 % brantaste hamnar vid ändarna: 0,5 = ingen förändring, över = stiger, under = faller. Räknas om bara när något av det ändras. Spikar i datan gör alltså derivatan platt: använd spike-filtret.
+- Dataraderna och videoraderna har alla fem; kamerarader har bara invert och gate (en derivata behöver en historia).
 
 ### Video (2026-11-17)
 

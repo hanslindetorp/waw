@@ -9,6 +9,9 @@ import { SERIES_ROW_CSS, SeriesRow } from "../input/series-row.js";
 import { MODEL_LABELS as MODEL_NAMES } from "../input/mediapipe.js";
 import { ANALYSIS_RATES, analyzeVideo, ensureDuration } from "../input/video-analysis.js";
 import { frameAt, landmarksToCsv, parseLandmarkCsv, pointAt } from "../input/landmark-table.js";
+import { formatNumber, parseCsv, parseNumber, sniffCsv, stringifyCsv } from "../input/csv-parse.js";
+import { fillGaps, refreshSeries, seriesValues } from "../input/data-series.js";
+import { readCell, writeCells } from "../input/csv-edit.js";
 import { measureSeries } from "../input/video-series.js";
 import { angularOrder } from "../input/measures.js";
 import { LARGE_VIDEO_BYTES, VIDEO_NAME_RE, storeVideo } from "../input/video-files.js";
@@ -371,6 +374,12 @@ export class WaVideoInput extends HTMLElement {
 			get playing() {
 				return !this._v.paused && !this._v.ended;
 			},
+			get playbackRate() {
+				return this._v.playbackRate;
+			},
+			set playbackRate(r) {
+				this._v.playbackRate = r;
+			},
 			play: () => this._videoEl.play(),
 			pause: () => this._videoEl.pause(),
 			_v: this._videoEl
@@ -495,8 +504,10 @@ export class WaVideoInput extends HTMLElement {
 						invert: !!entry.invert,
 						bypassed: !!entry.bypassed,
 						percentile: entry.percentile || 0,
+						spikes: entry.spikes || 0,
 						min: entry.min ?? null,
 						max: entry.max ?? null,
+						track: entry.track || null,
 						mappings: entry.mappings.map((m) => ({ ...m }))
 					}))
 				}
@@ -621,11 +632,19 @@ export class WaVideoInput extends HTMLElement {
 				this._notes[model] = `${a.file}: ${err.message}`;
 			}
 		}
+		// A row whose values were changed by hand reads them from its own CSV file, so it needs
+		// no analysis table.
+		const tracks = {};
+		for (const entry of saved.rows || []) {
+			const node = entry.track && vfs.findByExportPath(entry.track);
+			if (node?.file) tracks[entry.id] = await node.file.text();
+		}
 		(saved.rows || []).forEach((entry) => {
 			const t = item.tables[entry.model];
-			if (!t) return;
+			const text = tracks[entry.id];
+			if (!t && text === undefined) return;
 			this._rowCounter = Math.max(this._rowCounter, entry.id || 0);
-			this._addRow({ ...entry, mappings: (entry.mappings || []).map((m) => ({ ...m })) }, t.table);
+			this._addRow({ ...entry, track: text === undefined ? null : entry.track, mappings: (entry.mappings || []).map((m) => ({ ...m })) }, t?.table, text);
 		});
 		this._renderAnalysis();
 		this._renderRows();
@@ -720,7 +739,7 @@ export class WaVideoInput extends HTMLElement {
 			if (this._item !== item) return null; // the video was taken away meanwhile
 			item.tables[model] = { table: result.table, file: this._writeTable(model, result.table), fps: this._rate };
 			// Rows that read from an earlier pass of this model now read from the new one.
-			item.rows.filter((r) => r.entry.model === model).forEach((r) => this._remeasure(r, result.table));
+			item.rows.filter((r) => r.entry.model === model && !r.track).forEach((r) => this._remeasure(r, result.table));
 			this._dispatchStateChange();
 			return result.table;
 		} catch (err) {
@@ -928,7 +947,7 @@ export class WaVideoInput extends HTMLElement {
 	}
 
 	// A row from its saved form: its values are measured from the table at once.
-	_addRow(raw, table) {
+	_addRow(raw, table, trackText) {
 		const item = this._item;
 		const entry = {
 			id: raw.id,
@@ -942,14 +961,17 @@ export class WaVideoInput extends HTMLElement {
 			invert: !!raw.invert,
 			bypassed: !!raw.bypassed,
 			percentile: raw.percentile || 0,
+			spikes: raw.spikes || 0,
 			min: raw.min ?? null,
 			max: raw.max ?? null,
+			track: raw.track || null,
 			mappings: raw.mappings
 		};
 		const data = { length: 0, xs: null };
 		const series = { name: entry.name, sourceIndex: 0, filled: new Float64Array(0), min: 0, max: 1 };
-		const r = { entry, series, data };
-		this._remeasure(r, table);
+		const r = { entry, series, data, track: null };
+		if (entry.track && trackText !== undefined) this._loadTrack(r, trackText);
+		else this._remeasure(r, table);
 		r.row = new SeriesRow(entry, () => ({ data, series, interpolate: "linear" }), {
 			onChange: () => this._dispatchStateChange(),
 			onRemove: (e) => {
@@ -957,8 +979,19 @@ export class WaVideoInput extends HTMLElement {
 				this._renderRows();
 				this._dispatchStateChange();
 			},
-			syntheticName: (e, index) => (index > 0 ? `video_${e.key}_${index + 1}` : `video_${e.key}`)
+			syntheticName: (e, index) => (index > 0 ? `video_${e.key}_${index + 1}` : `video_${e.key}`),
+			edit: {
+				begin: () => this._detach(r),
+				// Before the track is lifted out the value is read from the series itself.
+				readCell: (e, i) => (r.track ? readCell(r.track, series, i) : formatNumber(series.filled[i])),
+				writeCells: (e, cells) => {
+					writeCells(r.track, series, cells, data.length);
+					this._dispatchStateChange();
+				},
+				revert: () => this._revert(r)
+			}
 		});
+		r.row.setEdited(!!r.track);
 		item.rows.push(r);
 		return entry;
 	}
@@ -969,10 +1002,76 @@ export class WaVideoInput extends HTMLElement {
 		const aspect = this._videoEl.videoWidth / Math.max(1, this._videoEl.videoHeight) || 1;
 		const duration = this._videoEl.duration || table.times[table.times.length - 1] || 1;
 		r.series.filled = measureSeries(table, r.entry.labels, r.entry.mode, aspect).values;
+		// Measured over the whole video, so 0–1 by definition (a track read from a file has its own).
+		r.series.sourceIndex = 0;
+		r.series.min = 0;
+		r.series.max = 1;
+		delete r.series._percentiles;
 		r.data.length = table.times.length;
 		r.data.xs = Float64Array.from(table.times, (t) => t / duration);
 		r.row?.draw();
 		r.row?.update({ quiet: true });
+	}
+
+	// ── Values changed by hand (see series-row.js: drawing, Remove spikes) ──
+	// The first change lifts the row's measured values out into a CSV file of its own,
+	// Data/<video>.<row>.csv with a time and a value (0–1) per picture. From then on the row
+	// reads them from that file — which can also be opened elsewhere (a spreadsheet) — and an
+	// analysis made again leaves it alone. Revert deletes the file and measures from the
+	// analysis once more.
+	_detach(r) {
+		if (r.track) return;
+		const item = this._item;
+		const table = item.tables[r.entry.model]?.table;
+		if (!table) return;
+		const folderId = this._dataFolderId();
+		const base = `${baseName(item.file.split("/").pop())}.${r.entry.key}`;
+		const taken = new Set(vfs.listFolder(folderId).map((n) => n.name));
+		let name = `${base}.csv`;
+		for (let n = 2; taken.has(name); n++) name = `${base}-${n}.csv`;
+		const imp = { delimiter: ",", quote: '"', recordSeparator: "auto", decimal: ".", encoding: "utf-8" };
+		const rows = [["time", r.entry.key]];
+		for (let f = 0; f < table.times.length; f++) rows.push([formatNumber(table.times[f]), formatNumber(r.series.filled[f])]);
+		const node = vfs.uploadFile(folderId, new File([stringifyCsv(rows, imp)], name, { type: "text/csv" }));
+		r.entry.track = vfs.getExportPath(node.id);
+		r.track = { file: r.entry.track, table: rows, layout: { orientation: "columns", header: true, timeColumn: true }, import: imp };
+		r.series.sourceIndex = 1;
+		refreshSeries(r.series, rows, r.track.layout, table.times.length, ".");
+		r.row?.setEdited(true);
+		this._dispatchStateChange();
+	}
+
+	// A row's values from its CSV file's text (a file edited elsewhere may be written in
+	// another format: it is read the way it is found, and written back the same way).
+	_loadTrack(r, text) {
+		const imp = { ...sniffCsv(text), encoding: "utf-8" };
+		const table = parseCsv(text, imp);
+		const header = Number.isNaN(parseNumber(table[0]?.[0], imp.decimal));
+		const layout = { orientation: "columns", header, timeColumn: true };
+		const length = table.length - (header ? 1 : 0);
+		const duration = this._videoEl.duration || 1;
+		r.track = { file: r.entry.track, table, layout, import: imp };
+		r.series.sourceIndex = 1;
+		r.series.filled = fillGaps(seriesValues(table, layout, 1, length, imp.decimal));
+		refreshSeries(r.series, table, layout, length, imp.decimal);
+		r.data.length = length;
+		r.data.xs = Float64Array.from({ length }, (_, i) => (parseNumber(table[i + (header ? 1 : 0)][0], imp.decimal) || 0) / duration);
+	}
+
+	// Gives the changes up: the CSV file is deleted and the row measures from the analysis.
+	_revert(r) {
+		const table = this._item.tables[r.entry.model]?.table;
+		if (!r.track || !table) {
+			window.alert("The analysis this row was measured from is not in the project — analyse the video again first.");
+			return;
+		}
+		const node = vfs.findByExportPath(r.track.file);
+		r.track = null;
+		r.entry.track = null;
+		if (node) vfs.delete(node.id);
+		this._remeasure(r, table);
+		r.row.resetEdits();
+		this._dispatchStateChange();
 	}
 
 	_uniqueKey(base) {

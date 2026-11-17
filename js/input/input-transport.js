@@ -9,11 +9,19 @@
 // drift apart. A timebase is any object with
 //   duration, currentTime (settable), playing, play(), pause().
 //
+// The speed: `rate` (0.5–2, 1 is normal) makes the clock run faster or slower — a file takes
+// duration / rate seconds to play, and a video's own playbackRate is set to match (so the
+// picture, its sound and the data stay together). `position` and `duration` are in the
+// file's own seconds; effectivePosition / effectiveDuration are what a listener experiences
+// at the chosen speed.
+//
 // Events (CustomEvent on this object):
 //   "tick"   — the position changed (while playing, and after every seek);
 //   "state"  — playing, duration, loop or the timebase changed.
 
 const DEFAULT_DURATION = 10; // seconds
+export const MIN_RATE = 0.5;
+export const MAX_RATE = 2;
 
 class InputTransport extends EventTarget {
 	constructor() {
@@ -22,6 +30,7 @@ class InputTransport extends EventTarget {
 		this._position = 0;
 		this._playing = false;
 		this._loop = true;
+		this._rate = 1;
 		this._timebase = null;
 		this._users = new Set(); // the sections that have something to play (see use())
 		this._raf = null;
@@ -49,6 +58,19 @@ class InputTransport extends EventTarget {
 
 	get loop() {
 		return this._loop;
+	}
+
+	get rate() {
+		return this._rate;
+	}
+
+	// How long the whole file takes to play at the chosen speed, and how far into that we are.
+	get effectiveDuration() {
+		return this.duration / this._rate;
+	}
+
+	get effectivePosition() {
+		return this.position / this._rate;
 	}
 
 	get hasTimebase() {
@@ -81,6 +103,14 @@ class InputTransport extends EventTarget {
 		this._position = Math.min(this._position, s);
 		this._emit("state");
 		this._emit("tick");
+	}
+
+	setRate(rate) {
+		const r = Math.min(MAX_RATE, Math.max(MIN_RATE, Number(rate) || 1));
+		if (r === this._rate) return;
+		this._rate = r;
+		if (this._timebase) this._timebase.playbackRate = r;
+		this._emit("state");
 	}
 
 	setLoop(on) {
@@ -140,6 +170,7 @@ class InputTransport extends EventTarget {
 	setTimebase(timebase) {
 		this._timebase = timebase || null;
 		if (this._timebase) {
+			this._timebase.playbackRate = this._rate;
 			this._playing = false;
 			this._start();
 		}
@@ -157,7 +188,7 @@ class InputTransport extends EventTarget {
 		this._raf = null;
 		if (!this.playing && !this._timebase) return;
 		if (!this._timebase) {
-			this._position += (now - this._last) / 1000;
+			this._position += ((now - this._last) / 1000) * this._rate;
 			if (this._position >= this._duration) {
 				if (this._loop) {
 					this._position %= this._duration;

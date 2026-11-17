@@ -2,8 +2,8 @@
 // a CSV can come in, the guesses about them, and how a value is read out.
 //   node scripts/test-csv.mjs
 import assert from "node:assert/strict";
-import { decodeBytes, parseCsv, parseNumber, sniffCsv } from "../js/input/csv-parse.js";
-import { buildDataset, guessLayout, normalize, percentileRange, quantile, sampleSeries, transpose, waveformColumns } from "../js/input/data-series.js";
+import { decodeBytes, formatNumber, parseCsv, parseNumber, sniffCsv, stringifyCsv } from "../js/input/csv-parse.js";
+import { buildDataset, cellAddress, despike, guessLayout, indexesBetween, refreshSeries, positionOf, normalize, percentileRange, quantile, sampleSeries, transpose, waveformColumns } from "../js/input/data-series.js";
 
 let failures = 0;
 function test(name, fn) {
@@ -236,6 +236,65 @@ test("a percentile range ignores a wild reading", () => {
 	assert.ok(r.hi < 1.1 && r.hi > 0.9, `hi was ${r.hi}`);
 	assert.ok(Math.abs(r.lo - 0.02) < 0.011);
 	assert.equal(percentileRange([NaN], 2), null);
+});
+
+test("stringify: quotes only when needed, and parses back to the same table", () => {
+	const table = [["a;b", 'say "hi"', " pad", "1,5"], ["", "x\ny", "3", "4"]];
+	for (const opts of [{ delimiter: ";", quote: '"' }, { delimiter: ",", quote: '"' }, { delimiter: "\t", quote: "'" }, { delimiter: ";", quote: '"', recordSeparator: "|" }]) {
+		assert.deepEqual(parseCsv(stringifyCsv(table, opts), opts), table, JSON.stringify(opts));
+	}
+	assert.equal(stringifyCsv([["a", "b"], ["1", "2"]]), "a,b\n1,2\n");
+});
+
+test("formatNumber: enough digits, the file's decimal sign", () => {
+	assert.equal(formatNumber(0.1 + 0.2), "0.3");
+	assert.equal(formatNumber(1.5, ","), "1,5");
+	assert.equal(parseNumber(formatNumber(1 / 3, ","), ","), +(1 / 3).toPrecision(10));
+});
+
+test("editing: a cell is found for both orientations and the series is read anew", () => {
+	for (const orientation of ["columns", "rows"]) {
+		const text = orientation === "columns" ? "t;v\n0;1\n1;2\n2;3" : "t;0;1;2\nv;1;2;3";
+		const table = parseCsv(text, { delimiter: ";" });
+		const layout = { orientation, header: true, timeColumn: true };
+		const ds = buildDataset(table, layout, ".");
+		const s = ds.series[0];
+		const [r, c] = cellAddress(layout, s.sourceIndex, 1);
+		assert.equal(table[r][c], "2");
+		table[r][c] = "";
+		refreshSeries(s, table, layout, ds.length, ".");
+		assert.deepEqual([...s.filled], [1, 2, 3]); // the gap is filled between 1 and 3
+		table[r][c] = "10";
+		refreshSeries(s, table, layout, ds.length, ".");
+		assert.deepEqual([...s.filled], [1, 10, 3]);
+		assert.equal(s.max, 10);
+	}
+});
+
+test("drawing: the values under a stroke, and the nearest one when none is", () => {
+	const even = read("v\n0\n1\n2\n3\n4").dataset; // positions 0, .25, .5, .75, 1
+	assert.deepEqual(indexesBetween(even, 0.2, 0.6), [1, 2]);
+	assert.deepEqual(indexesBetween(even, 0.3, 0.32), [1]);
+	assert.deepEqual(indexesBetween(even, 0, 1), [0, 1, 2, 3, 4]);
+	assert.equal(positionOf(even, 2), 0.5);
+	const timed = read("t;v\n0;1\n1;2\n4;3", ";").dataset;
+	assert.equal(positionOf(timed, 1), 0.25);
+});
+
+test("despike: single and short spikes are found, slopes and flat stretches are left", () => {
+	const v = Array.from({ length: 100 }, (_, i) => 0.5 + 0.3 * Math.sin(i / 8));
+	const clean = [...v];
+	v[20] = 1;
+	v[50] = 0;
+	v[51] = 0.99; // a spike two pictures long
+	const found = despike(v, { radius: 4, floor: 0.01 });
+	const idx = found.map(([i]) => i);
+	assert.deepEqual(idx, [20, 50, 51]);
+	for (const [i, m] of found) assert.ok(Math.abs(m - clean[i]) < 0.1, `${i}: ${m} vs ${clean[i]}`);
+	assert.deepEqual(despike(clean, { radius: 4, floor: 0.01 }), []);
+	assert.deepEqual(despike(new Array(30).fill(0.5), { radius: 2, floor: 0.01 }), []);
+	assert.deepEqual(despike([0, 1, 0, 0, 0, 0], { radius: 2, floor: 0.01 }).map(([i]) => i), [1]);
+	assert.deepEqual(despike([NaN, 0, NaN], { radius: 2 }), []);
 });
 
 console.log(failures ? `\n${failures} failed` : "\nall passed");

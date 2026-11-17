@@ -127,6 +127,67 @@ export function buildDataset(table, layout, decimal = ".") {
 	return { length: body.length, xs, series };
 }
 
+// Where a value of a series sits in the parsed table: [line, cell] of value `i` of the series
+// read from grid column `sourceIndex`. (The inverse of what buildDataset does with the layout.)
+export function cellAddress(layout, sourceIndex, i) {
+	const at = i + (layout.header ? 1 : 0);
+	return layout.orientation === "rows" ? [sourceIndex, at] : [at, sourceIndex];
+}
+
+// The raw numbers (NaN where there is none) of one series, read from the table.
+export function seriesValues(table, layout, sourceIndex, length, decimal = ".") {
+	return Float64Array.from({ length }, (_, i) => {
+		const [r, c] = cellAddress(layout, sourceIndex, i);
+		return parseNumber(table[r]?.[c], decimal);
+	});
+}
+
+// Re-reads a series from the table after cells in it were changed: its gaps are filled again
+// and its lowest and highest found again.
+export function refreshSeries(series, table, layout, length, decimal = ".") {
+	const raw = seriesValues(table, layout, series.sourceIndex, length, decimal);
+	let min = Infinity;
+	let max = -Infinity;
+	for (const v of raw) {
+		if (!Number.isFinite(v)) continue;
+		if (v < min) min = v;
+		if (v > max) max = v;
+	}
+	series.filled = fillGaps(raw);
+	series.min = min;
+	series.max = max;
+	delete series._percentiles;
+}
+
+// The indexes of the values whose position (0–1 of the play-bar) lies between a and b; when
+// there is none, the one nearest. Used to put a drawn stroke on the values.
+export function indexesBetween(dataset, a, b) {
+	const n = dataset.length;
+	if (!n) return [];
+	const lo = Math.min(a, b);
+	const hi = Math.max(a, b);
+	const out = [];
+	if (n === 1) return [0];
+	const first = Math.max(0, Math.floor(indexAt(dataset, lo)));
+	const last = Math.min(n - 1, Math.ceil(indexAt(dataset, hi)));
+	const posOf = (i) => (dataset.xs ? dataset.xs[i] : i / (n - 1));
+	for (let i = first; i <= last; i++) {
+		const p = posOf(i);
+		if (p >= lo - 1e-12 && p <= hi + 1e-12) out.push(i);
+	}
+	if (!out.length) {
+		const mid = indexAt(dataset, (lo + hi) / 2);
+		out.push(Math.min(n - 1, Math.max(0, Math.round(mid))));
+	}
+	return out;
+}
+
+// The position (0–1 of the play-bar) of value `i`.
+export function positionOf(dataset, i) {
+	const n = dataset.length;
+	return dataset.xs ? dataset.xs[i] : n > 1 ? i / (n - 1) : 0;
+}
+
 // The fractional index into a series at a point (0–1) of the play-bar.
 function indexAt(dataset, pos) {
 	const n = dataset.length;
@@ -156,6 +217,40 @@ export function sampleSeries(dataset, series, pos, interpolate = "linear") {
 	if (interpolate === "step") return series.filled[i];
 	const j = Math.min(n - 1, i + 1);
 	return series.filled[i] + (series.filled[j] - series.filled[i]) * (f - i);
+}
+
+const median = (a) => {
+	const b = Float64Array.from(a).sort();
+	const m = b.length >> 1;
+	return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2;
+};
+
+// Spikes: values that jump away from the ones around them for a moment (a tracker that
+// loses a point for a picture or two). A value is a spike when it lies further from the
+// median of its neighbours (`radius` pictures either side) than what a value can be from
+// that median without being one: a few typical steps (`radius` for following the curve, 3
+// more for noise; a step is the change from one picture to the next, and the typical one is
+// the median over a wider stretch, where the spikes are too few to count), times `threshold`;
+// and than `floor`, so a flat stretch does not make the smallest wobble a spike. Returns
+// [[index, replacement]] where the replacement is that median. A run of spikes shorter than
+// half the window is found.
+export function despike(values, { radius = 4, threshold = 1, floor = 0 } = {}) {
+	const n = values.length;
+	const found = [];
+	const step = Float64Array.from({ length: Math.max(0, n - 1) }, (_, k) => Math.abs(values[k + 1] - values[k]));
+	const wide = radius * 3 + 10;
+	for (let i = 0; i < n; i++) {
+		if (!Number.isFinite(values[i])) continue;
+		const win = [];
+		for (let k = Math.max(0, i - radius); k <= Math.min(n - 1, i + radius); k++) if (Number.isFinite(values[k])) win.push(values[k]);
+		if (win.length < 3) continue;
+		const around = [];
+		for (let k = Math.max(0, i - wide); k < Math.min(n - 1, i + wide); k++) if (Number.isFinite(step[k])) around.push(step[k]);
+		const allowed = Math.max(floor, threshold * (radius + 3) * median(around));
+		const m = median(win);
+		if (Math.abs(values[i] - m) > allowed) found.push([i, m]);
+	}
+	return found;
 }
 
 // The q-quantile (0–1) of the finite numbers in `values`, read between neighbours; NaN if

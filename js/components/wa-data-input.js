@@ -4,6 +4,7 @@ import { vfs, ROOT_ID, isHiddenName } from "../vfs/VFS.js";
 import { inputTransport } from "../input/input-transport.js";
 import { inputView } from "../input/input-view.js";
 import { decodeBytes, parseCsv } from "../input/csv-parse.js";
+import { readCell, writeCells } from "../input/csv-edit.js";
 import { buildDataset } from "../input/data-series.js";
 import { SERIES_ROW_CSS, SeriesRow } from "../input/series-row.js";
 import { openCsvImportDialog } from "./wa-csv-import-dialog.js";
@@ -291,6 +292,7 @@ export class WaDataInput extends HTMLElement {
 			invert: !!e.invert,
 			bypassed: !!e.bypassed,
 			percentile: e.percentile || 0,
+			spikes: e.spikes || 0,
 			min: e.min ?? null,
 			max: e.max ?? null,
 			mappings: e.mappings.map((m) => ({ ...m }))
@@ -438,7 +440,9 @@ export class WaDataInput extends HTMLElement {
 		const o = ds.import;
 		const { text } = decodeBytes(buffer, o.encoding);
 		const table = parseCsv(text, o);
-		ds.data = buildDataset(table, { orientation: o.orientation, header: !!o.header, timeColumn: !!o.timeColumn }, o.decimal);
+		ds.table = table;
+		ds.layout = { orientation: o.orientation, header: !!o.header, timeColumn: !!o.timeColumn };
+		ds.data = buildDataset(table, ds.layout, o.decimal);
 		if (!ds.data.series.length) throw new Error("No numbers found in the file with these settings");
 		ds.interpolate = o.interpolate === "step" ? "step" : "linear";
 	}
@@ -461,6 +465,7 @@ export class WaDataInput extends HTMLElement {
 				invert: !!old?.invert,
 				bypassed: !!old?.bypassed,
 				percentile: old?.percentile || 0,
+				spikes: old?.spikes || 0,
 				min: old?.min ?? null,
 				max: old?.max ?? null,
 				mappings: (old?.mappings || []).map((m) => ({ ...m }))
@@ -548,13 +553,27 @@ export class WaDataInput extends HTMLElement {
 					this._renderAll();
 					this._dispatchStateChange();
 				},
-				syntheticName: (entry, index) => this._syntheticName(entry, index)
+				syntheticName: (entry, index) => this._syntheticName(entry, index),
+				edit: {
+					readCell: (entry, i) => this._readCell(ds, r.series, i),
+					writeCells: (entry, cells) => this._writeCells(ds, r.series, cells)
+				}
 			});
 			this._resizeObserver.observe(r.row.waveEl);
 			rows.appendChild(r.row.el);
 		});
 		wrap.appendChild(rows);
 		return wrap;
+	}
+
+	// ── Drawing over the values (see series-row.js, input/csv-edit.js) ───
+	_readCell(ds, series, i) {
+		return readCell(ds, series, i);
+	}
+
+	_writeCells(ds, series, cells) {
+		writeCells(ds, series, cells, ds.data.length);
+		this._dispatchStateChange();
 	}
 
 	_syntheticName(entry, index) {

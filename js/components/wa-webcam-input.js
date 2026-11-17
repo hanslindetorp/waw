@@ -10,7 +10,7 @@ import { showNotice } from "./wa-notice-dialog.js";
 import { confirmDialog } from "./wa-confirm-dialog.js";
 import { startRecording } from "../input/video-recorder.js";
 import { LARGE_VIDEO_BYTES, MAX_RECORDING_BYTES, formatSize, storeVideo } from "../input/video-files.js";
-import { armMapping, mappingFromPick, writeVarReference, renderTargetPills } from "../input/target-pills.js";
+import { armMapping, mappingFromPick, mappingOutput, writeVarReference, renderTargetPills } from "../input/target-pills.js";
 import { angularOrder, area2d, axisMean, dist2d, emptyCalib, expandCalib, finalizeCalib, kindForCount, linePosition, normalizeSample, pushSample, sampleFor, widen } from "../input/measures.js";
 import "./wa-color-picker.js";
 import { COLOR_PALETTE } from "./wa-color-picker.js";
@@ -1712,7 +1712,9 @@ export class WaWebcamInput extends HTMLElement {
 		renderTargetPills(entry.targetsEl, entry, {
 			syntheticName: (index) => this._syntheticVarName(entry, index),
 			onChange: () => this._dispatchStateChange(),
-			armFn: (anchorEl, onPick) => this._armMapping(anchorEl, onPick)
+			armFn: (anchorEl, onPick) => this._armMapping(anchorEl, onPick),
+			// (A derivative needs a past; the camera has none to speak of.)
+			features: ["invert", "gate"]
 		});
 	}
 
@@ -1782,7 +1784,8 @@ export class WaWebcamInput extends HTMLElement {
 			if (!mapping?.varName) return;
 			// A target made straight onto a parameter (see input-mapping.js) is
 			// fed through the hidden "input_<name>" variable its <Var> reads.
-			playerStore.setVariable(mapping.direct ? mapping.inputVar : this._syntheticVarName(entry, index), norm);
+			const out = mappingOutput(mapping, norm, null);
+			if (out !== undefined) playerStore.setVariable(mapping.direct ? mapping.inputVar : this._syntheticVarName(entry, index), out);
 		});
 	}
 
