@@ -65,9 +65,11 @@ export function guessLayout(table, decimal = ".") {
 	return layout;
 }
 
-// Fills the gaps (NaN) of a series: between two values linearly, before the
-// first and after the last by holding the nearest.
-function fillGaps(values) {
+// Fills the gaps (NaN) of a series: between two values linearly, before the first and
+// after the last by holding the nearest. With `times` (seconds per value) and `maxGap`,
+// a gap longer than that is not bridged by a line: the last value is held until the next
+// one comes — a hand that left the picture does not slide to where it comes back.
+export function fillGaps(values, { times = null, maxGap = Infinity } = {}) {
 	const out = Float64Array.from(values);
 	let first = -1;
 	for (let i = 0; i < out.length; i++) {
@@ -80,10 +82,10 @@ function fillGaps(values) {
 	for (let i = 0; i < first; i++) out[i] = out[first];
 	let prev = first;
 	for (let i = first + 1; i < out.length; i++) {
-		if (Number.isFinite(out[i])) {
-			for (let k = prev + 1; k < i; k++) out[k] = out[prev] + ((out[i] - out[prev]) * (k - prev)) / (i - prev);
-			prev = i;
-		}
+		if (!Number.isFinite(out[i])) continue;
+		const bridge = !times || times[i] - times[prev] <= maxGap;
+		for (let k = prev + 1; k < i; k++) out[k] = bridge ? out[prev] + ((out[i] - out[prev]) * (k - prev)) / (i - prev) : out[prev];
+		prev = i;
 	}
 	for (let i = prev + 1; i < out.length; i++) out[i] = out[prev];
 	return out;

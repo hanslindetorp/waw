@@ -11,6 +11,8 @@ import { inputSources } from "../state/input-sources.js";
 //
 //   { "version": 1,
 //     "webcam": { "entries": [ ...rows, see wa-webcam-input.js getEntries() ] },
+//     "transport": { "duration", "loop" } — the play bar's length and loop, see wa-input-transport.js,
+//     "video": { ... the video and its rows, see wa-video-input.js getProject() },
 //     "data": { ... the CSV datasets and their rows, see wa-data-input.js getProject() } }
 //
 // The file only comes to exist once there is a row to save. A project whose
@@ -27,14 +29,27 @@ let saveTimer = null;
 let lastJson = null; // what the file holds / would hold — only a real change is written
 const wired = new Map(); // source name -> the element whose "state-change" is followed
 
+// The sources that keep their whole state as one object (getProject()/applyProject());
+// the camera keeps its rows (getEntries()/applyEntries()), for historical reasons.
+// "transport" is first: the others read the play bar's length when they come in.
+const PROJECT_SOURCES = ["transport", "video", "data"];
+
+function projectParts() {
+	const parts = {};
+	for (const name of PROJECT_SOURCES) {
+		const part = inputSources.get(name)?.getProject();
+		if (part) parts[name] = part;
+	}
+	return parts;
+}
+
 function currentJson() {
 	const webcam = inputSources.get("webcam");
-	const data = inputSources.get("data")?.getProject();
-	return JSON.stringify({ version: 1, webcam: { entries: webcam ? webcam.getEntries() : [] }, ...(data ? { data } : {}) }, null, 2);
+	return JSON.stringify({ version: 1, webcam: { entries: webcam ? webcam.getEntries() : [] }, ...projectParts() }, null, 2);
 }
 
 function hasRows() {
-	return (inputSources.get("webcam")?.getEntries().length ?? 0) > 0 || !!inputSources.get("data")?.getProject();
+	return (inputSources.get("webcam")?.getEntries().length ?? 0) > 0 || Object.keys(projectParts()).length > 0;
 }
 
 function scheduleSave() {
@@ -64,7 +79,7 @@ export function flushInputs() {
 // Follows the input elements' changes. Called whenever an input source
 // registers (it may come and go), and safe to call again.
 function wire() {
-	for (const name of ["webcam", "data"]) {
+	for (const name of ["webcam", ...PROJECT_SOURCES]) {
 		const element = inputSources.get(name);
 		if (element === wired.get(name)) continue;
 		wired.get(name)?.removeEventListener("state-change", scheduleSave);
@@ -94,7 +109,7 @@ export async function initInputs() {
 		try {
 			const data = JSON.parse(await existing.file.text());
 			webcam?.applyEntries(data?.webcam?.entries);
-			await inputSources.get("data")?.applyProject(data?.data);
+			for (const name of PROJECT_SOURCES) await inputSources.get(name)?.applyProject(data?.[name]);
 		} catch {
 			// A corrupt inputs.json never stops a project from opening.
 		}

@@ -490,12 +490,15 @@ ligger den utanför WAXML-dokumentet.
   uppläsningen). Luckor (tomma celler) fylls: linjärt mellan värden, håller i kanterna.
   Värdena fördelas jämnt över hela speltiden, eller placeras efter en tidskolumn.
   Mellan värdena glider det (linear) eller hålls (step).
-- **Transport** (`js/input/input-transport.js`, `inputTransport`): en gemensam klocka
-  för allt tidsbaserat i INPUT — PLAY/paus, STOP (till början), längd i sekunder,
-  loop, scrub. En kommande video ska ta över den via `setTimebase()` (längden och
-  positionen kommer då från videon och play/stop/seek skickas vidare dit) så att bild
-  och data aldrig glider isär; inget annat behöver ändras.
-- **Vågformer**: per rad i radens färg (auto ur `COLOR_PALETTE`, sedan gyllene vinkeln;
+- **Transport** (`js/input/input-transport.js`, `inputTransport`; baren är
+  `wa-input-transport.js` överst i INPUT-panelen, synlig så länge en sektion har något
+  tidsbaserat — `inputTransport.use(nyckel)`): en gemensam klocka för allt tidsbaserat i
+  INPUT — PLAY/paus, STOP (till början), längd i sekunder, loop, scrub och zoom
+  (`input-view.js`, gemensam för alla rader i alla sektioner). Längd och loop sparas i
+  `inputs.json` under `"transport"`. Videon tar över klockan via `setTimebase()` (se
+  nedan), så att bild och data aldrig glider isär.
+- **Rad** (`js/input/series-row.js`, `SeriesRow` + `SERIES_ROW_CSS`): delas av CSV-
+  sektionen och videosektionen. Vågform: per rad i radens färg (auto ur `COLOR_PALETTE`, sedan gyllene vinkeln;
   fri färg via `wa-color-picker`), normaliserad 0–1 efter radens eget omfång (tomt =
   datats min/max, annars egna "0 =" och "1 ="; invert) och med ett vertikalt streck där
   vi är. Zoomen är gemensam för alla rader (knapparna, Ctrl/⌘ + hjul, nyp; sidleds
@@ -513,7 +516,46 @@ ligger den utanför WAXML-dokumentet.
   värden skickas först vid uppspelning, scrub eller när en mappning görs.
 - `.csv`, `.tsv` och `.txt` är tillagda i zip-importens och File Managers listor.
 - **Inte med än:** Stage/viewer (källan registreras som `"data"` i `input-sources.js`
-  med samma gränssnitt som kameran, så det blir ett eget steg), video som tidskälla.
+  med samma gränssnitt som kameran, så det blir ett eget steg).
+
+### Video (2026-11-17)
+
+Tredje sektionen (`wa-video-input.js`): en videofil som inputkälla, vid sidan av live-
+kameran. Samma trackers (hand/body/face, `js/input/mediapipe.js` delas med kameran) körs
+över hela filen en gång, punkterna för varje bildruta sparas som CSV, och en rad —
+gjord som en kamerarad: "+", hand|body|face, klicka en eller flera punkter, `map…` — läser
+sina värden ur tabellen och fungerar som en CSV-rad.
+
+- **Analys** (`js/input/video-analysis.js`): **per modell, över hela videon, vid första
+  användningen**, med förloppsindikator och Cancel. Kostnaden är detektorn per bildruta,
+  oavsett hur många punkter som önskas, så alla modellens punkter sparas och varje senare
+  rad är gratis och direkt. Bilderna tas genom seek per bildruta (exakt, till skillnad från
+  snabbspolning), i ordning med en egen tracker i VIDEO-läge. Hastighet 30/15/10 bilder per
+  sekund. "Analyse again" kör om och räknar om raderna. Vänster/höger hand följer samma
+  byte som kameran (MediaPipe antar spegelvänd bild). En webm från MediaRecorder saknar
+  längd i headern; `ensureDuration()` hittar den.
+- **Lagring** (`js/input/landmark-table.js`): `Data/<video>.<modell>.csv` — `time` i
+  sekunder, sedan `<punkt>x/y/z` (ansiktet bara x/y, tre decimaler; övriga fyra), tomt där
+  en punkt inte hittades. Mappen `Data` skapas vid behov. Filen läses också av CSV-sektionen
+  (tidsaxeln hittas av sig själv). En uppladdad video läggs i en mapp `video` om det finns en,
+  annars överst; över 100 MB visas en varning (VFS ligger i RAM).
+- **Rader** (`js/input/video-series.js`, `measures.js`): samma mått som kameran (en punkt
+  horisontellt/vertikalt/båda, avstånd, area) men omfånget är det hela videon täcker, så
+  inget behöver kalibreras genom att röra sig; en videofil visas som den är, så punkter
+  speglas inte. `measures.js` är utbruten ur kamerakoden (provas av `scripts/test-measures.mjs`).
+- **Luckor**: en punkt som saknas en kort stund (≤ 0,5 s) överbryggas med en linje, en längre
+  frånvaro håller sista värdet tills punkten kommer tillbaka (`fillGaps` med `times`,
+  `MAX_GAP_SECONDS`). Filen behåller luckorna.
+- **Klockan**: videon blir spelfältets tidskälla (`inputTransport.setTimebase`), så längden
+  är videons och PLAY/STOP/scrub/zoom flyttar bild och data tillsammans; videons ljud spelas
+  (högtalarknappen stänger av det). Punkterna visas över bilden ur tabellen, också vid scrub.
+- **Sparas** i `inputs.json` under `"video"` (`videos: [ … ]` — en video i taget i gränssnittet,
+  strukturen är en lista). Provas med `node scripts/test-landmarks.mjs`.
+- **Ljud i WAXML-grafen — inte byggt:** `MediaStreamAudioSourceNode` i waxml.js har ett
+  färdigt `initStream(stream)`, men finns ett sådant element i dokumentet ber waxml.js om
+  mikrofonen och matar den in i noden. Videoljudet kan alltså inte skickas dit utan att
+  mikrofonfrågan följer med; det behöver ett eget element (eller ett attribut som hoppar över
+  mikrofonen) i waxml.js. Se Hans.
 
 ## View-meny, Library (DEMO) och Share-dialogen (nytt, 2026-09-10/13)
 

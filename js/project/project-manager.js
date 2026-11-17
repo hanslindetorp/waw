@@ -208,7 +208,7 @@ export async function openProjectFromFiles(files) {
 		const parts = path.split("/");
 		if (parts.some(isHiddenName)) continue;
 		const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
-		if (![".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml", ".json", ".csv", ".tsv", ".txt"].includes(ext)) continue;
+		if (![".mp3", ".wav", ".ogg", ".m4a", ".xml", ".waxml", ".json", ".csv", ".tsv", ".txt", ".mp4", ".m4v", ".mov", ".webm", ".ogv"].includes(ext)) continue;
 		vfs.uploadFile(folderFor(parts.slice(0, -1).join("/")), file);
 	}
 	await finishProjectLoad();

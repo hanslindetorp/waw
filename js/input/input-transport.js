@@ -23,6 +23,7 @@ class InputTransport extends EventTarget {
 		this._playing = false;
 		this._loop = true;
 		this._timebase = null;
+		this._users = new Set(); // the sections that have something to play (see use())
 		this._raf = null;
 		this._last = 0;
 		this._frame = this._frame.bind(this);
@@ -52,6 +53,25 @@ class InputTransport extends EventTarget {
 
 	get hasTimebase() {
 		return !!this._timebase;
+	}
+
+	// Whether any section has something time-based to play; the transport bar is
+	// shown while one does.
+	get inUse() {
+		return this._users.size > 0;
+	}
+
+	use(key) {
+		if (this._users.has(key)) return;
+		this._users.add(key);
+		this._emit("state");
+	}
+
+	release(key) {
+		if (this._users.delete(key)) {
+			if (!this._users.size) this.stop();
+			this._emit("state");
+		}
 	}
 
 	setDuration(seconds) {
