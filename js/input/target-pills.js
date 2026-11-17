@@ -62,10 +62,10 @@ export const TARGET_PILL_CSS = `
 		display: inline-flex;
 		align-items: center;
 		gap: 0.2rem;
-		background: rgba(79, 163, 255, 0.15);
-		border: 1px solid var(--waw-accent, #4fa3ff);
+		background: rgba(255, 255, 255, 0.06);
+		border: 1px solid var(--waw-fg, #e8e8e8);
 		border-radius: 4px;
-		color: var(--waw-accent, #4fa3ff);
+		color: var(--waw-fg, #e8e8e8);
 		font-size: 0.65rem;
 		font-family: var(--waw-mono-font, Menlo, Monaco, "Courier New", monospace);
 		padding: 0.1rem 0.3rem;
@@ -86,8 +86,9 @@ export const TARGET_PILL_CSS = `
 		opacity: 1;
 	}
 	.sv-mapped.selected {
-		background: rgba(79, 163, 255, 0.3);
-		box-shadow: 0 0 0 2px var(--waw-accent, #4fa3ff);
+		background: rgba(79, 163, 255, 0.15);
+		border-color: var(--waw-accent, #4fa3ff);
+		color: var(--waw-accent, #4fa3ff);
 	}
 	.sv-tools {
 		flex: 1 0 100%;
